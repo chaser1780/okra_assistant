@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Project runtime outputs
+cache/
+temp/
+logs/
+backups/
+
+# Generated data
+db/
+raw/
+reports/daily/
+
+# Local secrets / machine state
+config/tabcode_api_key.txt
+config/ui_state.json
+
+# Optional local overrides
+*.local
+*.bak
+*.bak*

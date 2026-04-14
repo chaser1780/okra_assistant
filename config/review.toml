@@ -1,0 +1,4 @@
+[review]
+enabled = true
+horizons = [1, 5, 20]
+compare_against = "validated_advice"

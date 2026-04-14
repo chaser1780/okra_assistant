@@ -1,0 +1,61 @@
+[orchestrator]
+enabled = true
+max_parallel_agents = 6
+max_parallel_analysts = 6
+max_parallel_researchers = 2
+snapshot_enabled = true
+
+[agents.market_analyst]
+enabled = true
+role = "analyst"
+output_file = "market_analyst.json"
+
+[agents.theme_analyst]
+enabled = true
+role = "analyst"
+output_file = "theme_analyst.json"
+
+[agents.fund_structure_analyst]
+enabled = true
+role = "analyst"
+output_file = "fund_structure_analyst.json"
+
+[agents.fund_quality_analyst]
+enabled = true
+role = "analyst"
+output_file = "fund_quality_analyst.json"
+
+[agents.news_analyst]
+enabled = true
+role = "analyst"
+output_file = "news_analyst.json"
+
+[agents.sentiment_analyst]
+enabled = true
+role = "analyst"
+output_file = "sentiment_analyst.json"
+
+[agents.bull_researcher]
+enabled = true
+role = "researcher"
+output_file = "bull_researcher.json"
+
+[agents.bear_researcher]
+enabled = true
+role = "researcher"
+output_file = "bear_researcher.json"
+
+[agents.research_manager]
+enabled = true
+role = "manager"
+output_file = "research_manager.json"
+
+[agents.risk_manager]
+enabled = true
+role = "manager"
+output_file = "risk_manager.json"
+
+[agents.portfolio_trader]
+enabled = true
+role = "manager"
+output_file = "portfolio_trader.json"

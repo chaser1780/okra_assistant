@@ -1,0 +1,65 @@
+[portfolio]
+risk_profile = "balanced"
+daily_max_trade_amount = 1000.0
+daily_max_gross_trade_amount = 1000.0
+daily_max_net_buy_amount = 1000.0
+cash_hub_floor = 1000.0
+min_position_value = 0.0
+allow_full_exit = true
+allow_fund_switch = true
+accept_buy_the_dip = true
+accept_trim_winners = true
+
+[schedule]
+intraday_start = "14:00"
+intraday_end = "14:30"
+nightly_start = "21:00"
+nightly_end = "21:30"
+run_if_missed_on_next_boot = true
+report_mode = "intraday_proxy"
+
+[core_dca]
+amount_per_fund = 25.0
+extra_buy_allowed = false
+
+[tactical]
+default_cap_value = 1000.0
+min_add_amount = 100.0
+mid_add_amount = 200.0
+max_add_amount = 300.0
+min_reduce_amount = 100.0
+mid_reduce_amount = 200.0
+max_reduce_amount = 300.0
+max_actions_per_day = 3
+proxy_weight = 8.0
+nav_weight = 2.0
+news_positive_weight = 3.0
+news_negative_weight = -5.0
+loss_rebound_bonus = 10.0
+loss_rebound_return_threshold = -8.0
+loss_rebound_proxy_threshold = 0.8
+winner_trim_penalty = 12.0
+winner_trim_return_pct = 5.0
+winner_large_trim_return_pct = 8.0
+winner_trim_proxy_threshold = -0.8
+stale_proxy_penalty = 4.0
+near_cap_penalty = 5.0
+strong_add_score = 70.0
+very_strong_add_score = 82.0
+trim_score = 38.0
+switch_out_score = 28.0
+
+[manual_references]
+use_yangjibao_board_heat = true
+overrides_file = "market_overrides.json"
+
+[allocation]
+rebalance_band_pct = 5.0
+max_single_theme_family_pct = 30.0
+max_high_volatility_theme_pct = 45.0
+
+[allocation.targets]
+core_long_term = 50.0
+satellite_mid_term = 20.0
+tactical_short_term = 10.0
+cash_defense = 20.0

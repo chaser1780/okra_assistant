@@ -1,0 +1,16 @@
+model_provider = "tabcode"
+model = "gpt-5.4"
+model_context_window = 900000
+model_auto_compact_token_limit = 900000
+model_reasoning_effort = "xhigh"
+disable_response_storage = true
+preferred_auth_method = "apikey"
+api_key_env = "TABCODE_API_KEY"
+api_key_file = "F:\\okra_assistant\\config\\tabcode_api_key.txt"
+personality = "friendly"
+
+[model_providers.tabcode]
+name = "openai"
+base_url = "https://api.tabcode.cc/openai"
+wire_api = "responses"
+requires_openai_auth = true

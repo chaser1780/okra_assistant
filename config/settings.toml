@@ -1,0 +1,46 @@
+[project]
+name = "okra-assistant"
+timezone = "Asia/Shanghai"
+language = "zh-CN"
+currency = "CNY"
+
+[providers.quotes]
+name = "eastmoney_nav_api"
+timeout_seconds = 15
+history_page_size = 120
+
+[providers.news]
+name = "eastmoney_notice_and_articles"
+timeout_seconds = 15
+lookback_hours = 72
+max_notices = 4
+max_articles = 3
+
+[providers.intraday_proxy]
+name = "sina_hq_proxy"
+timeout_seconds = 20
+
+[providers.estimated_nav]
+name = "fundgz_1234567"
+timeout_seconds = 30
+
+[advice]
+mode = "research"
+risk_profile = "balanced"
+holding_period = "medium_term"
+
+[scoring]
+day_change_weight = 5.0
+month_change_weight = 1.8
+high_volatility_penalty = 6.0
+drawdown_alert_pct = -1.5
+
+[scoring.impact_weights]
+positive = 6.0
+neutral = 0.0
+negative = -8.0
+
+[report]
+output_format = "markdown"
+top_news_per_fund = 2
+include_risk_disclaimer = true

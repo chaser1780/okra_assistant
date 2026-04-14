@@ -1,0 +1,7 @@
+[realtime]
+enabled = true
+provider = "fund_estimate_proxy"
+enable_for_categories = ["etf_linked", "index_equity", "active_equity"]
+confidence_threshold = 0.6
+fallback_to_proxy = true
+max_staleness_minutes = 20

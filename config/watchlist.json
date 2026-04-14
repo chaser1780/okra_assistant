@@ -1,0 +1,24 @@
+{
+  "funds": [
+    {"code": "017193", "name": "天弘中证工业有色金属主题ETF发起联接C", "category": "etf_linked", "benchmark": "中证工业有色金属主题指数", "risk_level": "high"},
+    {"code": "022365", "name": "永赢科技智选混合发起C", "category": "active_equity", "benchmark": "科技成长风格代理", "risk_level": "high"},
+    {"code": "018419", "name": "广发碳中和主题混合发起式C", "category": "active_equity", "benchmark": "中证上海环交所碳中和指数", "risk_level": "high"},
+    {"code": "024842", "name": "信澳高端装备混合C", "category": "active_equity", "benchmark": "高端装备主题代理", "risk_level": "high"},
+    {"code": "025942", "name": "广发新动力混合C", "category": "active_equity", "benchmark": "成长风格代理", "risk_level": "high"},
+    {"code": "009225", "name": "天弘中证中美互联网(QDII)A", "category": "qdii_index", "benchmark": "中美互联网指数", "risk_level": "high"},
+    {"code": "011840", "name": "天弘中证人工智能C", "category": "index_equity", "benchmark": "中证人工智能主题指数", "risk_level": "high"},
+    {"code": "017704", "name": "兴业中证同业存单AAA指数7天持有期", "category": "cash_management", "benchmark": "同业存单指数", "risk_level": "low"},
+    {"code": "018846", "name": "华泰保兴尊睿6个月持有债券发起A", "category": "bond", "benchmark": "中债综合财富指数", "risk_level": "low"},
+    {"code": "017641", "name": "摩根标普500指数(QDII)人民币A", "category": "qdii_index", "benchmark": "标普500", "risk_level": "medium"},
+    {"code": "001302", "name": "前海开源金银珠宝混合A", "category": "active_equity", "benchmark": "黄金产业代理", "risk_level": "high"},
+    {"code": "020651", "name": "博时国证粮食产业指数发起式C", "category": "index_equity", "benchmark": "国证粮食产业指数", "risk_level": "high"},
+    {"code": "016452", "name": "南方纳斯达克100指数发起(QDII)A", "category": "qdii_index", "benchmark": "纳斯达克100", "risk_level": "medium"},
+    {"code": "020274", "name": "富国中证细分化工产业主题ETF发起式联接C", "category": "etf_linked", "benchmark": "中证细分化工产业主题指数", "risk_level": "high"},
+    {"code": "025857", "name": "华夏中证电网设备主题ETF发起式联接C", "category": "etf_linked", "benchmark": "中证电网设备主题指数", "risk_level": "high"}
+  ],
+  "alerts": {
+    "max_daily_drawdown_pct": -2.0,
+    "negative_news_keywords": ["离任", "限购", "清盘", "违约", "大幅回撤"],
+    "required_news_sources": ["eastmoney_notice", "eastmoney_article"]
+  }
+}

@@ -1,0 +1,7 @@
+interface:
+  display_name: "okra assistant"
+  short_description: "本地基金研究、实时估值、多智能体建议、复盘与桌面工作台。"
+  default_prompt: "Use okra assistant to fetch fund performance, summarize related news, and produce risk-aware research suggestions in Chinese."
+
+policy:
+  allow_implicit_invocation: true
