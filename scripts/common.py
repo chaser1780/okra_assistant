@@ -35,6 +35,9 @@ REQUIRED_DIRS = (
     "db/review_memory",
     "db/trade_journal",
     "db/estimated_nav",
+    "db/fund_nav_history",
+    "db/benchmark_history",
+    "db/proxy_history",
     "reports/daily",
     "docs",
     "logs",
@@ -425,6 +428,20 @@ def estimated_nav_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "estimated_nav" / f"{report_date}.json"
 
 
+def fund_nav_history_path(agent_home: Path, fund_code: str) -> Path:
+    return agent_home / "db" / "fund_nav_history" / f"{fund_code}.json"
+
+
+def benchmark_history_path(agent_home: Path, benchmark_key: str) -> Path:
+    safe = benchmark_key.replace("/", "_").replace("\\", "_").replace(":", "_")
+    return agent_home / "db" / "benchmark_history" / f"{safe}.json"
+
+
+def proxy_history_path(agent_home: Path, proxy_key: str) -> Path:
+    safe = proxy_key.replace("/", "_").replace("\\", "_").replace(":", "_")
+    return agent_home / "db" / "proxy_history" / f"{safe}.json"
+
+
 def report_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "reports" / "daily" / f"{report_date}.md"
 
@@ -435,3 +452,10 @@ def portfolio_report_path(agent_home: Path, report_date: str) -> Path:
 
 def nightly_review_report_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "reports" / "daily" / f"{report_date}_review.md"
+
+
+def load_benchmark_mappings(agent_home: Path) -> dict:
+    path = agent_home / "config" / "benchmark_mappings.json"
+    if not path.exists():
+        return {"fund_benchmarks": {}}
+    return repair_data(json.loads(path.read_text(encoding="utf-8")))
