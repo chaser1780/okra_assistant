@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from common import agent_output_dir, agent_snapshot_root, dump_json, ensure_layout, llm_context_path, load_agents_config, load_json, resolve_agent_home, resolve_date, timestamp_now
+from common import agent_output_dir, agent_snapshot_root, dump_json, ensure_layout, evidence_index_path, llm_context_path, load_agents_config, load_json, resolve_agent_home, resolve_date, timestamp_now
+from evidence_index import build_evidence_index_payload, retrieve_agent_evidence
 from multiagent_utils import call_json_agent
 
 DEFAULT_ANALYST_ORDER = [
@@ -30,6 +32,7 @@ def compose_prompt(role: str, mission: list[str], input_focus: list[str], method
         "若复盘记忆显示某类信号近期失效，必须在结论中体现更高谨慎度。",
         "禁止输出收尾套话、重复总结、空白填充或'完成/结束/以下补充'类无信息句。",
         "返回严格 JSON，不要 markdown，不要额外解释。",
+        "每个 fund_view 或 card 若引用证据，必须包含 evidence_refs；证据不足时必须降低 confidence。",
         "",
         f"Role:\n- {role}",
         "Mission:",
@@ -248,6 +251,7 @@ AGENT_PROMPTS = {
         ],
         output_rules=[
             "fund_views 必须用 action_bias 表达委员会倾向，用 comment 写共识、分歧和建议力度。",
+            "必须在 comment 或 response_to_bear_case 中回应未采纳的反方意见。",
             "必须给出 no_trade_list 对应的观察理由。",
         ],
         do_not=[
@@ -270,6 +274,7 @@ AGENT_PROMPTS = {
         ],
         output_rules=[
             "必须用 action_bias 表达风控后的倾向，用 comment 写 approve / modify / reject 及原因。",
+            "hard veto 必须写入 risk_decision=reject 或 downgrade_reason，供 validator 作为硬约束读取。",
             "如果要降级或否决，必须在 comment 中写清替代动作。",
         ],
         do_not=[
@@ -356,6 +361,101 @@ STAGE_METADATA = {
         "description": "由研究经理、风险经理和组合交易员收敛成最终动作。",
     },
 }
+
+WORKFLOW_VERSION = "2026-04-19.workflow-v2"
+AGENT_INPUT_CONTRACT_VERSION = "2026-04-19.input-v2"
+PROMPT_BUNDLE_VERSION = "2026-04-19.prompt-v2"
+
+
+def stable_digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def prompt_bundle_metadata(agent_names: list[str]) -> dict:
+    prompts = {name: AGENT_PROMPTS[name] for name in agent_names}
+    execution_config = {
+        name: {
+            "attempts": AGENT_ATTEMPTS.get(name, 3),
+            "reasoning_effort": AGENT_EFFORTS.get(name, "medium"),
+            "text_verbosity": AGENT_VERBOSITY.get(name),
+            "max_output_tokens": AGENT_MAX_OUTPUT_TOKENS.get(name),
+        }
+        for name in agent_names
+    }
+    bundle = {
+        "version": PROMPT_BUNDLE_VERSION,
+        "prompts": prompts,
+        "execution_config": execution_config,
+    }
+    return {
+        "version": PROMPT_BUNDLE_VERSION,
+        "digest": stable_digest(bundle),
+        "execution_config": execution_config,
+    }
+
+
+def retrieval_summary(agent_input: dict) -> dict:
+    retrieval = agent_input.get("retrieved_evidence", {}) or {}
+    portfolio_items = list(retrieval.get("portfolio", []) or [])
+    fund_items = retrieval.get("funds", {}) or {}
+    fund_counts = {fund_code: len(items or []) for fund_code, items in fund_items.items()}
+    stale_count = sum(1 for item in portfolio_items if bool(item.get("stale", False)))
+    stale_count += sum(1 for items in fund_items.values() for item in (items or []) if bool(item.get("stale", False)))
+    return {
+        "portfolio_item_count": len(portfolio_items),
+        "fund_item_count": sum(fund_counts.values()),
+        "fund_counts": fund_counts,
+        "stale_item_count": stale_count,
+    }
+
+
+def workflow_definition(
+    *,
+    ordered_agents: list[str],
+    agent_roles: dict[str, str],
+    agent_groups: dict[str, list[str]],
+    agent_dependencies: dict[str, list[str]],
+    worker_caps: dict[str, int],
+    use_existing: bool,
+    use_mock: bool,
+    snapshot_enabled: bool,
+    evidence_index_source: str,
+) -> dict:
+    prompt_bundle = prompt_bundle_metadata(ordered_agents)
+    return {
+        "workflow_version": WORKFLOW_VERSION,
+        "agent_input_contract_version": AGENT_INPUT_CONTRACT_VERSION,
+        "ordered_agents": ordered_agents,
+        "agent_roles": agent_roles,
+        "agent_groups": agent_groups,
+        "agent_dependencies": agent_dependencies,
+        "research_flow": build_stage_flow(agent_groups),
+        "worker_caps": worker_caps,
+        "use_existing": bool(use_existing),
+        "use_mock": bool(use_mock),
+        "snapshot_enabled": bool(snapshot_enabled),
+        "evidence_index_source": evidence_index_source,
+        "prompt_bundle": prompt_bundle,
+    }
+
+
+def trace_from_existing(agent_name: str, record: dict, stage: str, dependencies: list[str]) -> dict:
+    output = dict(record.get("output", {}) or {})
+    return {
+        "agent_name": agent_name,
+        "stage": stage,
+        "status": "reused",
+        "reused_existing": True,
+        "dependencies": list(dependencies),
+        "output_sha256": stable_digest(output),
+        "retrieval_summary": {"portfolio_item_count": 0, "fund_item_count": 0, "fund_counts": {}, "stale_item_count": 0},
+        "prompt_sha256": stable_digest(AGENT_PROMPTS.get(agent_name, "")),
+        "agent_input_sha256": "",
+        "user_prompt_sha256": "",
+        "elapsed_seconds": 0.0,
+        "started_at": timestamp_now(),
+        "finished_at": timestamp_now(),
+    }
 
 
 def build_agent_roles(analyst_order: list[str], researcher_order: list[str], manager_order: list[str], ordered_agents: list[str]) -> dict[str, str]:
@@ -643,7 +743,102 @@ def compact_agent_output(output: dict) -> dict:
             }
             for item in (output.get("fund_views") or [])[:6]
         ],
+        "signal_cards": [
+            {
+                "signal_id": item.get("signal_id"),
+                "fund_code": item.get("fund_code"),
+                "signal_type": item.get("signal_type"),
+                "direction": item.get("direction"),
+                "action_bias": item.get("action_bias"),
+                "confidence": item.get("confidence"),
+                "supporting_evidence_ids": (item.get("supporting_evidence_ids") or [])[:4],
+            }
+            for item in (output.get("signal_cards") or [])[:8]
+        ],
+        "decision_cards": [
+            {
+                "decision_id": item.get("decision_id"),
+                "fund_code": item.get("fund_code"),
+                "proposed_action": item.get("proposed_action"),
+                "size_bucket": item.get("size_bucket"),
+                "risk_decision": item.get("risk_decision"),
+                "supporting_signal_ids": (item.get("supporting_signal_ids") or [])[:4],
+                "opposing_signal_ids": (item.get("opposing_signal_ids") or [])[:4],
+            }
+            for item in (output.get("decision_cards") or [])[:8]
+        ],
     }
+
+
+def stable_card_id(prefix: str, agent_name: str, fund_code: str, ordinal: int) -> str:
+    digest = hashlib.sha1(f"{prefix}|{agent_name}|{fund_code}|{ordinal}".encode("utf-8")).hexdigest()[:10]
+    return f"{prefix}:{agent_name}:{fund_code}:{digest}"
+
+
+def signal_cards_from_views(agent_name: str, fund_views: list[dict], prior_outputs: dict) -> list[dict]:
+    cards = []
+    evidence_lookup = (prior_outputs or {}).get("_context_evidence_map", {}) if isinstance(prior_outputs, dict) else {}
+    for index, item in enumerate(fund_views or [], start=1):
+        fund_code = str(item.get("fund_code", "") or "").strip()
+        if not fund_code:
+            continue
+        evidence_refs = evidence_lookup.get(fund_code, []) if isinstance(evidence_lookup, dict) else []
+        cards.append(
+            {
+                "signal_id": item.get("signal_id") or stable_card_id("signal", agent_name, fund_code, index),
+                "agent_name": agent_name,
+                "signal_type": agent_name,
+                "fund_code": fund_code,
+                "direction": item.get("direction", ""),
+                "horizon": item.get("horizon", ""),
+                "thesis": item.get("thesis", ""),
+                "catalysts": item.get("catalysts", []),
+                "risks": item.get("risks", []),
+                "invalidation": item.get("invalidation", ""),
+                "portfolio_impact": item.get("portfolio_impact", ""),
+                "action_bias": item.get("action_bias", ""),
+                "supporting_evidence_ids": [ref.get("evidence_id", "") for ref in evidence_refs[:5] if ref.get("evidence_id")],
+                "opposing_evidence_ids": [],
+                "sentiment_relevance": float(item.get("sentiment_relevance", 0.0) or 0.0),
+                "novelty_relevance": float(item.get("novelty_relevance", 0.0) or 0.0),
+                "crowding_signal": item.get("crowding_signal", ""),
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "comment": item.get("comment", ""),
+                "abstain_reason": item.get("abstain_reason", ""),
+            }
+        )
+    return cards
+
+
+def decision_cards_from_views(agent_name: str, fund_views: list[dict], signal_cards: list[dict]) -> list[dict]:
+    cards = []
+    signal_map = {item.get("fund_code", ""): item.get("signal_id", "") for item in signal_cards or [] if item.get("fund_code")}
+    for index, item in enumerate(fund_views or [], start=1):
+        fund_code = str(item.get("fund_code", "") or "").strip()
+        if not fund_code:
+            continue
+        size_bucket = item.get("preferred_size_bucket") or item.get("size_bucket") or (
+            "100" if "100" in str(item.get("comment", "")) else "200" if "200" in str(item.get("comment", "")) else "0"
+        )
+        cards.append(
+            {
+                "decision_id": item.get("decision_id") or stable_card_id("decision", agent_name, fund_code, index),
+                "agent_name": agent_name,
+                "fund_code": fund_code,
+                "proposed_action": item.get("preferred_action") or item.get("action_bias", "hold"),
+                "size_bucket": size_bucket,
+                "supporting_signal_ids": [signal_map[fund_code]] if signal_map.get(fund_code) else [],
+                "opposing_signal_ids": [],
+                "why_now": item.get("thesis") or item.get("comment", ""),
+                "why_not_more": item.get("comment", ""),
+                "invalidate_when": item.get("invalidation", ""),
+                "risk_decision": item.get("risk_decision", ""),
+                "manager_notes": item.get("comment", ""),
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "priority": index,
+            }
+        )
+    return cards
 
 
 NOISE_STRINGS = {
@@ -723,11 +918,67 @@ def sanitize_agent_output(output: dict) -> dict:
                 view[key] = sanitize_string_list(view.get(key, []), limit=limit)
         sanitized_views.append(view)
     cleaned["fund_views"] = sanitized_views
+    cleaned["signal_cards"] = [
+        {
+            **dict(item or {}),
+            "supporting_evidence_ids": sanitize_string_list((item or {}).get("supporting_evidence_ids", []), limit=6),
+            "opposing_evidence_ids": sanitize_string_list((item or {}).get("opposing_evidence_ids", []), limit=6),
+        }
+        for item in (cleaned.get("signal_cards") or [])
+    ]
+    cleaned["decision_cards"] = [
+        {
+            **dict(item or {}),
+            "supporting_signal_ids": sanitize_string_list((item or {}).get("supporting_signal_ids", []), limit=6),
+            "opposing_signal_ids": sanitize_string_list((item or {}).get("opposing_signal_ids", []), limit=6),
+        }
+        for item in (cleaned.get("decision_cards") or [])
+    ]
+    if not cleaned["signal_cards"] and cleaned["fund_views"]:
+        cleaned["signal_cards"] = signal_cards_from_views(str(cleaned.get("agent_name", "")), cleaned["fund_views"], {})
+    if not cleaned["decision_cards"] and cleaned["fund_views"] and str(cleaned.get("agent_name", "") or "") in {"research_manager", "risk_manager", "portfolio_trader"}:
+        cleaned["decision_cards"] = decision_cards_from_views(str(cleaned.get("agent_name", "")), cleaned["fund_views"], cleaned["signal_cards"])
     return cleaned
 
 
 def compact_successful_outputs(prior_outputs: dict, names: list[str] | None = None) -> dict:
     return {name: compact_agent_output(output) for name, output in successful_outputs(prior_outputs, names).items()}
+
+
+def attach_retrieved_evidence(agent_name: str, context: dict, base: dict, funds_payload: list[dict], source_funds: list[dict]) -> dict:
+    retrieval = retrieve_agent_evidence(
+        agent_name,
+        context,
+        index_payload=context.get("_evidence_index_payload"),
+        relevant_funds=source_funds,
+    )
+    base["retrieved_evidence"] = retrieval
+    base["evidence_items"] = retrieval.get("portfolio", [])
+    base["fund_evidence_map"] = {
+        fund_code: [
+            {
+                "evidence_id": item.get("evidence_id", ""),
+                "fund_code": fund_code,
+                "role": "retrieved",
+                "relevance_score": item.get("retrieval_score", 0.0),
+                "mapping_mode": item.get("mapping_mode", ""),
+                "source_tier": item.get("source_tier", ""),
+                "evidence_type": item.get("evidence_type", ""),
+            }
+            for item in items
+        ]
+        for fund_code, items in (retrieval.get("funds", {}) or {}).items()
+    }
+    enriched_funds = []
+    retrieved_by_fund = retrieval.get("funds", {}) or {}
+    for item in funds_payload:
+        enriched = dict(item)
+        fund_code = str(item.get("fund_code", "") or "").strip()
+        if fund_code:
+            enriched["retrieved_evidence"] = retrieved_by_fund.get(fund_code, [])
+        enriched_funds.append(enriched)
+    base["funds"] = enriched_funds
+    return base
 
 
 def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> dict:
@@ -737,6 +988,7 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
         "portfolio_summary": context.get("portfolio_summary", {}),
         "constraints": context.get("constraints", {}),
         "memory_digest": context.get("memory_digest", {}),
+        "source_health_summary": context.get("source_health_summary", []),
     }
     funds = context.get("funds", [])
     tactical_funds = [compact_fund_view(fund) for fund in funds if fund.get("role") == "tactical"]
@@ -744,7 +996,7 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
     analyst_outputs = compact_successful_outputs(prior_outputs, DEFAULT_ANALYST_ORDER)
 
     if agent_name == "market_analyst":
-        base["funds"] = [
+        fund_payload = [
             {
                 "fund_code": fund["fund_code"],
                 "fund_name": fund["fund_name"],
@@ -756,15 +1008,14 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
             }
             for fund in funds
         ]
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name == "theme_analyst":
         base["external_reference"] = context.get("external_reference", {})
-        base["funds"] = tactical_funds
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, tactical_funds, [fund for fund in funds if fund.get("role") == "tactical"])
 
     if agent_name == "fund_structure_analyst":
-        base["funds"] = [
+        fund_payload = [
             {
                 "fund_code": fund["fund_code"],
                 "fund_name": fund["fund_name"],
@@ -777,10 +1028,10 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
             }
             for fund in funds
         ]
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name == "fund_quality_analyst":
-        base["funds"] = tactical_funds + [
+        fund_payload = tactical_funds + [
             {
                 "fund_code": fund["fund_code"],
                 "fund_name": fund["fund_name"],
@@ -792,15 +1043,23 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
             for fund in funds
             if fund.get("role") in {"core_dca", "fixed_hold"}
         ]
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name == "news_analyst":
-        base["funds"] = [{"fund_code": fund["fund_code"], "fund_name": fund["fund_name"], "recent_news": fund.get("recent_news", [])[:5]} for fund in funds]
-        return base
+        fund_payload = [
+            {
+                "fund_code": fund["fund_code"],
+                "fund_name": fund["fund_name"],
+                "recent_news": fund.get("recent_news", [])[:5],
+                "evidence_refs": fund.get("evidence_refs", [])[:8],
+            }
+            for fund in funds
+        ]
+        return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name == "sentiment_analyst":
         base["external_reference"] = context.get("external_reference", {})
-        base["funds"] = [
+        fund_payload = [
             {
                 "fund_code": fund["fund_code"],
                 "fund_name": fund["fund_name"],
@@ -808,38 +1067,35 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
                 "intraday_proxy": compact_fund_view(fund)["intraday_proxy"],
                 "estimated_nav": compact_fund_view(fund)["estimated_nav"],
                 "quote": compact_fund_view(fund)["quote"],
+                "recent_news": fund.get("recent_news", [])[:4],
+                "evidence_refs": fund.get("evidence_refs", [])[:8],
             }
             for fund in funds
         ]
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name in {"bull_researcher", "bear_researcher"}:
-        base["funds"] = tactical_decision_funds
         base["analyst_outputs"] = analyst_outputs
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, tactical_decision_funds, [fund for fund in funds if fund.get("role") == "tactical"])
 
     if agent_name == "research_manager":
-        base["funds"] = [compact_decision_fund_view(fund) for fund in funds]
         base["analyst_outputs"] = analyst_outputs
         base["researcher_outputs"] = compact_successful_outputs(prior_outputs, DEFAULT_RESEARCHER_ORDER)
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, [compact_decision_fund_view(fund) for fund in funds], funds)
 
     if agent_name == "risk_manager":
-        base["funds"] = [compact_decision_fund_view(fund) for fund in funds]
         base["analyst_outputs"] = analyst_outputs
         base["researcher_outputs"] = compact_successful_outputs(prior_outputs, DEFAULT_RESEARCHER_ORDER)
         base["research_manager_output"] = compact_successful_outputs(prior_outputs, ["research_manager"]).get("research_manager", {})
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, [compact_decision_fund_view(fund) for fund in funds], funds)
 
     if agent_name == "portfolio_trader":
-        base["funds"] = [compact_decision_fund_view(fund) for fund in funds]
         base["research_manager_output"] = compact_successful_outputs(prior_outputs, ["research_manager"]).get("research_manager", {})
         base["risk_manager_output"] = compact_successful_outputs(prior_outputs, ["risk_manager"]).get("risk_manager", {})
-        return base
+        return attach_retrieved_evidence(agent_name, context, base, [compact_decision_fund_view(fund) for fund in funds], funds)
 
-    base["funds"] = [compact_fund_view(fund) for fund in funds]
     base["prior_outputs"] = compact_successful_outputs(prior_outputs)
-    return base
+    return attach_retrieved_evidence(agent_name, context, base, [compact_fund_view(fund) for fund in funds], funds)
 
 
 def build_user_prompt(agent_name: str, agent_input: dict) -> str:
@@ -903,9 +1159,46 @@ def failed_record(agent_name: str, error: str, mode: str) -> dict:
                 "portfolio_implications": [],
             },
             "fund_views": [],
+            "signal_cards": [],
+            "decision_cards": [],
             "watchouts": [error],
         },
     }
+
+
+def is_infrastructure_error(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    return any(
+        token in text
+        for token in (
+            "http 502",
+            "http 503",
+            "http 504",
+            "service temporarily unavailable",
+            "upstream request failed",
+            "sslcertverificationerror",
+            "certificate verify failed",
+            "connectionpool",
+            "read timed out",
+            "connecttimeout",
+            "proxyerror",
+        )
+    )
+
+
+def degraded_mock_record(agent_name: str, context: dict, error: str) -> dict:
+    output = sanitize_agent_output(build_mock_output(agent_name, context))
+    output["summary"] = f"{agent_name} 已因模型接口故障降级为 mock fallback。"
+    output["missing_info"] = sanitize_string_list((output.get("missing_info") or []) + [error], limit=6)
+    output["watchouts"] = sanitize_string_list((output.get("watchouts") or []) + [f"transport degraded: {error}"], limit=6)
+    output["fallback_mode"] = "transport_degraded_mock"
+    output["fallback_reason"] = error
+    if output.get("fund_views"):
+        if not output.get("signal_cards"):
+            output["signal_cards"] = signal_cards_from_views(agent_name, output.get("fund_views", []), {"_context_evidence_map": context.get("fund_evidence_map", {})})
+        if agent_name in {"research_manager", "risk_manager", "portfolio_trader"} and not output.get("decision_cards"):
+            output["decision_cards"] = decision_cards_from_views(agent_name, output.get("fund_views", []), output.get("signal_cards", []))
+    return {"status": "degraded", "output": output}
 
 
 def configured_orders(agent_home: Path) -> tuple[list[str], list[str], list[str], dict]:
@@ -938,45 +1231,178 @@ def configured_workers(config: dict) -> dict[str, int]:
 
 def degradation_summary(aggregate: dict, manager_order: list[str]) -> dict:
     failed_names = [item.get("agent_name", "") for item in aggregate.get("failed_agents", []) if item.get("agent_name")]
+    degraded_names = list(aggregate.get("degraded_agent_names", []) or [])
     blocking_failures = [name for name in manager_order if name in failed_names]
-    committee_ready = all(aggregate.get("agents", {}).get(name, {}).get("status") == "ok" for name in manager_order)
-    degraded_ok = bool(failed_names) and committee_ready and not blocking_failures
+    committee_ready = all(str(aggregate.get("agents", {}).get(name, {}).get("status", "")).lower() in {"ok", "degraded"} for name in manager_order)
+    degraded_ok = bool(failed_names or degraded_names) and committee_ready and not blocking_failures
     return {
         "failed_agent_names": failed_names,
+        "degraded_agent_names": degraded_names,
         "blocking_failures": blocking_failures,
         "committee_ready": committee_ready,
         "degraded_ok": degraded_ok,
     }
 
 
-def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_name: str, use_mock: bool) -> tuple[str, dict, dict | None]:
+def _agent_output(aggregate: dict, agent_name: str) -> dict:
+    return aggregate.get("agents", {}).get(agent_name, {}).get("output", {}) or {}
+
+
+def _case_items(output: dict, *, limit: int = 6) -> list[dict]:
+    items: list[dict] = []
+    for card in output.get("decision_cards", []) or []:
+        items.append(
+            {
+                "fund_code": card.get("fund_code", ""),
+                "action_bias": card.get("action_bias", ""),
+                "thesis": card.get("thesis", card.get("comment", "")),
+                "evidence_refs": card.get("evidence_refs", []) or card.get("supporting_signal_ids", []),
+            }
+        )
+    for view in output.get("fund_views", []) or []:
+        if len(items) >= limit:
+            break
+        items.append(
+            {
+                "fund_code": view.get("fund_code", ""),
+                "action_bias": view.get("action_bias", ""),
+                "thesis": view.get("thesis", view.get("comment", "")),
+                "evidence_refs": view.get("evidence_refs", []),
+            }
+        )
+    return items[:limit]
+
+
+def build_committee_summary(aggregate: dict) -> dict:
+    bull = _agent_output(aggregate, "bull_researcher")
+    bear = _agent_output(aggregate, "bear_researcher")
+    manager = _agent_output(aggregate, "research_manager")
+    risk = _agent_output(aggregate, "risk_manager")
+    failed = aggregate.get("failed_agent_names", []) or [item.get("agent_name", "") for item in aggregate.get("failed_agents", [])]
+    risk_vetoes = []
+    for card in risk.get("decision_cards", []) or []:
+        risk_decision = str(card.get("risk_decision", "") or "").lower()
+        action_bias = str(card.get("action_bias", "") or "").lower()
+        if risk_decision in {"reject", "veto"} or action_bias in {"reject", "avoid", "reduce"} or card.get("downgrade_reason"):
+            risk_vetoes.append(
+                {
+                    "fund_code": card.get("fund_code", ""),
+                    "risk_decision": card.get("risk_decision", ""),
+                    "action_bias": card.get("action_bias", ""),
+                    "reason": card.get("downgrade_reason") or card.get("comment") or card.get("thesis", ""),
+                    "evidence_refs": card.get("evidence_refs", []) or card.get("opposing_signal_ids", []),
+                }
+            )
+    confidence = "high" if aggregate.get("committee_ready") and not failed else "medium" if aggregate.get("degraded_ok") else "low"
+    decision_source = "fallback" if failed and not aggregate.get("committee_ready") else "risk_constrained" if risk_vetoes else "manager_consensus"
+    return {
+        "schema_version": 1,
+        "debate_summary": [item for item in [bull.get("summary", ""), bear.get("summary", ""), manager.get("summary", ""), risk.get("summary", "")] if item][:6],
+        "bull_case": _case_items(bull),
+        "bear_case": _case_items(bear),
+        "risk_vetoes": risk_vetoes,
+        "manager_decision": {
+            "summary": manager.get("summary", ""),
+            "portfolio_view": manager.get("portfolio_view", {}),
+            "decision_cards": (manager.get("decision_cards", []) or [])[:8],
+        },
+        "manager_responses": manager.get("response_to_bear_case", []) or manager.get("key_points", [])[:6],
+        "unresolved_conflicts": bear.get("key_points", [])[:3] if risk_vetoes or failed else [],
+        "committee_confidence": confidence,
+        "decision_source": decision_source,
+    }
+
+
+def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_name: str, use_mock: bool, agent_roles: dict[str, str], agent_dependencies: dict[str, list[str]]) -> tuple[str, dict, dict | None, dict]:
     started_at = time.perf_counter()
+    started_at_text = timestamp_now()
     print(f">>> AGENT_START {agent_name}", flush=True)
+    agent_input = build_agent_input(agent_name, context, prior_outputs)
+    user_prompt = build_user_prompt(agent_name, agent_input)
+    trace = {
+        "agent_name": agent_name,
+        "stage": agent_roles.get(agent_name, "unknown"),
+        "status": "running",
+        "reused_existing": False,
+        "dependencies": list(agent_dependencies.get(agent_name, [])),
+        "dependency_statuses": {
+            name: str(prior_outputs.get(name, {}).get("status", "missing") or "missing")
+            for name in agent_dependencies.get(agent_name, [])
+        },
+        "prompt_sha256": stable_digest(AGENT_PROMPTS.get(agent_name, "")),
+        "user_prompt_sha256": stable_digest(user_prompt),
+        "agent_input_sha256": stable_digest(agent_input),
+        "retrieval_summary": retrieval_summary(agent_input),
+        "started_at": started_at_text,
+        "finished_at": "",
+        "elapsed_seconds": 0.0,
+        "use_mock": bool(use_mock),
+    }
     try:
         if use_mock:
             output = build_mock_output(agent_name, context)
         else:
-            agent_input = build_agent_input(agent_name, context, prior_outputs)
             result = call_json_agent(
                 agent_home,
                 AGENT_PROMPTS[agent_name],
-                build_user_prompt(agent_name, agent_input),
+                user_prompt,
                 max_attempts=AGENT_ATTEMPTS.get(agent_name, 3),
                 reasoning_effort=AGENT_EFFORTS.get(agent_name, "medium"),
                 request_name=agent_name,
                 text_verbosity=AGENT_VERBOSITY.get(agent_name),
                 max_output_tokens=AGENT_MAX_OUTPUT_TOKENS.get(agent_name),
+                fallback_defaults={"agent_name": agent_name, "mode": context.get("mode", "intraday")},
             )
             output = sanitize_agent_output(result["response_json"])
         if use_mock:
             output = sanitize_agent_output(output)
-        print(f">>> AGENT_DONE {agent_name} ({time.perf_counter() - started_at:.1f}s)", flush=True)
-        return agent_name, {"status": "ok", "output": output}, None
+        if output.get("fund_views"):
+            if not output.get("signal_cards"):
+                output["signal_cards"] = signal_cards_from_views(agent_name, output.get("fund_views", []), {"_context_evidence_map": context.get("fund_evidence_map", {})})
+            if agent_name in {"research_manager", "risk_manager", "portfolio_trader"} and not output.get("decision_cards"):
+                output["decision_cards"] = decision_cards_from_views(agent_name, output.get("fund_views", []), output.get("signal_cards", []))
+        elapsed = time.perf_counter() - started_at
+        trace.update(
+            {
+                "status": "ok",
+                "finished_at": timestamp_now(),
+                "elapsed_seconds": round(elapsed, 3),
+                "output_sha256": stable_digest(output),
+            }
+        )
+        print(f">>> AGENT_DONE {agent_name} ({elapsed:.1f}s)", flush=True)
+        return agent_name, {"status": "ok", "output": output}, None, trace
     except Exception as exc:
+        error_text = str(exc)
+        if not use_mock and is_infrastructure_error(error_text):
+            record = degraded_mock_record(agent_name, context, error_text)
+            elapsed = time.perf_counter() - started_at
+            trace.update(
+                {
+                    "status": "degraded",
+                    "finished_at": timestamp_now(),
+                    "elapsed_seconds": round(elapsed, 3),
+                    "error": error_text,
+                    "fallback_mode": "transport_degraded_mock",
+                    "output_sha256": stable_digest(record.get("output", {})),
+                }
+            )
+            print(f">>> AGENT_DEGRADED {agent_name} ({elapsed:.1f}s) {error_text}", flush=True)
+            return agent_name, record, None, trace
         failure = {"agent_name": agent_name, "error": str(exc)}
         record = failed_record(agent_name, str(exc), context.get("mode", "intraday"))
-        print(f">>> AGENT_FAIL {agent_name} ({time.perf_counter() - started_at:.1f}s) {exc}", flush=True)
-        return agent_name, record, failure
+        elapsed = time.perf_counter() - started_at
+        trace.update(
+            {
+                "status": "failed",
+                "finished_at": timestamp_now(),
+                "elapsed_seconds": round(elapsed, 3),
+                "error": error_text,
+                "output_sha256": stable_digest(record.get("output", {})),
+            }
+        )
+        print(f">>> AGENT_FAIL {agent_name} ({elapsed:.1f}s) {exc}", flush=True)
+        return agent_name, record, failure, trace
 
 
 def save_agent_record(output_dir: Path, snapshot_dir: Path | None, agent_name: str, record: dict) -> None:
@@ -985,9 +1411,14 @@ def save_agent_record(output_dir: Path, snapshot_dir: Path | None, agent_name: s
         dump_json(snapshot_dir / f"{agent_name}.json", record)
 
 
-def merge_agent_result(aggregate: dict, output_dir: Path, snapshot_dir: Path | None, agent_name: str, record: dict, failure: dict | None) -> None:
+def merge_agent_result(aggregate: dict, output_dir: Path, snapshot_dir: Path | None, agent_name: str, record: dict, failure: dict | None, trace: dict | None = None) -> None:
     aggregate["agents"][agent_name] = record
     save_agent_record(output_dir, snapshot_dir, agent_name, record)
+    if trace is not None:
+        aggregate.setdefault("workflow_trace", {})[agent_name] = trace
+    if str(record.get("status", "")).lower() == "degraded":
+        aggregate["all_agents_ok"] = False
+        aggregate.setdefault("degraded_agent_names", []).append(agent_name)
     if failure is not None:
         aggregate["all_agents_ok"] = False
         aggregate["failed_agents"].append(failure)
@@ -1008,12 +1439,25 @@ def run_agent_group(
     prior_outputs = dict(aggregate["agents"])
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(agent_names)))) as executor:
         futures = {
-            executor.submit(execute_agent, agent_home, context, prior_outputs, agent_name, use_mock): agent_name
+            executor.submit(execute_agent, agent_home, context, prior_outputs, agent_name, use_mock, aggregate.get("agent_roles", {}), aggregate.get("agent_dependencies", {})): agent_name
             for agent_name in agent_names
         }
         for future in as_completed(futures):
-            agent_name, record, failure = future.result()
-            merge_agent_result(aggregate, output_dir, snapshot_dir, agent_name, record, failure)
+            agent_name, record, failure, trace = future.result()
+            merge_agent_result(aggregate, output_dir, snapshot_dir, agent_name, record, failure, trace)
+
+
+def write_workflow_artifacts(output_dir: Path, snapshot_dir: Path | None, workflow_meta: dict, workflow_trace: dict) -> None:
+    trace_payload = {
+        "generated_at": timestamp_now(),
+        "workflow": workflow_meta,
+        "agents": workflow_trace,
+    }
+    dump_json(output_dir / "workflow_definition.json", workflow_meta)
+    dump_json(output_dir / "workflow_trace.json", trace_payload)
+    if snapshot_dir is not None:
+        dump_json(snapshot_dir / "workflow_definition.json", workflow_meta)
+        dump_json(snapshot_dir / "workflow_trace.json", trace_payload)
 
 
 def main() -> None:
@@ -1029,6 +1473,13 @@ def main() -> None:
     ensure_layout(agent_home)
     report_date = resolve_date(args.date)
     context = load_json(llm_context_path(agent_home, report_date))
+    evidence_path = evidence_index_path(agent_home, report_date)
+    evidence_index_source = "disk"
+    if evidence_path.exists():
+        context["_evidence_index_payload"] = load_json(evidence_path)
+    else:
+        context["_evidence_index_payload"] = build_evidence_index_payload(context)
+        evidence_index_source = "rebuilt_in_process"
     analyst_order, researcher_order, manager_order, agents_config = configured_orders(agent_home)
     worker_caps = configured_workers(agents_config)
     snapshot_enabled = bool(agents_config.get("orchestrator", {}).get("snapshot_enabled", True))
@@ -1047,12 +1498,28 @@ def main() -> None:
         "manager": [name for name in manager_order if name in ordered_agents],
     }
     agent_dependencies = build_agent_dependencies(ordered_agents, analyst_order, researcher_order, manager_order)
+    workflow_meta = workflow_definition(
+        ordered_agents=ordered_agents,
+        agent_roles=agent_roles,
+        agent_groups=agent_groups,
+        agent_dependencies=agent_dependencies,
+        worker_caps=worker_caps,
+        use_existing=bool(args.use_existing),
+        use_mock=bool(args.mock),
+        snapshot_enabled=snapshot_enabled,
+        evidence_index_source=evidence_index_source,
+    )
 
     aggregate = {
         "report_date": report_date,
         "generated_at": timestamp_now(),
+        "workflow_version": WORKFLOW_VERSION,
+        "agent_input_contract_version": AGENT_INPUT_CONTRACT_VERSION,
+        "prompt_bundle_version": workflow_meta["prompt_bundle"]["version"],
+        "prompt_bundle_sha256": workflow_meta["prompt_bundle"]["digest"],
         "all_agents_ok": True,
         "failed_agents": [],
+        "degraded_agent_names": [],
         "failed_agent_names": [],
         "blocking_failures": [],
         "degraded_ok": False,
@@ -1063,14 +1530,17 @@ def main() -> None:
         "agent_groups": agent_groups,
         "agent_dependencies": agent_dependencies,
         "research_flow": build_stage_flow(agent_groups),
+        "workflow_meta": workflow_meta,
+        "workflow_trace": {},
         "agents": {},
     }
     if snapshot_dir is not None:
         dump_json(snapshot_dir / "context.json", context)
+    write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
 
     if args.use_existing:
         for path in sorted(output_dir.glob("*.json")):
-            if path.name == "aggregate.json":
+            if path.name in {"aggregate.json", "workflow_definition.json", "workflow_trace.json"}:
                 continue
             try:
                 existing = load_json(path)
@@ -1085,6 +1555,12 @@ def main() -> None:
             existing = load_json(existing_path)
             if existing.get("status") == "ok":
                 aggregate["agents"][agent_name] = existing
+                aggregate["workflow_trace"][agent_name] = trace_from_existing(
+                    agent_name,
+                    existing,
+                    agent_roles.get(agent_name, "unknown"),
+                    agent_dependencies.get(agent_name, []),
+                )
                 if snapshot_dir is not None:
                     dump_json(snapshot_dir / f"{agent_name}.json", existing)
 
@@ -1114,9 +1590,18 @@ def main() -> None:
     for agent_name in [name for name in manager_order if name in ordered_agents]:
         if aggregate["agents"].get(agent_name, {}).get("status") == "ok":
             continue
-        name, record, failure = execute_agent(agent_home, context, dict(aggregate["agents"]), agent_name, args.mock)
-        merge_agent_result(aggregate, output_dir, snapshot_dir, name, record, failure)
+        name, record, failure, trace = execute_agent(
+            agent_home,
+            context,
+            dict(aggregate["agents"]),
+            agent_name,
+            args.mock,
+            aggregate.get("agent_roles", {}),
+            aggregate.get("agent_dependencies", {}),
+        )
+        merge_agent_result(aggregate, output_dir, snapshot_dir, name, record, failure, trace)
 
+    write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
     dump_json(output_dir / "aggregate.json", aggregate)
     if snapshot_dir is not None:
         dump_json(snapshot_dir / "aggregate.json", aggregate)
@@ -1124,6 +1609,8 @@ def main() -> None:
     summary = degradation_summary(aggregate, [name for name in manager_order if name in ordered_agents])
     aggregate.update(summary)
     aggregate["stage_status"] = build_stage_status(aggregate)
+    aggregate["committee"] = build_committee_summary(aggregate)
+    write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
     issue_path = None
     if aggregate["failed_agents"] and not args.mock:
         issue_path = write_issue_report(agent_home, report_date, aggregate, aggregate["failed_agents"])

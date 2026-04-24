@@ -8,6 +8,7 @@ from datetime import datetime
 import requests
 
 from common import benchmark_history_path, dump_json, ensure_layout, load_benchmark_mappings, resolve_agent_home, timestamp_now
+from provider_adapters import build_provider_result
 
 EASTMONEY_NAV_API = "https://api.fund.eastmoney.com/f10/lsjz"
 DEFAULT_HEADERS = {
@@ -94,6 +95,7 @@ def process_one(agent_home, benchmark_key: str, benchmark_name: str, symbol: str
     payload = fetch_nav_history(symbol)
     payload["benchmark_key"] = benchmark_key
     payload["benchmark_name"] = benchmark_name
+    payload = build_provider_result(payload, provider_name="eastmoney_nav_api")
     return str(dump_json(benchmark_history_path(agent_home, benchmark_key), payload))
 
 

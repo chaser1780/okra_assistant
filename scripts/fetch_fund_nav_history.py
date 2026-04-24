@@ -9,6 +9,7 @@ from threading import local
 import requests
 
 from common import dump_json, ensure_layout, fund_nav_history_path, load_watchlist, resolve_agent_home, timestamp_now
+from provider_adapters import build_provider_result
 
 EASTMONEY_NAV_API = "https://api.fund.eastmoney.com/f10/lsjz"
 DEFAULT_HEADERS = {
@@ -115,6 +116,7 @@ def build_history_payload(fund: dict) -> dict:
 
 def process_one(agent_home, fund: dict) -> str:
     payload = build_history_payload(fund)
+    payload = build_provider_result(payload, provider_name="eastmoney_nav_api")
     return str(dump_json(fund_nav_history_path(agent_home, fund["code"]), payload))
 
 

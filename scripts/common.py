@@ -14,25 +14,39 @@ REQUIRED_DIRS = (
     "raw/quotes",
     "raw/news",
     "raw/fund_profiles",
+    "db/source_health",
+    "db/evidence_index",
+    "db/recommendation_delta",
+    "db/evaluation_snapshots",
+    "db/replay_experiments",
     "db/daily_scores",
     "db/intraday_proxies",
     "db/realtime_monitor",
     "db/portfolio_advice",
     "db/llm_context",
     "db/llm_advice",
+    "db/committee_advice",
     "db/llm_raw",
     "db/validated_advice",
+    "db/decisions",
+    "db/decision_ledger",
     "db/agent_outputs",
     "db/agent_snapshots",
     "db/portfolio_valuation",
     "db/portfolio_state",
     "db/portfolio_state/snapshots",
+    "db/portfolio_imports",
     "db/preflight",
     "db/run_manifests",
     "db/review_results",
     "db/execution_reviews",
     "db/execution_status",
     "db/review_memory",
+    "db/review_memory/candidates",
+    "db/review_memory/cycles",
+    "db/review_memory/promotion_log",
+    "db/review_memory/permanent",
+    "db/review_memory/user_confirmed",
     "db/trade_journal",
     "db/estimated_nav",
     "db/fund_nav_history",
@@ -299,7 +313,19 @@ def load_market_overrides(agent_home: Path) -> dict:
 def load_review_memory(agent_home: Path) -> dict:
     path = review_memory_path(agent_home)
     if not path.exists():
-        return {"updated_at": "", "lessons": [], "review_history": []}
+        return {
+            "updated_at": "",
+            "lessons": [],
+            "review_history": [],
+            "bias_adjustments": [],
+            "agent_feedback": [],
+            "records": [],
+            "strategic_memory": [],
+            "permanent_memory": [],
+            "core_permanent_memory": [],
+            "user_confirmed_memory": [],
+            "memory_ledger_summary": {},
+        }
     return repair_data(json.loads(path.read_text(encoding="utf-8")))
 
 
@@ -364,12 +390,25 @@ def llm_advice_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "llm_advice" / f"{report_date}.json"
 
 
+def committee_advice_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "committee_advice" / f"{report_date}.json"
+
+
 def llm_raw_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "llm_raw" / f"{report_date}.json"
 
 
 def validated_advice_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "validated_advice" / f"{report_date}.json"
+
+
+def decisions_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "decisions" / f"{report_date}.json"
+
+
+def decision_ledger_path(agent_home: Path, fund_code: str) -> Path:
+    safe = str(fund_code or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return agent_home / "db" / "decision_ledger" / f"{safe}.jsonl"
 
 
 def agent_output_dir(agent_home: Path, report_date: str) -> Path:
@@ -404,6 +443,10 @@ def portfolio_state_snapshot_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "portfolio_state" / "snapshots" / f"{report_date}.json"
 
 
+def portfolio_import_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "portfolio_imports"
+
+
 def execution_status_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "execution_status" / f"{report_date}.json"
 
@@ -418,6 +461,42 @@ def run_manifest_dir(agent_home: Path) -> Path:
 
 def review_memory_path(agent_home: Path) -> Path:
     return agent_home / "db" / "review_memory" / "memory.json"
+
+
+def review_memory_ledger_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "ledger.json"
+
+
+def review_memory_candidates_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "candidates"
+
+
+def review_memory_cycle_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "cycles"
+
+
+def review_memory_candidate_path(agent_home: Path, base_date: str, horizon: int, source: str) -> Path:
+    return review_memory_candidates_dir(agent_home) / f"{base_date}_{source}_T{horizon}.json"
+
+
+def review_memory_cycle_path(agent_home: Path, review_date: str) -> Path:
+    return review_memory_cycle_dir(agent_home) / f"{review_date}.json"
+
+
+def review_memory_promotion_log_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "promotion_log"
+
+
+def review_memory_promotion_log_path(agent_home: Path, base_date: str, horizon: int, source: str) -> Path:
+    return review_memory_promotion_log_dir(agent_home) / f"{base_date}_{source}_T{horizon}.json"
+
+
+def review_memory_permanent_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "permanent" / "memory.json"
+
+
+def review_memory_user_confirmed_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "review_memory" / "user_confirmed" / "memory.json"
 
 
 def trade_journal_path(agent_home: Path, trade_date: str) -> Path:
@@ -454,8 +533,32 @@ def nightly_review_report_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "reports" / "daily" / f"{report_date}_review.md"
 
 
+def learning_report_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "reports" / "daily" / f"{report_date}_learning.md"
+
+
 def load_benchmark_mappings(agent_home: Path) -> dict:
     path = agent_home / "config" / "benchmark_mappings.json"
     if not path.exists():
         return {"fund_benchmarks": {}}
     return repair_data(json.loads(path.read_text(encoding="utf-8")))
+
+
+def source_health_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "source_health" / f"{report_date}.json"
+
+
+def evidence_index_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "evidence_index" / f"{report_date}.json"
+
+
+def recommendation_delta_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "recommendation_delta" / f"{report_date}.json"
+
+
+def evaluation_snapshot_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "evaluation_snapshots" / f"{report_date}.json"
+
+
+def replay_experiment_dir(agent_home: Path, experiment_id: str) -> Path:
+    return agent_home / "db" / "replay_experiments" / experiment_id

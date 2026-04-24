@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 
 from common import dump_json, ensure_layout, fund_profile_path, load_watchlist, resolve_agent_home, resolve_date, timestamp_now
 from models import FundProfile
+from provider_adapters import build_provider_result
 
 
 PROFILE_URL = "https://fundf10.eastmoney.com/jbgk_{code}.html"
@@ -125,6 +126,11 @@ def parse_profile_html(html: str, fund_or_code, fund_name: str | None = None, re
         ],
         "profile_source": "eastmoney_jbgk",
         "status": "ok",
+        "source_url": PROFILE_URL.format(code=fund["code"]),
+        "source_title": fund["name"],
+        "provider": "eastmoney_jbgk",
+        "as_of": effective_report_date,
+        "retrieved_at": timestamp_now(),
     }
 
 
@@ -162,6 +168,11 @@ def fetch_one_profile(fund: dict, report_date: str) -> FundProfile:
             "slow_factor_summary": [],
             "profile_source": "eastmoney_jbgk",
             "status": f"error: {exc}",
+            "source_url": PROFILE_URL.format(code=fund["code"]),
+            "source_title": fund["name"],
+            "provider": "eastmoney_jbgk",
+            "as_of": report_date,
+            "retrieved_at": timestamp_now(),
         }
 
 
@@ -192,6 +203,7 @@ def main() -> None:
         "generated_at": timestamp_now(),
         "items": [items_by_index[index] for index in sorted(items_by_index)],
     }
+    payload = build_provider_result(payload, provider_name="eastmoney_jbgk")
     print(dump_json(fund_profile_path(agent_home, report_date), payload))
 
 

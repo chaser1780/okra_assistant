@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 
-from common import ensure_layout, load_json, load_portfolio, load_strategy, news_path, report_path, resolve_agent_home, resolve_date, score_path, timestamp_now, validated_advice_path
+from common import agent_output_dir, decisions_path, ensure_layout, evaluation_snapshot_path, fund_profile_path, intraday_proxy_path, load_json, load_portfolio, load_strategy, news_path, quote_path, recommendation_delta_path, report_path, resolve_agent_home, resolve_date, score_path, source_health_path, timestamp_now, validated_advice_path
 from portfolio_exposure import STRATEGY_BUCKET_LABELS, analyze_portfolio_exposure
 
 
@@ -80,9 +80,55 @@ def render_bucket_drift(exposure: dict) -> str:
     return "\n".join(lines)
 
 
-def build_report(report_date: str, portfolio: dict, strategy: dict, advice: dict, news_lookup: dict[str, list[dict]]) -> str:
+def render_provider_health(agent_home, report_date: str) -> str:
+    rows = []
+    for label, path in (
+        ("quotes", quote_path(agent_home, report_date)),
+        ("news", news_path(agent_home, report_date)),
+        ("profiles", fund_profile_path(agent_home, report_date)),
+        ("intraday_proxy", intraday_proxy_path(agent_home, report_date)),
+    ):
+        payload = load_json(path) if path.exists() else {}
+        meta = payload.get("provider_metadata", {}) if isinstance(payload, dict) else {}
+        provider = meta.get("provider_name", payload.get("provider", "missing") if isinstance(payload, dict) else "missing")
+        rows.append(f"- {label}: provider={provider} | freshness={meta.get('freshness_status', 'unknown')} | confidence={meta.get('confidence', 'low')}")
+    return "\n".join(rows)
+
+
+def render_committee(committee: dict) -> str:
+    if not committee:
+        return "- 暂无投委会结构化摘要。"
+    lines = [f"- decision_source={committee.get('decision_source', 'unknown')} | confidence={committee.get('committee_confidence', 'unknown')}"]
+    for title, key in (("多头理由", "bull_case"), ("空头理由", "bear_case"), ("风控否决", "risk_vetoes")):
+        items = committee.get(key, []) or []
+        lines.append(f"- {title}: {len(items)} 条")
+        for item in items[:3]:
+            lines.append(f"  - {item.get('fund_code', '')}: {item.get('thesis', item.get('reason', ''))}")
+    manager = committee.get("manager_decision", {}) or {}
+    if manager.get("summary"):
+        lines.append(f"- 研究经理裁决：{manager.get('summary')}")
+    return "\n".join(lines)
+
+
+def render_decision_watch(agent_home, report_date: str) -> str:
+    path = decisions_path(agent_home, report_date)
+    if not path.exists():
+        return "- 暂无决策账本。"
+    payload = load_json(path)
+    decisions = payload.get("decisions", []) if isinstance(payload, dict) else []
+    pending = sum(1 for item in decisions if any(outcome.get("status") == "pending" for outcome in (item.get("outcomes", {}) or {}).values()))
+    return f"- 今日决策 {len(decisions)} 条；后验待观察 {pending} 条；账本文件：{path}"
+
+
+def build_report(agent_home, report_date: str, portfolio: dict, strategy: dict, advice: dict, news_lookup: dict[str, list[dict]]) -> str:
     exposure = analyze_portfolio_exposure(portfolio, strategy)
     market_view = advice.get("market_view", {}) or {}
+    delta_payload = load_json(recommendation_delta_path(agent_home, report_date)) if recommendation_delta_path(agent_home, report_date).exists() else {"items": []}
+    source_health = load_json(source_health_path(agent_home, report_date)) if source_health_path(agent_home, report_date).exists() else {"items": []}
+    evaluation = load_json(evaluation_snapshot_path(agent_home, report_date)) if evaluation_snapshot_path(agent_home, report_date).exists() else {}
+    aggregate_path = agent_output_dir(agent_home, report_date) / "aggregate.json"
+    aggregate = load_json(aggregate_path) if aggregate_path.exists() else {}
+    committee = advice.get("committee", {}) or aggregate.get("committee", {}) or {}
     lines = [
         f"# 基金日报 - {report_date}",
         "",
@@ -91,6 +137,10 @@ def build_report(report_date: str, portfolio: dict, strategy: dict, advice: dict
         f"- 组合名称：{portfolio.get('portfolio_name', '我的基金组合')}",
         f"- 组合估值日期：{portfolio.get('as_of_date', '未知')}",
         f"- 建议模式：{advice.get('advice_mode', 'validated') or 'validated'}",
+        f"- 决策来源：{advice.get('decision_source', 'unknown') or 'unknown'}",
+        "",
+        "## 今日最重要的三件事",
+        *(f"- {item.get('fund_name', item.get('fund_code', ''))}：{item.get('delta_reason', '')}" for item in (delta_payload.get("items", []) or [])[:3]),
         "",
         "## 今日结论",
         render_action_summary(advice),
@@ -101,6 +151,20 @@ def build_report(report_date: str, portfolio: dict, strategy: dict, advice: dict
     ]
     for driver in market_view.get("key_drivers", []) or []:
         lines.append(f"- 关键驱动：{driver}")
+
+    lines.extend(
+        [
+            "",
+            "## 今日变化解释",
+        ]
+    )
+    for item in (delta_payload.get("items", []) or [])[:8]:
+        lines.append(
+            f"- {item.get('fund_name', item.get('fund_code', ''))}：{item.get('prev_action', 'none')} {money_line(float(item.get('prev_amount', 0.0) or 0.0))}"
+            f" -> {item.get('new_action', 'none')} {money_line(float(item.get('new_amount', 0.0) or 0.0))} | {item.get('reason_category', '')} | {item.get('delta_reason', '')}"
+        )
+    if not (delta_payload.get("items", []) or []):
+        lines.append("- 相比上一期，没有明显动作变化。")
 
     lines.extend(
         [
@@ -119,6 +183,10 @@ def build_report(report_date: str, portfolio: dict, strategy: dict, advice: dict
     )
     for alert in exposure.get("alerts", []) or ["当前没有额外高优先风险提醒。"]:
         lines.append(f"- {alert}")
+
+    lines.extend(["", "## ?????", render_provider_health(agent_home, report_date)])
+    lines.extend(["", "## ????????", render_committee(committee)])
+    lines.extend(["", "## ?????????", render_decision_watch(agent_home, report_date)])
 
     lines.extend(
         [
@@ -162,8 +230,15 @@ def build_fallback_score_report(report_date: str, portfolio: dict, strategy: dic
                 f"- 风险提示：{'；'.join(item.get('risk_flags', [])) or '无'}",
                 "- 相关新闻：",
                 *(related_news(news_lookup, item.get("code", ""))),
-            ]
-        )
+        ]
+    )
+    lines.extend(["", "## 关键信任提示"])
+    for item in (source_health.get("items", []) or [])[:8]:
+        lines.append(f"- {item.get('source_key', '')} | status={item.get('status', '')} | stale={item.get('stale_count', 0)} | errors={item.get('error_count', 0)}")
+    if evaluation:
+        lines.extend(["", "## 近期评估摘要"])
+        baseline = evaluation.get("no_trade_baseline_scorecard", {}) or {}
+        lines.append(f"- no-trade 对照：better={baseline.get('better_than_no_trade', 0)} | worse={baseline.get('worse_than_no_trade', 0)} | same={baseline.get('same_as_no_trade', 0)}")
     lines.extend(
         [
             "",
@@ -193,7 +268,7 @@ def main() -> None:
     validated_path = validated_advice_path(agent_home, report_date)
     if validated_path.exists():
         advice = load_json(validated_path)
-        report_text = build_report(report_date, portfolio, strategy, advice, news_lookup)
+        report_text = build_report(agent_home, report_date, portfolio, strategy, advice, news_lookup)
     else:
         score_payload = load_json(score_path(agent_home, report_date)) if score_path(agent_home, report_date).exists() else {"funds": []}
         report_text = build_fallback_score_report(report_date, portfolio, strategy, score_payload, news_lookup)

@@ -5,46 +5,18 @@ import json
 import os
 from pathlib import Path
 
-from common import agent_output_dir, dump_json, ensure_layout, llm_advice_path, llm_context_path, llm_raw_path, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now
+from common import agent_output_dir, committee_advice_path, dump_json, ensure_layout, llm_advice_path, llm_context_path, llm_raw_path, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now
 from models import FinalAdvice, LlmContext
 from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text
 
-ADVICE_SCHEMA = {
+NARRATIVE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "market_view": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "regime": {"type": "string"},
-                "summary": {"type": "string"},
-                "key_drivers": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["regime", "summary", "key_drivers"],
-        },
-        "fund_decisions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "fund_code": {"type": "string"},
-                    "action": {"type": "string", "enum": ["scheduled_dca", "add", "reduce", "switch_out", "hold"]},
-                    "suggest_amount": {"type": "number"},
-                    "priority": {"type": "integer"},
-                    "confidence": {"type": "number"},
-                    "thesis": {"type": "string"},
-                    "evidence": {"type": "array", "items": {"type": "string"}},
-                    "risks": {"type": "array", "items": {"type": "string"}},
-                    "agent_support": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["fund_code", "action", "suggest_amount", "priority", "confidence", "thesis", "evidence", "risks", "agent_support"],
-            },
-        },
+        "market_summary": {"type": "string"},
         "cross_fund_observations": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["market_view", "fund_decisions", "cross_fund_observations"],
+    "required": ["market_summary", "cross_fund_observations"],
 }
 
 ACTION_MAP = {
@@ -92,11 +64,11 @@ def strip_json_fence(value: str) -> str:
 
 def build_system_prompt(personality: str) -> str:
     return (
-        "你是基金组合投资委员会秘书，负责把委员会结论整理为最终建议。"
+        "你是基金组合投资委员会秘书，负责把已经固定的委员会决策整理成中文摘要。"
         f"你的语气风格应当是 {personality}。"
-        "你必须强依赖 portfolio_trader、research_manager、risk_manager 的输出，"
-        "原始组合 context 只作为核对材料，不能压过委员会共识。"
-        "所有规则都视为硬约束，不得违反。"
+        "你不能改动 fund_decisions 里的动作方向、金额、优先级或 agent_support。"
+        "你必须强依赖 canonical committee advice，原始组合 context 只作为核对材料。"
+        "所有规则都视为硬约束，不得新增动作或删除动作。"
         "不要输出收尾套话、重复总结或没有信息增量的空话。"
         "返回严格 JSON，不要 markdown，不要额外解释。"
     )
@@ -195,27 +167,23 @@ def committee_core_agents_available(agent_bundle: dict | None) -> bool:
     if not agent_bundle:
         return False
     agents = agent_bundle.get("agents", {})
-    return all(agents.get(name, {}).get("status") == "ok" for name in ("research_manager", "risk_manager", "portfolio_trader"))
+    return all(str(agents.get(name, {}).get("status", "")).lower() in {"ok", "degraded"} for name in ("research_manager", "risk_manager", "portfolio_trader"))
 
 
-def build_user_prompt(context: LlmContext, agent_bundle: dict) -> str:
+def build_user_prompt(context: LlmContext, agent_bundle: dict, committee_advice: FinalAdvice) -> str:
     committee_bundle = build_committee_bundle(agent_bundle)
     return (
-        "请基于委员会 bundle 与原始 context，输出最终组合建议。\n"
+        "请基于已经固定的 committee advice，补写中文市场摘要与跨基金观察。\n"
         "规则：\n"
-        "1. 你必须优先依赖 portfolio_trader、research_manager、risk_manager。\n"
-        "2. 如果 research_manager 和 risk_manager 冲突，默认采用更保守方案。\n"
-        "3. 如果 portfolio_trader 已经给出明确 preferred_action / preferred_size_bucket，除非存在硬约束冲突，不要随意改写方向。\n"
-        "4. S&P500 与纳指100核心基金只能 scheduled_dca。\n"
-        "5. 固定持有债基不可交易。\n"
-        "6. 现金仓基金不直接给买卖建议。\n"
-        "7. tactical 基金只允许 add / reduce / switch_out / hold。\n"
-        "8. suggest_amount 必须是人民币金额。\n"
-        "9. 每个 tactical 决策的 agent_support 必须列 2-4 个真实影响判断的智能体。\n"
-        "10. 若 allocation_drift_pct 显示短期战术仓或高波动暴露已超目标带宽，不要继续轻易新增主题仓。\n"
-        "11. 长期核心仓与防守仓优先遵守结构目标，不要被单日噪音覆盖。\n"
-        "12. 用少量高质量动作回答问题，不要平均分配动作给所有基金。\n"
-        "13. 返回严格 JSON。\n\n"
+        "1. 你只能输出 market_summary 与 cross_fund_observations。\n"
+        "2. 不能改写、补充、删减 canonical advice 中任何 fund_decisions 字段。\n"
+        "3. market_summary 必须解释为什么今天是当前的 regime，以及为什么动作数量很少或很集中。\n"
+        "4. cross_fund_observations 应总结组合层的共识、约束、拥挤与等待信号，不要重复单基金 thesis。\n"
+        "5. 若 committee advice 已明显偏保守，请把原因说清楚，而不是暗示还应继续进攻。\n"
+        "6. 返回严格 JSON。\n\n"
+        + "CANONICAL_COMMITTEE_ADVICE\n"
+        + json.dumps(committee_advice, ensure_ascii=False, indent=2)
+        + "\n\n"
         + "COMMITTEE_BUNDLE\n"
         + json.dumps(committee_bundle, ensure_ascii=False, indent=2)
         + "\n\nRAW_CONTEXT\n"
@@ -234,6 +202,8 @@ def compact_raw_payload(payload: dict) -> dict:
 
     compact = {
         "mode": payload.get("mode"),
+        "decision_source": payload.get("decision_source", ""),
+        "narrative_mode": payload.get("narrative_mode", ""),
         "generated_at": payload.get("generated_at"),
         "transport_name": payload.get("transport_name", ""),
         "stream_incomplete": bool(payload.get("stream_incomplete", False)),
@@ -317,6 +287,10 @@ def fund_view_index(output: dict) -> dict[str, dict]:
     return {item.get("fund_code", ""): item for item in output.get("fund_views", []) if item.get("fund_code")}
 
 
+def decision_card_index(output: dict) -> dict[str, dict]:
+    return {item.get("fund_code", ""): item for item in output.get("decision_cards", []) if item.get("fund_code")}
+
+
 def first_nonempty(*values):
     for value in values:
         if isinstance(value, str) and value.strip():
@@ -369,39 +343,67 @@ def legacy_stance(view: dict) -> str:
     return first_nonempty(view.get("stance"), view.get("preferred_action"), view.get("action_bias"), "hold")
 
 
-def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -> FinalAdvice:
+def build_committee_advice_from_agents(context: LlmContext, agent_bundle: dict) -> FinalAdvice:
     trader = get_output(agent_bundle, "portfolio_trader")
     manager = get_output(agent_bundle, "research_manager")
     risk = get_output(agent_bundle, "risk_manager")
     trader_views = fund_view_index(trader)
     manager_views = fund_view_index(manager)
     risk_views = fund_view_index(risk)
+    trader_cards = decision_card_index(trader)
+    manager_cards = decision_card_index(manager)
+    risk_cards = decision_card_index(risk)
+    trader_order = {item.get("fund_code", ""): idx for idx, item in enumerate(trader.get("fund_views", []) or [], start=1) if item.get("fund_code")}
+    manager_order = {item.get("fund_code", ""): idx for idx, item in enumerate(manager.get("fund_views", []) or [], start=1) if item.get("fund_code")}
+    risk_order = {item.get("fund_code", ""): idx for idx, item in enumerate(risk.get("fund_views", []) or [], start=1) if item.get("fund_code")}
 
-    def choose_action(fund: dict) -> tuple[str, float, str, list[str], list[str]]:
+    def choose_action(fund: dict) -> dict:
         role = fund["role"]
         current_value = float(fund.get("current_value", 0.0))
         cap_value = float(fund.get("cap_value", 1000.0))
+        support = [name for name in ["portfolio_trader", "research_manager", "risk_manager"] if get_output(agent_bundle, name)]
         if role == "core_dca":
-            return "scheduled_dca", float(fund.get("fixed_daily_buy_amount", 0.0)), "执行既定定投计划。", ["定投规则"], []
+            return {
+                "action": "scheduled_dca",
+                "suggest_amount": float(fund.get("fixed_daily_buy_amount", 0.0)),
+                "thesis": "执行既定定投计划。",
+                "evidence": ["定投规则"],
+                "risks": [],
+                "agent_support": support,
+                "_sort_key": (3, 500, fund.get("fund_code", "")),
+            }
         if role in {"fixed_hold", "cash_hub"}:
-            return "hold", 0.0, "维持当前角色定位，不做战术动作。", ["角色约束"], []
+            return {
+                "action": "hold",
+                "suggest_amount": 0.0,
+                "thesis": "维持当前角色定位，不做战术动作。",
+                "evidence": ["角色约束"],
+                "risks": [],
+                "agent_support": support,
+                "_sort_key": (4, 900, fund.get("fund_code", "")),
+            }
 
         trader_view = trader_views.get(fund["fund_code"], {})
         manager_view = manager_views.get(fund["fund_code"], {})
         risk_view = risk_views.get(fund["fund_code"], {})
+        trader_card = trader_cards.get(fund["fund_code"], {})
+        manager_card = manager_cards.get(fund["fund_code"], {})
+        risk_card = risk_cards.get(fund["fund_code"], {})
 
         primary_action_text = first_nonempty(
+            trader_card.get("proposed_action"),
             trader_view.get("preferred_action"),
             trader_view.get("action_bias"),
+            manager_card.get("proposed_action"),
             manager_view.get("preferred_action"),
             manager_view.get("committee_preference"),
             legacy_stance(manager_view),
         )
         action = map_action(primary_action_text, role)
 
-        risk_decision = (risk_view.get("risk_decision") or "").lower()
+        risk_decision = first_nonempty(risk_card.get("risk_decision"), risk_view.get("risk_decision"), "").lower()
         if risk_decision == "reject":
-            action = map_action(first_nonempty(risk_view.get("alternative_action"), "hold"), role)
+            action = map_action(first_nonempty(risk_view.get("alternative_action"), risk_card.get("proposed_action"), "hold"), role)
         elif risk_decision == "modify" and action == "add":
             action = "hold"
 
@@ -409,7 +411,9 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
         if action in {"add", "reduce", "switch_out"}:
             amount = map_amount(
                 first_nonempty(
+                    trader_card.get("size_bucket"),
                     trader_view.get("preferred_size_bucket"),
+                    manager_card.get("size_bucket"),
                     manager_view.get("preferred_size_bucket"),
                     "200",
                 ),
@@ -417,20 +421,26 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
                 cap_value,
             )
         thesis = first_nonempty(
+            trader_card.get("why_now"),
             trader_view.get("thesis"),
+            manager_card.get("why_now"),
             manager_view.get("thesis"),
+            risk_card.get("why_now"),
             risk_view.get("thesis"),
+            trader_card.get("manager_notes"),
             trader_view.get("comment"),
+            manager_card.get("manager_notes"),
             manager_view.get("comment"),
+            risk_card.get("manager_notes"),
             risk_view.get("comment"),
             "委员会当前没有形成足够强的新动作共识，先保持耐心。",
         )
         evidence = [
             item
             for item in [
-                f"trader action: {first_nonempty(trader_view.get('preferred_action'), trader_view.get('action_bias'), 'n/a')}",
-                f"manager action: {first_nonempty(manager_view.get('preferred_action'), manager_view.get('committee_preference'), legacy_stance(manager_view), 'n/a')}",
-                f"risk decision: {first_nonempty(risk_view.get('risk_decision'), legacy_stance(risk_view), 'n/a')}",
+                f"trader action: {first_nonempty(trader_card.get('proposed_action'), trader_view.get('preferred_action'), trader_view.get('action_bias'), 'n/a')}",
+                f"manager action: {first_nonempty(manager_card.get('proposed_action'), manager_view.get('preferred_action'), manager_view.get('committee_preference'), legacy_stance(manager_view), 'n/a')}",
+                f"risk decision: {first_nonempty(risk_card.get('risk_decision'), risk_view.get('risk_decision'), legacy_stance(risk_view), 'n/a')}",
                 f"1周涨跌 {fund.get('quote', {}).get('week_change_pct', 0.0)}%",
                 f"估值变化 {fund.get('estimated_nav', {}).get('estimate_change_pct')}",
             ]
@@ -441,19 +451,41 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
         risks.extend(risk_view.get("what_can_go_wrong", []))
         risks.extend(trader_view.get("risks", []))
         if not risks:
-            risks.append("最终汇总模型失败，当前结果由委员会 fallback 合成。")
-        support = [name for name in ["portfolio_trader", "research_manager", "risk_manager"] if get_output(agent_bundle, name)]
-        return action, amount, thesis, evidence, risks[:5]
+            risks.append("委员会当前以约束内执行为主，后续仍需结合新数据验证。")
+        explicit_order = min(
+            trader_order.get(fund["fund_code"], 999),
+            manager_order.get(fund["fund_code"], 999),
+            risk_order.get(fund["fund_code"], 999),
+        )
+        action_weight = {
+            "reduce": 0,
+            "switch_out": 1,
+            "add": 2,
+            "scheduled_dca": 3,
+            "hold": 4,
+        }.get(action, 4)
+        return {
+            "action": action,
+            "suggest_amount": amount,
+            "thesis": thesis,
+            "evidence": evidence,
+            "risks": risks[:5],
+            "agent_support": support,
+            "source_signal_ids": list(dict.fromkeys((trader_card.get("supporting_signal_ids") or []) + (manager_card.get("supporting_signal_ids") or []) + (risk_card.get("supporting_signal_ids") or []))),
+            "opposing_signal_ids": list(dict.fromkeys((trader_card.get("opposing_signal_ids") or []) + (manager_card.get("opposing_signal_ids") or []) + (risk_card.get("opposing_signal_ids") or []))),
+            "decision_card_ids": [item for item in [trader_card.get("decision_id"), manager_card.get("decision_id"), risk_card.get("decision_id")] if item],
+            "_sort_key": (action_weight, explicit_order, fund.get("fund_code", "")),
+        }
 
     decisions = []
-    for priority, fund in enumerate(context.get("funds", []), start=1):
-        action, amount, thesis, evidence, risks = choose_action(fund)
+    for fund in context.get("funds", []):
+        chosen = choose_action(fund)
         decisions.append(
             {
                 "fund_code": fund["fund_code"],
-                "action": action,
-                "suggest_amount": amount,
-                "priority": priority,
+                "action": chosen["action"],
+                "suggest_amount": chosen["suggest_amount"],
+                "priority": 999,
                 "confidence": round(
                     max(
                         normalize_confidence(trader.get("confidence")),
@@ -462,12 +494,25 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
                     ),
                     4,
                 ),
-                "thesis": thesis,
-                "evidence": evidence,
-                "risks": risks,
-                "agent_support": [name for name in ["portfolio_trader", "research_manager", "risk_manager"] if get_output(agent_bundle, name)],
+                "thesis": chosen["thesis"],
+                "evidence": chosen["evidence"],
+                "risks": chosen["risks"],
+                "agent_support": chosen["agent_support"],
+                "source_signal_ids": chosen.get("source_signal_ids", []),
+                "opposing_signal_ids": chosen.get("opposing_signal_ids", []),
+                "decision_trace": {
+                    "fund_code": fund["fund_code"],
+                    "supporting_signal_ids": chosen.get("source_signal_ids", []),
+                    "opposing_signal_ids": chosen.get("opposing_signal_ids", []),
+                    "decision_card_ids": chosen.get("decision_card_ids", []),
+                    "constraint_hits": [],
+                },
+                "_sort_key": chosen["_sort_key"],
             }
         )
+    decisions.sort(key=lambda item: item.pop("_sort_key"))
+    for priority, decision in enumerate(decisions, start=1):
+        decision["priority"] = priority
 
     market_view = trader.get("portfolio_view") or manager.get("portfolio_view") or risk.get("portfolio_view") or {}
     key_drivers = []
@@ -481,7 +526,7 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
     observations.extend(risk.get("watchouts", [])[:2])
     observations.extend(manager.get("watchouts", [])[:2])
     if not observations:
-        observations = ["当前建议由 portfolio_trader / research_manager / risk_manager 合成。"]
+        observations = ["当前建议由 portfolio_trader / research_manager / risk_manager 的委员会共识直接收敛。"]
     return {
         "market_view": {
             "regime": market_view.get("regime", "mixed"),
@@ -491,6 +536,10 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
         "fund_decisions": decisions,
         "cross_fund_observations": observations[:6],
     }
+
+
+def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -> FinalAdvice:
+    return build_committee_advice_from_agents(context, agent_bundle)
 
 
 def resolve_api_key(config: dict) -> str:
@@ -514,7 +563,26 @@ def write_final_debug_log(agent_home: Path | str, request_name: str, payload: di
     dump_json(path, payload)
 
 
-def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_attempts: int = 3, agent_home: Path | str | None = None) -> dict:
+def merge_committee_narrative(committee_advice: FinalAdvice, narrative: dict) -> FinalAdvice:
+    merged = json.loads(json.dumps(committee_advice, ensure_ascii=False))
+    market_view = merged.setdefault("market_view", {})
+    market_view["summary"] = str(narrative.get("market_summary", "") or market_view.get("summary", "")).strip()
+    merged["cross_fund_observations"] = [str(item).strip() for item in (narrative.get("cross_fund_observations", []) or []) if str(item).strip()] or merged.get("cross_fund_observations", [])
+    return merged
+
+
+def call_responses_api(
+    config: dict,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    schema: dict,
+    schema_name: str,
+    request_kind: str,
+    max_output_tokens: int,
+    max_attempts: int = 3,
+    agent_home: Path | str | None = None,
+) -> dict:
     provider_key = config["model_provider"]
     provider = config["model_providers"][provider_key]
     api_key = resolve_api_key(config)
@@ -531,14 +599,14 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
         "text": {
             "format": {
                 "type": "json_schema",
-                "name": "fund_portfolio_advice",
-                "schema": ADVICE_SCHEMA,
+                "name": schema_name,
+                "schema": schema,
                 "strict": True,
             }
         },
     }
     payload["text"]["verbosity"] = "low"
-    payload["max_output_tokens"] = 3200
+    payload["max_output_tokens"] = max_output_tokens
 
     last_error = None
     transport_order = [("direct", False), ("env_proxy", True)]
@@ -556,7 +624,7 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                     stream=True,
                 ) as response:
                     if response.status_code >= 400:
-                        raise RuntimeError(describe_api_failure(response.status_code, response.text[:800], "final advice", transport_name))
+                        raise RuntimeError(describe_api_failure(response.status_code, response.text[:800], request_kind, transport_name))
                     parsed = consume_sse_response(response)
                     events = parsed.get("events", [])
                     delta_parts = [parsed.get("output_text", "")]
@@ -582,7 +650,7 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                     if agent_home:
                         write_final_debug_log(
                             agent_home,
-                            f"final_{transport_name}_failed_attempt{attempt}",
+                            f"{request_kind}_{transport_name}_failed_attempt{attempt}",
                             {
                                 "request_payload": payload,
                                 "events_tail": events[-20:],
@@ -592,12 +660,12 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                                 "use_env_proxy": use_env_proxy,
                             },
                         )
-                    raise RuntimeError(f"Final advice failed before output text ({transport_name}): {json.dumps(failed_event, ensure_ascii=False)}")
+                    raise RuntimeError(f"{request_kind} failed before output text ({transport_name}): {json.dumps(failed_event, ensure_ascii=False)}")
                 if error_event:
                     if agent_home:
                         write_final_debug_log(
                             agent_home,
-                            f"final_{transport_name}_error_attempt{attempt}",
+                            f"{request_kind}_{transport_name}_error_attempt{attempt}",
                             {
                                 "request_payload": payload,
                                 "events_tail": events[-20:],
@@ -607,11 +675,11 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                                 "use_env_proxy": use_env_proxy,
                             },
                         )
-                    raise RuntimeError(f"Final advice error event ({transport_name}): {json.dumps(error_event, ensure_ascii=False)}")
+                    raise RuntimeError(f"{request_kind} error event ({transport_name}): {json.dumps(error_event, ensure_ascii=False)}")
                 if agent_home:
                     write_final_debug_log(
                         agent_home,
-                        f"final_{transport_name}_empty_attempt{attempt}",
+                        f"{request_kind}_{transport_name}_empty_attempt{attempt}",
                         {
                             "request_payload": payload,
                             "events_tail": events[-20:],
@@ -624,7 +692,7 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                             "use_env_proxy": use_env_proxy,
                         },
                     )
-                raise RuntimeError(f"LLM stream did not contain output_text deltas ({transport_name}).")
+                raise RuntimeError(f"{request_kind} stream did not contain output_text deltas ({transport_name}).")
             except Exception as exc:
                 last_error = exc
                 joined = "".join(delta_parts).strip()
@@ -643,7 +711,7 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
                 if agent_home:
                     write_final_debug_log(
                         agent_home,
-                        f"final_{transport_name}_exception_attempt{attempt}",
+                        f"{request_kind}_{transport_name}_exception_attempt{attempt}",
                         {
                             "request_payload": payload,
                             "events_tail": events[-20:],
@@ -660,7 +728,7 @@ def call_responses_api(config: dict, system_prompt: str, user_prompt: str, max_a
         import time
         time.sleep(2 * attempt)
 
-    raise RuntimeError(f"Final advice request failed after {max_attempts} attempts: {last_error}")
+    raise RuntimeError(f"{request_kind} request failed after {max_attempts} attempts: {last_error}")
 
 
 def main() -> None:
@@ -677,6 +745,7 @@ def main() -> None:
     agent_bundle_path = agent_output_dir(agent_home, report_date) / "aggregate.json"
     agent_bundle = load_json(agent_bundle_path) if agent_bundle_path.exists() else None
     config = load_llm_config(agent_home)
+    committee_advice: FinalAdvice | None = None
 
     if not args.mock:
         if not agent_bundle:
@@ -690,47 +759,67 @@ def main() -> None:
 
     if args.mock:
         advice = build_mock_advice(context, agent_bundle)
+        committee_advice = advice
+        committee = agent_bundle.get("committee", {}) if agent_bundle else {}
         raw_payload = {
             "mode": "mock",
+            "decision_source": committee.get("decision_source", "mock") or "mock",
+            "narrative_mode": "mock",
             "generated_at": timestamp_now(),
             "advice": advice,
+            "committee": committee,
             "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)) if agent_bundle else True,
             "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)) if agent_bundle else False,
             "failed_agents": agent_bundle.get("failed_agents", []) if agent_bundle else [],
         }
     else:
+        committee_advice = build_committee_advice_from_agents(context, agent_bundle)
+        committee = agent_bundle.get("committee", {}) or {}
         try:
             raw_payload = call_responses_api(
                 config,
                 build_system_prompt(config.get("personality", "friendly")),
-                build_user_prompt(context, agent_bundle),
+                build_user_prompt(context, agent_bundle, committee_advice),
+                schema=NARRATIVE_SCHEMA,
+                schema_name="fund_portfolio_narrative",
+                request_kind="final_narrative",
+                max_output_tokens=1400,
                 agent_home=agent_home,
             )
             output_text = raw_payload.get("output_text", "")
             if not output_text:
                 raise SystemExit("LLM stream did not contain output_text deltas.")
-            advice = json.loads(strip_json_fence(output_text))
+            narrative = json.loads(strip_json_fence(output_text))
+            advice = merge_committee_narrative(committee_advice, narrative)
             raw_payload.update(
                 {
                     "mode": "responses_api",
+                    "decision_source": committee.get("decision_source", "committee_canonical") or "committee_canonical",
+                    "narrative_mode": "responses_api",
                     "generated_at": timestamp_now(),
+                    "advice": advice,
+                    "committee": committee,
                     "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                     "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                     "failed_agents": agent_bundle.get("failed_agents", []),
                 }
             )
         except Exception as exc:
-            advice = build_fallback_advice_from_agents(context, agent_bundle)
+            advice = committee_advice
             raw_payload = {
                 "mode": "committee_fallback",
+                "decision_source": committee.get("decision_source", "committee_canonical") or "committee_canonical",
+                "narrative_mode": "committee_fallback",
                 "generated_at": timestamp_now(),
                 "error": str(exc),
                 "advice": advice,
+                "committee": committee,
                 "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                 "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                 "failed_agents": agent_bundle.get("failed_agents", []),
             }
 
+    dump_json(committee_advice_path(agent_home, report_date), committee_advice or advice)
     dump_json(llm_raw_path(agent_home, report_date), compact_raw_payload(raw_payload))
     output_path = dump_json(llm_advice_path(agent_home, report_date), advice)
     print(output_path)
