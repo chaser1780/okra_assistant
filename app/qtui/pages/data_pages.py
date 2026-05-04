@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtGui import QStandardItem
+from PySide6.QtWidgets import QPushButton
 
+from decision_support import summarize_fund_agent_signals
 from ui_support import build_agent_detail_text, build_fund_detail_text, build_realtime_detail_text, build_realtime_summary_text, money, num, pct
 from portfolio_exposure import analyze_portfolio_exposure
 
@@ -31,15 +33,27 @@ class PortfolioPage(RichTextPage):
 
 
 class ResearchPage(FilterableTablePage):
-    def __init__(self):
-        super().__init__("建议列表", ["代码", "基金", "动作", "金额", "执行"])
+    def __init__(self, shell=None):
+        super().__init__("建议列表", ["代码", "基金", "动作", "金额", "共识", "执行"])
+        self.shell = shell
         self.action_filter = self.add_filter_combo(["全部动作", "add", "reduce", "switch_out", "hold", "scheduled_dca"])
         self.status_filter = self.add_filter_combo(["全部状态", "pending", "partial", "executed", "not_applicable"])
+        self.actionable_only = self.add_filter_check("仅看可执行")
+        self.conflict_only = self.add_filter_check("仅看冲突")
         self.realtime_map: dict[str, dict] = {}
         self.review_map: dict[str, dict] = {}
+        self.aggregate: dict = {}
+        self.open_button = self.enable_open("进入基金详情", self._open_current_fund)
         self.configure(
             detail_builder=self._detail_builder,
-            cells_builder=lambda row: [row.get("fund_code", ""), row.get("fund_name", ""), row.get("validated_action", ""), money(row.get("validated_amount", 0)), row.get("execution_status", "")],
+            cells_builder=lambda row: [
+                row.get("fund_code", ""),
+                row.get("fund_name", ""),
+                row.get("validated_action", ""),
+                money(row.get("validated_amount", 0)),
+                row.get("_consensus_text", ""),
+                row.get("execution_status", ""),
+            ],
             filter_handler=self._matches_filters,
             row_key_builder=lambda row: row.get("fund_code", ""),
             item_styler=self._style_item,
@@ -56,27 +70,25 @@ class ResearchPage(FilterableTablePage):
             return False
         if status != "全部状态" and row.get("execution_status", "") != status:
             return False
+        if self.actionable_only.isChecked() and not row.get("_is_actionable", False):
+            return False
+        if self.conflict_only.isChecked() and not row.get("_has_conflict", False):
+            return False
         return True
+
+    def _open_current_fund(self, row: dict) -> None:
+        if self.shell:
+            self.shell.open_fund_detail(row.get("fund_code", ""), source_key="research")
 
     def _detail_builder(self, row: dict) -> str:
         code = row.get("fund_code", "")
-        return build_fund_detail_text(row, self.realtime_map.get(code), self.review_map.get(code))
+        return build_fund_detail_text(row, self.realtime_map.get(code), self.review_map.get(code), self.aggregate)
 
-    def refresh_data(self, state: dict) -> None:
-        items = []
-        for section in ("tactical_actions", "dca_actions", "hold_actions"):
-            for item in state.get("validated", {}).get(section, []) or []:
-                enriched = dict(item)
-                enriched["_section"] = section
-                items.append(enriched)
-        realtime_map = {entry.get("fund_code"): entry for entry in (state.get("realtime", {}).get("items", []) or [])}
-        review_items = [entry for batch in state.get("review_results_for_date", []) for entry in (batch.get("items", []) or [])]
-        review_map = {entry.get("fund_code"): entry for entry in review_items}
-        self.bind_aux(realtime_map, review_map)
-        tactical_count = len(state.get("validated", {}).get("tactical_actions", []) or [])
-        dca_count = len(state.get("validated", {}).get("dca_actions", []) or [])
-        hold_count = len(state.get("validated", {}).get("hold_actions", []) or [])
-        self.load_rows(f"建议 {len(items)} 条 | tactical {tactical_count} | dca {dca_count} | hold {hold_count}", items)
+    def refresh_view_model(self, view_model) -> None:
+        self.aggregate = view_model.aggregate
+        self.bind_aux(view_model.realtime_map, view_model.review_map)
+        self.set_metrics([(metric.title, metric.value, metric.body, metric.tone) for metric in view_model.metrics])
+        self.load_rows(view_model.meta, view_model.rows)
 
     def _style_item(self, row: dict, col: int, item: QStandardItem) -> None:
         action = row.get("validated_action", "")
@@ -86,7 +98,9 @@ class ResearchPage(FilterableTablePage):
                 set_item_color(item, QT["success"])
             elif action in {"reduce", "switch_out"}:
                 set_item_color(item, QT["danger"])
-        elif col == 4:
+        elif col == 4 and row.get("_consensus_text") == "conflict":
+            set_item_color(item, QT["warning"])
+        elif col == 5:
             if status == "executed":
                 set_item_color(item, QT["success"])
             elif status == "partial":
@@ -96,11 +110,17 @@ class ResearchPage(FilterableTablePage):
 
 
 class RealtimePage(FilterableTablePage):
-    def __init__(self):
+    def __init__(self, shell=None):
         super().__init__("实时收益", ["代码", "基金", "金额", "今日收益", "涨跌", "可信度", "模式"], show_summary=True, show_detail=True, split_sizes=(760, 460))
+        self.shell = shell
         self.mode_filter = self.add_filter_combo(["全部模式", "estimate", "proxy", "official"])
         self.stale_only = self.add_filter_check("仅看陈旧")
         self.open_button = None
+        self.refresh_button = None
+        if self.shell is not None:
+            self.refresh_button = QPushButton("刷新实时快照")
+            self.toolbar.insertWidget(self.toolbar.count() - 1, self.refresh_button)
+            self.refresh_button.clicked.connect(self.shell.run_realtime)
         self.configure(
             detail_builder=build_realtime_detail_text,
             cells_builder=lambda row: [row.get("fund_code", ""), row.get("fund_name", ""), money(row.get("estimated_position_value", row.get("base_position_value", 0))), money(row.get("estimated_intraday_pnl_amount", 0)), pct(row.get("effective_change_pct", 0), 2), num(row.get("confidence"), 2), row.get("mode", "")],
@@ -133,21 +153,18 @@ class RealtimePage(FilterableTablePage):
             elif pnl < 0:
                 set_item_color(item, QT["danger"])
 
-    def refresh_data(self, state: dict) -> None:
-        items = state.get("realtime", {}).get("items", []) or []
-        self.load_rows(
-            f"实时项 {len(items)} 条 | 快照 {state.get('realtime_date', '暂无')}",
-            items,
-            summary_text=build_realtime_summary_text(state.get("realtime", {})),
-        )
+    def refresh_view_model(self, view_model) -> None:
+        self.set_metrics([(metric.title, metric.value, metric.body, metric.tone) for metric in view_model.metrics])
+        self.load_rows(view_model.meta, view_model.items, summary_text=view_model.summary_text)
 
 
 class AgentsPage(FilterableTablePage):
     def __init__(self):
         super().__init__("智能体", ["阶段", "智能体", "状态", "置信度"])
         self.status_filter = self.add_filter_combo(["全部状态", "ok", "failed", "degraded", "unknown"])
+        self.aggregate: dict = {}
         self.configure(
-            detail_builder=lambda row: build_agent_detail_text(row.get("agent_name", ""), row),
+            detail_builder=lambda row: build_agent_detail_text(row.get("agent_name", ""), row, self.aggregate),
             cells_builder=lambda row: [row.get("role", ""), row.get("agent_name", ""), row.get("status", "unknown"), num((row.get("output", {}) or {}).get("confidence"), 2)],
             filter_handler=self._matches_filters,
             row_key_builder=lambda row: row.get("agent_name", ""),
@@ -168,10 +185,7 @@ class AgentsPage(FilterableTablePage):
             elif status == "degraded":
                 set_item_color(item, QT["warning"])
 
-    def refresh_data(self, state: dict) -> None:
-        aggregate = state.get("aggregate", {}) or {}
-        agents = aggregate.get("agents", {}) or {}
-        roles = aggregate.get("agent_roles", {}) or {}
-        ordered = aggregate.get("ordered_agents", []) or sorted(agents.keys())
-        rows = [{"agent_name": name, "role": roles.get(name, "unknown"), **(agents.get(name, {}) or {})} for name in ordered]
-        self.load_rows(f"智能体 {len(rows)} 个 | 失败 {len(aggregate.get('failed_agents', []) or [])}", rows)
+    def refresh_view_model(self, view_model) -> None:
+        self.aggregate = view_model.aggregate
+        self.set_metrics([(metric.title, metric.value, metric.body, metric.tone) for metric in view_model.metrics])
+        self.load_rows(view_model.meta, view_model.rows)

@@ -20,20 +20,48 @@ class QuoteSnapshot(TypedDict, total=False):
     freshness_business_day_gap: int | None
     freshness_is_acceptable: bool
     freshness_is_delayed: bool
+    freshness_status: str
+    source_url: str
+    source_title: str
+    entity_id: str
+    entity_type: str
     provider: str
     retrieved_at: str
+    confidence: float
 
 
 class NewsItem(TypedDict, total=False):
     code: str
     name: str
+    entity_id: str
+    entity_type: str
     published_at: str
+    as_of: str
     title: str
     summary: str
     source_name: str
+    source_role: str
+    source_tier: str
+    source_url: str
+    source_title: str
     url: str
+    provider: str
+    mapping_mode: str
+    evidence_type: str
     impact: str
     relevance_score: float
+    sentiment_score: float
+    novelty_score: float
+    virality_score: float
+    historical_significance: float
+    crowding_signal: str
+    freshness_status: str
+    stale: bool
+    confidence: float
+    tags: list[str]
+    theme_family: str
+    style_group: str
+    retrieved_at: str
 
 
 class ProxySnapshot(TypedDict, total=False):
@@ -49,6 +77,13 @@ class ProxySnapshot(TypedDict, total=False):
     freshness_status: str
     freshness_label: str
     freshness_business_day_gap: int | None
+    source_url: str
+    source_title: str
+    entity_id: str
+    entity_type: str
+    provider: str
+    confidence: float
+    retrieved_at: str
 
 
 class EstimateSnapshot(TypedDict, total=False):
@@ -70,6 +105,83 @@ class EstimateSnapshot(TypedDict, total=False):
     stale: bool
     confidence: float
     status: str
+    source_url: str
+    source_title: str
+    entity_id: str
+    entity_type: str
+    provider: str
+    retrieved_at: str
+
+
+class EvidenceItem(TypedDict, total=False):
+    evidence_id: str
+    entity_id: str
+    entity_type: str
+    evidence_type: str
+    source_role: str
+    source_tier: str
+    mapping_mode: str
+    provider: str
+    source_url: str
+    source_title: str
+    as_of: str
+    published_at: str
+    retrieved_at: str
+    freshness_status: str
+    stale: bool
+    summary: str
+    confidence: float
+    sentiment_score: float
+    novelty_score: float
+    virality_score: float
+    historical_significance: float
+    crowding_signal: str
+    tags: list[str]
+    numeric_payload: dict[str, Any]
+    raw_payload: dict[str, Any]
+
+
+class EvidenceRef(TypedDict, total=False):
+    evidence_id: str
+    fund_code: str
+    role: str
+    relevance_score: float
+    mapping_mode: str
+    source_tier: str
+    evidence_type: str
+
+
+class SourceHealthItem(TypedDict, total=False):
+    source_key: str
+    source_role: str
+    provider: str
+    configured: bool
+    status: str
+    item_count: int
+    stale_count: int
+    error_count: int
+    warning_count: int
+    latest_as_of: str
+    latest_retrieved_at: str
+    notes: list[str]
+
+
+class MemoryRecord(TypedDict, total=False):
+    memory_id: str
+    memory_type: str
+    scope: str
+    entity_keys: list[str]
+    text: str
+    provenance: dict[str, Any]
+    base_date: str
+    expires_on: str
+    promotion_level: str
+    approved_by: str
+    confidence: float
+    status: str
+    applies_to: str
+    reason: str
+    source: str
 
 
 class PortfolioFund(TypedDict, total=False):
@@ -128,6 +240,11 @@ class FundProfile(TypedDict, total=False):
     slow_factor_summary: list[str]
     profile_source: str
     status: str
+    source_url: str
+    source_title: str
+    provider: str
+    as_of: str
+    retrieved_at: str
 
 
 class PortfolioState(TypedDict, total=False):
@@ -157,7 +274,9 @@ class FundContextItem(TypedDict, total=False):
     quote: QuoteSnapshot
     intraday_proxy: ProxySnapshot
     estimated_nav: EstimateSnapshot
+    fund_profile: FundProfile
     recent_news: list[NewsItem]
+    evidence_refs: list[EvidenceRef]
 
 
 class PortfolioContextSummary(TypedDict, total=False):
@@ -182,7 +301,69 @@ class LlmContext(TypedDict, total=False):
     constraints: dict[str, Any]
     external_reference: dict[str, Any]
     memory_digest: dict[str, Any]
+    evidence_items: list[EvidenceItem]
+    fund_evidence_map: dict[str, list[EvidenceRef]]
+    source_health_summary: list[SourceHealthItem]
     funds: list[FundContextItem]
+
+
+class OptimizationSummary(TypedDict, total=False):
+    mode: str
+    candidate_count: int
+    selected_candidate_count: int
+    search_space: int
+    feasible_combination_count: int
+    best_objective_score: float
+    selected_fund_codes: list[str]
+    selected_actions: list[dict[str, Any]]
+    bucket_pct_before: dict[str, float]
+    bucket_pct_after: dict[str, float]
+    selected_gross_trade: float
+    selected_net_buy: float
+    selected_sell_proceeds: float
+    rejection_reason_counts: dict[str, int]
+    candidate_diagnostics_count: int
+    notes: list[str]
+
+
+class SignalCard(TypedDict, total=False):
+    signal_id: str
+    agent_name: str
+    signal_type: str
+    fund_code: str
+    direction: str
+    horizon: str
+    thesis: str
+    catalysts: list[str]
+    risks: list[str]
+    invalidation: str
+    portfolio_impact: str
+    action_bias: str
+    supporting_evidence_ids: list[str]
+    opposing_evidence_ids: list[str]
+    sentiment_relevance: float
+    novelty_relevance: float
+    crowding_signal: str
+    confidence: float
+    comment: str
+    abstain_reason: str
+
+
+class DecisionCard(TypedDict, total=False):
+    decision_id: str
+    agent_name: str
+    fund_code: str
+    proposed_action: str
+    size_bucket: str
+    supporting_signal_ids: list[str]
+    opposing_signal_ids: list[str]
+    why_now: str
+    why_not_more: str
+    invalidate_when: str
+    risk_decision: str
+    manager_notes: str
+    confidence: float
+    priority: int
 
 
 class AgentFundView(TypedDict, total=False):
@@ -196,6 +377,10 @@ class AgentFundView(TypedDict, total=False):
     portfolio_impact: str
     action_bias: str
     comment: str
+    supporting_evidence_ids: list[str]
+    opposing_evidence_ids: list[str]
+    sentiment_relevance: float
+    novelty_relevance: float
 
 
 class AgentOutput(TypedDict, total=False):
@@ -210,6 +395,9 @@ class AgentOutput(TypedDict, total=False):
     key_points: list[str]
     portfolio_view: dict[str, Any]
     fund_views: list[AgentFundView]
+    signal_cards: list[SignalCard]
+    decision_cards: list[DecisionCard]
+    no_trade_list: list[dict[str, Any]]
     watchouts: list[str]
 
 
@@ -217,6 +405,24 @@ class AgentRecord(TypedDict, total=False):
     status: str
     error: str
     output: AgentOutput
+
+
+class DecisionTrace(TypedDict, total=False):
+    fund_code: str
+    supporting_signal_ids: list[str]
+    opposing_signal_ids: list[str]
+    decision_card_ids: list[str]
+    constraint_hits: list[str]
+
+
+class ConstraintImpact(TypedDict, total=False):
+    rule_name: str
+    impact_type: str
+    before_action: str
+    after_action: str
+    before_amount: float
+    after_amount: float
+    reason: str
 
 
 class FinalFundDecision(TypedDict, total=False):
@@ -229,12 +435,30 @@ class FinalFundDecision(TypedDict, total=False):
     evidence: list[str]
     risks: list[str]
     agent_support: list[str]
+    source_signal_ids: list[str]
+    opposing_signal_ids: list[str]
+    decision_trace: DecisionTrace
 
 
 class FinalAdvice(TypedDict, total=False):
     market_view: dict[str, Any]
     fund_decisions: list[FinalFundDecision]
     cross_fund_observations: list[str]
+
+
+class RecommendationDelta(TypedDict, total=False):
+    fund_code: str
+    fund_name: str
+    prev_action: str
+    prev_amount: float
+    new_action: str
+    new_amount: float
+    delta_reason: str
+    reason_category: str
+    new_evidence_ids: list[str]
+    removed_evidence_ids: list[str]
+    memory_ids: list[str]
+    constraint_hits: list[str]
 
 
 class ValidatedAction(TypedDict, total=False):
@@ -251,6 +475,14 @@ class ValidatedAction(TypedDict, total=False):
     evidence: list[str]
     risks: list[str]
     agent_support: list[str]
+    source_signal_ids: list[str]
+    opposing_signal_ids: list[str]
+    policy_rule_hits: list[str]
+    constraint_hits: list[str]
+    allocation_impact: str
+    cash_impact: str
+    change_vs_prev_day: dict[str, Any]
+    execution_friction: list[str]
     validation_notes: list[str]
     execution_status: str
     executed_amount: float
@@ -278,8 +510,14 @@ class ValidatedAdvice(TypedDict, total=False):
     advice_mode: str
     advice_is_fallback: bool
     advice_is_mock: bool
+    decision_source: str
+    narrative_mode: str
     transport_name: str
     failed_agents: list[dict[str, Any]]
+    optimization_summary: OptimizationSummary
+    optimizer_candidates: list[dict[str, Any]]
+    optimizer_best_combo_metrics: dict[str, Any]
+    recommendation_deltas: list[RecommendationDelta]
     dca_actions: list[ValidatedAction]
     tactical_actions: list[ValidatedAction]
     hold_actions: list[ValidatedAction]
@@ -346,3 +584,7 @@ class ReviewMemory(TypedDict, total=False):
     review_history: list[dict[str, Any]]
     bias_adjustments: list[dict[str, Any]]
     agent_feedback: list[dict[str, Any]]
+    records: list[MemoryRecord]
+    strategic_memory: list[MemoryRecord]
+    permanent_memory: list[MemoryRecord]
+    user_confirmed_memory: list[MemoryRecord]

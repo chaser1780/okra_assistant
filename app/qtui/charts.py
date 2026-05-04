@@ -13,9 +13,10 @@ from .theme import QT
 
 SERIES_COLORS = [
     QT["accent"],
-    QT["success"],
+    QT["purple"],
     QT["warning"],
-    QT["danger"],
+    QT["fall"],
+    QT["magenta"],
     QT["info"],
 ]
 
@@ -70,16 +71,17 @@ class TimeSeriesChart(QWidget):
         self.chart.setTitle(title)
         self.chart.setBackgroundVisible(False)
         self.chart.setPlotAreaBackgroundVisible(False)
-        self.chart.setMargins(QMargins(8, 8, 8, 8))
+        self.chart.setMargins(QMargins(12, 10, 12, 10))
         self.chart.legend().setVisible(True)
         self.chart.legend().setAlignment(Qt.AlignBottom)
         self.chart.legend().setLabelColor(QColor(QT["text_soft"]))
         self.chart.setTitleBrush(QColor(QT["text"]))
+        self.chart.setAnimationOptions(QChart.SeriesAnimations)
         self.chart_view = QChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.Antialiasing)
         self.chart_view.setMouseTracking(True)
         self.chart_view.setStyleSheet(
-            f"QChartView {{ background:{QT['surface']}; border:1px solid {QT['line']}; border-radius:12px; }}"
+            f"QChartView {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {QT['surface']}, stop:1 #0B1220); border:1px solid {QT['line_soft']}; border-radius:10px; }}"
         )
         self.meta_label = QLabel("")
         self.meta_label.setWordWrap(True)
@@ -133,12 +135,12 @@ class TimeSeriesChart(QWidget):
         x_axis = QDateTimeAxis()
         x_axis.setFormat("MM-dd")
         x_axis.setLabelsColor(QColor(QT["text_soft"]))
-        x_axis.setGridLineColor(QColor(QT["line"]))
+        x_axis.setGridLineColor(QColor(QT["line_soft"]))
         self.chart.addAxis(x_axis, Qt.AlignBottom)
 
         y_axis = QValueAxis()
         y_axis.setLabelsColor(QColor(QT["text_soft"]))
-        y_axis.setGridLineColor(QColor(QT["line"]))
+        y_axis.setGridLineColor(QColor(QT["line_soft"]))
         y_axis.setLabelFormat("%.2f%%" if percent else "%.2f")
         self.chart.addAxis(y_axis, Qt.AlignLeft)
 

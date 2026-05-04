@@ -7,12 +7,14 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from run_daily_pipeline import add_business_days, due_review_jobs
 from run_realtime_monitor import should_sync_units
 from run_report_window import intraday_report_target
 from helpers import TempAgentHome
+from ui_support import latest_nightly_target_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
 
 
 class PipelineLogicTests(unittest.TestCase):
@@ -80,6 +82,36 @@ class PipelineLogicTests(unittest.TestCase):
 
             agent.write_json("db/estimated_nav/2026-03-11.json", {"items": [{"fund_code": "EQ1", "official_nav": 2.1, "official_nav_date": "2026-03-11"}]})
             self.assertTrue(should_sync_units(agent.root, "2026-03-11"))
+        finally:
+            agent.cleanup()
+
+    def test_pending_nightly_catchup_dates_respects_schedule_and_business_days(self):
+        agent = TempAgentHome()
+        try:
+            now = __import__("datetime").datetime(2026, 4, 21, 10, 0, 0)
+            target = latest_nightly_target_date(agent.root, now=now)
+            self.assertEqual(target, "2026-04-20")
+            dates = pending_nightly_catchup_dates(agent.root, "2026-04-16", now=now)
+            self.assertEqual(dates, ["2026-04-17", "2026-04-20"])
+        finally:
+            agent.cleanup()
+
+    def test_startup_autorun_intraday_and_realtime_decisions(self):
+        agent = TempAgentHome()
+        try:
+            now = __import__("datetime").datetime(2026, 4, 21, 15, 0, 0)
+            self.assertTrue(should_autorun_intraday_on_boot(agent.root, "2026-04-21", now=now))
+            self.assertTrue(should_refresh_realtime_on_boot(agent.root, "2026-04-21", now=now))
+
+            agent.write_json("db/validated_advice/2026-04-21.json", {"report_date": "2026-04-21"})
+            self.assertFalse(should_autorun_intraday_on_boot(agent.root, "2026-04-21", now=now))
+
+            agent.write_json("db/realtime_monitor/2026-04-21.json", {"report_date": "2026-04-21"})
+            snapshot = agent.root / "db" / "realtime_monitor" / "2026-04-21.json"
+            import os, time
+            fresh_ts = now.timestamp()
+            os.utime(snapshot, (fresh_ts, fresh_ts))
+            self.assertFalse(should_refresh_realtime_on_boot(agent.root, "2026-04-21", now=now))
         finally:
             agent.cleanup()
 

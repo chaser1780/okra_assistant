@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -20,7 +21,26 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
-from .theme import QT
+from .theme import QT, TONE
+
+
+def tone_tokens(tone: str) -> dict:
+    return TONE.get(tone, {"fg": QT["text_soft"], "bg": QT["surface_alt"], "border": QT["line"]})
+
+
+def apply_shadow(widget: QWidget, blur: int = 22, alpha: int = 90, y_offset: int = 8) -> None:
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, y_offset)
+    effect.setColor(QColor(0, 0, 0, alpha))
+    widget.setGraphicsEffect(effect)
+
+
+def style_button(button: QPushButton, variant: str = "secondary") -> QPushButton:
+    button.setProperty("variant", variant)
+    button.style().unpolish(button)
+    button.style().polish(button)
+    return button
 
 
 def set_browser_text(target: QTextBrowser, text: str, *, markdown: bool = False) -> None:
@@ -48,40 +68,90 @@ class SectionBox(QGroupBox):
     def __init__(self, title: str, parent=None):
         super().__init__(title, parent)
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(12, 18, 12, 12)
+        self.body.setContentsMargins(13, 18, 13, 13)
         self.body.setSpacing(10)
+
+
+class StatusPill(QLabel):
+    def __init__(self, text: str = "", tone: str = "neutral", parent=None):
+        super().__init__(text, parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(22)
+        self.set_tone(text, tone)
+
+    def set_tone(self, text: str, tone: str = "neutral") -> None:
+        token = tone_tokens(tone)
+        self.setText(text)
+        self.setStyleSheet(
+            f"background:{token['bg']}; color:{token['fg']}; border:1px solid {token['border']}; "
+            "border-radius:8px; padding:2px 9px; font-size:8.2pt; font-weight:800;"
+        )
+
+
+class HeroCard(QFrame):
+    def __init__(self, title: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("HeroCard")
+        apply_shadow(self, blur=30, alpha=78, y_offset=9)
+        layout = QVBoxLayout(self)
+        self.setMinimumHeight(132)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        self.title = QLabel(title)
+        self.title.setStyleSheet(f"color:{QT['text_soft']}; font-family:'Microsoft YaHei UI', 'Segoe UI'; font-size:8.5pt; font-weight:800;")
+        self.pill = StatusPill("READY", "accent")
+        header.addWidget(self.title)
+        header.addStretch(1)
+        header.addWidget(self.pill)
+        self.value = QLabel("")
+        self.value.setStyleSheet(f"color:{QT['text']}; font-family:'Microsoft YaHei UI', 'Segoe UI'; font-size:18pt; font-weight:850;")
+        self.body = QLabel("")
+        self.body.setWordWrap(True)
+        self.body.setStyleSheet(f"color:{QT['text_soft']}; font-family:'Microsoft YaHei UI', 'Segoe UI'; font-size:8.7pt; line-height:130%;")
+        layout.addLayout(header)
+        layout.addWidget(self.value)
+        layout.addWidget(self.body)
+
+    def set_content(self, title: str, value: str, body: str, tone: str = "accent", pill: str | None = None) -> None:
+        token = tone_tokens(tone)
+        self.setStyleSheet(
+            f"QFrame#HeroCard {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {QT['surface_alt']}, stop:0.58 {QT['surface']}, stop:1 {token['bg']}); "
+            f"border:1px solid {token['border']}; border-radius:10px; }}"
+        )
+        self.title.setText(title)
+        self.value.setText(value)
+        self.body.setText(body)
+        self.pill.set_tone(pill or tone.upper(), tone)
 
 
 class MetricCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"background:{QT['surface']}; border:1px solid {QT['line']}; border-radius:12px;")
+        self.setObjectName("MetricCard")
+        apply_shadow(self, blur=20, alpha=58, y_offset=6)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        self.setMinimumHeight(108)
+        layout.setContentsMargins(14, 13, 14, 13)
         layout.setSpacing(6)
         self.title = QLabel("")
-        self.title.setStyleSheet(f"color:{QT['text_soft']}; font-size:9pt; font-weight:600;")
+        self.title.setStyleSheet(f"color:{QT['text_soft']}; font-size:8.5pt; font-weight:700;")
         self.value = QLabel("")
-        self.value.setStyleSheet(f"color:{QT['text']}; font-family:Bahnschrift; font-size:18pt; font-weight:700;")
+        self.value.setStyleSheet(f"color:{QT['text']}; font-family:'Microsoft YaHei UI', Bahnschrift; font-size:16pt; font-weight:850;")
         self.body = QLabel("")
         self.body.setWordWrap(True)
-        self.body.setStyleSheet(f"color:{QT['muted']}; font-size:9pt;")
+        self.body.setStyleSheet(f"color:{QT['muted']}; font-size:8.5pt; line-height:128%;")
         layout.addWidget(self.title)
         layout.addWidget(self.value)
         layout.addWidget(self.body)
 
     def set_content(self, title: str, value: str, body: str, tone: str = "neutral") -> None:
-        tone_map = {
-            "neutral": (QT["line"], QT["text_soft"]),
-            "accent": (QT["accent"], QT["info"]),
-            "success": ("#1D4C3A", QT["success"]),
-            "warning": ("#5C4020", QT["warning"]),
-            "danger": ("#5C2630", QT["danger"]),
-            "info": ("#23405F", QT["info"]),
-        }
-        border, title_color = tone_map.get(tone, tone_map["neutral"])
-        self.setStyleSheet(f"background:{QT['surface']}; border:1px solid {border}; border-radius:12px;")
-        self.title.setStyleSheet(f"color:{title_color}; font-size:9pt; font-weight:600;")
+        token = tone_tokens(tone)
+        self.setStyleSheet(
+            f"QFrame#MetricCard {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {QT['surface']}, stop:0.72 #111827, stop:1 {token['bg']}); "
+            f"border:1px solid {token['border']}; border-radius:10px; }}"
+        )
+        self.title.setStyleSheet(f"color:{token['fg']}; font-size:8.5pt; font-weight:800;")
         self.title.setText(title)
         self.value.setText(value)
         self.body.setText(body)
@@ -142,6 +212,15 @@ class FilterableTablePage(QWidget):
         self.meta = QLabel("")
         self.meta.setStyleSheet(f"color:{QT['text_soft']};")
         layout.addWidget(self.meta)
+
+        self.metrics_layout = QGridLayout()
+        self.metrics_layout.setHorizontalSpacing(10)
+        self.metrics_layout.setVerticalSpacing(10)
+        self.metric_cards = [MetricCard() for _ in range(4)]
+        for idx, card in enumerate(self.metric_cards):
+            self.metrics_layout.addWidget(card, 0, idx)
+            card.hide()
+        layout.addLayout(self.metrics_layout)
 
         self.toolbar = QHBoxLayout()
         self.toolbar.setSpacing(8)
@@ -209,7 +288,7 @@ class FilterableTablePage(QWidget):
 
     def enable_open(self, label: str, handler) -> QPushButton:
         self.open_handler = handler
-        button = QPushButton(label)
+        button = style_button(QPushButton(label), "secondary")
         self.toolbar.insertWidget(self.toolbar.count() - 1, button)
         button.clicked.connect(self.open_current)
         return button
@@ -228,6 +307,16 @@ class FilterableTablePage(QWidget):
             set_browser_text(self.summary, summary_text or "暂无摘要。")
         self._apply_filters()
 
+    def set_metrics(self, metrics: list[tuple[str, str, str, str]] | None = None) -> None:
+        values = metrics or []
+        for idx, card in enumerate(self.metric_cards):
+            if idx < len(values):
+                title, value, body, tone = values[idx]
+                card.set_content(title, value, body, tone=tone)
+                card.show()
+            else:
+                card.hide()
+
     def _matches_search(self, row: dict) -> bool:
         query = self.search.text().strip().lower()
         if not query:
@@ -236,9 +325,9 @@ class FilterableTablePage(QWidget):
 
     def _apply_filters(self) -> None:
         selected_key = ""
-        current_index = self.table.currentIndex()
-        if current_index.isValid() and current_index.row() < len(self.filtered_rows):
-            selected_key = self.row_key_builder(self.filtered_rows[current_index.row()])
+        current_row = self.current_row()
+        if current_row is not None:
+            selected_key = self.row_key_builder(current_row)
         self.filtered_rows = []
         for row in self.raw_rows:
             if not self._matches_search(row):
@@ -252,10 +341,12 @@ class FilterableTablePage(QWidget):
         self.table.setSortingEnabled(False)
         self.model.removeRows(0, self.model.rowCount())
         for row in self.filtered_rows:
+            row_key = self.row_key_builder(row)
             items: list[QStandardItem] = []
             for col_index, value in enumerate(self.cells_builder(row)):
                 item = QStandardItem(str(value))
                 item.setEditable(False)
+                item.setData(row_key, Qt.UserRole)
                 if self._is_numeric_like(str(value)):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if self.item_styler:
@@ -275,17 +366,28 @@ class FilterableTablePage(QWidget):
         elif self.detail is not None:
             set_browser_text(self.detail, "暂无内容。")
 
+    def _row_for_index(self, index) -> dict | None:
+        if not index.isValid():
+            return None
+        key_index = index.siblingAtColumn(0)
+        row_key = key_index.data(Qt.UserRole)
+        if row_key is None:
+            return None
+        return next((row for row in self.filtered_rows if self.row_key_builder(row) == row_key), None)
+
     def _update_detail(self) -> None:
         index = self.table.currentIndex()
-        if self.detail is None or not index.isValid() or index.row() >= len(self.filtered_rows) or not self.detail_builder:
+        if self.detail is None or not self.detail_builder:
             return
-        set_browser_text(self.detail, self.detail_builder(self.filtered_rows[index.row()]))
+        row = self._row_for_index(index)
+        if row is None:
+            set_browser_text(self.detail, "暂无内容。")
+            return
+        set_browser_text(self.detail, self.detail_builder(row))
 
     def current_row(self) -> dict | None:
         index = self.table.currentIndex()
-        if not index.isValid() or index.row() >= len(self.filtered_rows):
-            return None
-        return self.filtered_rows[index.row()]
+        return self._row_for_index(index)
 
     def open_current(self) -> None:
         if self.open_handler:
@@ -303,7 +405,6 @@ class FilterableTablePage(QWidget):
             return True
         except ValueError:
             return False
-
 
 def set_item_color(item: QStandardItem, color: str) -> None:
     item.setForeground(QColor(color))

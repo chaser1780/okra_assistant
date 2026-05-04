@@ -10,7 +10,14 @@ from typing import Any
 import requests
 
 from common import classify_official_nav_freshness, dump_json, ensure_layout, load_settings, load_watchlist, quote_path, resolve_agent_home, resolve_date, timestamp_now
-from provider_adapters import build_provider_payload, resolve_provider_config
+from provider_adapters import (
+    attach_provider_metadata,
+    build_provider_attempt,
+    build_provider_payload,
+    resolve_provider_chain,
+    resolve_provider_config,
+    stale_fallback_from_recent_snapshot,
+)
 
 EASTMONEY_NAV_API = "https://api.fund.eastmoney.com/f10/lsjz"
 DEFAULT_HEADERS = {
@@ -82,8 +89,14 @@ def build_demo_quotes(watchlist: dict, report_date: str) -> list[dict]:
             "week_change_pct": round(day_change_pct * 2.1, 2),
             "month_change_pct": round(day_change_pct * 4.3, 2),
             "as_of_date": report_date,
+            "freshness_status": "fresh",
+            "source_url": f"https://fundf10.eastmoney.com/jjjz_{fund['code']}.html",
+            "source_title": fund["name"],
+            "entity_id": fund["code"],
+            "entity_type": "fund",
             "provider": "demo",
             "retrieved_at": timestamp_now(),
+            "confidence": 0.98,
         })
     return quotes
 
@@ -157,8 +170,14 @@ def build_real_quote(session: requests.Session, fund: dict, settings: dict, repo
         "freshness_business_day_gap": freshness["business_day_gap"],
         "freshness_is_acceptable": freshness["is_acceptable"],
         "freshness_is_delayed": freshness["is_delayed"],
+        "freshness_status": freshness["status"],
+        "source_url": f"https://fundf10.eastmoney.com/jjjz_{fund['code']}.html",
+        "source_title": fund["name"],
+        "entity_id": fund["code"],
+        "entity_type": "fund",
         "provider": "eastmoney_nav_api",
         "retrieved_at": timestamp_now(),
+        "confidence": 0.98 if freshness["is_acceptable"] else 0.85,
         "trade_status_purchase": latest.get("SGZT", ""),
         "trade_status_redeem": latest.get("SHZT", ""),
     }
@@ -183,6 +202,20 @@ def fetch_one_quote(fund: dict, settings: dict, report_date: str) -> dict:
     return build_real_quote(get_thread_session(), fund, settings, report_date)
 
 
+def build_realtime_payload(watchlist: dict, settings: dict, report_date: str, provider_name: str) -> dict:
+    workers = min(6, max(1, len(watchlist["funds"])))
+    items_by_index: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(fetch_one_quote, fund, settings, report_date): index
+            for index, fund in enumerate(watchlist["funds"])
+        }
+        for future in as_completed(futures):
+            items_by_index[futures[future]] = future.result()
+    funds = [items_by_index[index] for index in sorted(items_by_index)]
+    return build_provider_payload(report_date, provider_name, "funds", funds)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch daily fund quotes from Eastmoney or emit a demo payload.")
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
@@ -197,26 +230,87 @@ def main() -> None:
     watchlist = load_watchlist(agent_home)
     report_date = resolve_date(args.date)
     provider_config = resolve_provider_config(settings, "quotes", args.provider)
-    provider = provider_config.name
+    provider_chain = resolve_provider_chain(settings, "quotes", args.provider)
+    target_path = quote_path(agent_home, report_date)
 
-    if args.demo or provider.startswith("demo"):
-        payload = build_provider_payload(report_date, provider, "funds", build_demo_quotes(watchlist, report_date))
-    else:
-        if provider not in {"eastmoney_nav_api", "eastmoney"}:
-            raise SystemExit(f"Unsupported quotes provider: {provider}")
-        workers = min(6, max(1, len(watchlist["funds"])))
-        items_by_index: dict[int, dict] = {}
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(fetch_one_quote, fund, settings, report_date): index
-                for index, fund in enumerate(watchlist["funds"])
-            }
-            for future in as_completed(futures):
-                items_by_index[futures[future]] = future.result()
-        funds = [items_by_index[index] for index in sorted(items_by_index)]
-        payload = build_provider_payload(report_date, provider, "funds", funds)
+    payload: dict | None = None
+    provider_attempts: list[dict] = []
+    last_error = ""
 
-    print(dump_json(quote_path(agent_home, report_date), payload))
+    for provider in provider_chain:
+        if args.demo or provider.startswith("demo"):
+            payload = build_provider_payload(report_date, provider, "funds", build_demo_quotes(watchlist, report_date))
+            provider_attempts.append(
+                build_provider_attempt(provider, "ok", item_count=len(payload.get("funds", [])), ok_count=len(payload.get("funds", [])), selected=True)
+            )
+            break
+
+        if provider in {"eastmoney_nav_api", "eastmoney"}:
+            try:
+                payload = build_realtime_payload(watchlist, settings, report_date, provider)
+                item_count = len(payload.get("funds", []))
+                provider_attempts.append(build_provider_attempt(provider, "ok", item_count=item_count, ok_count=item_count, selected=True))
+                break
+            except Exception as exc:
+                last_error = str(exc)
+                provider_attempts.append(build_provider_attempt(provider, "error", detail=last_error))
+                continue
+
+        if provider == "stale_snapshot":
+            payload = stale_fallback_from_recent_snapshot(target_path, report_date, provider, "funds", last_error or "fallback_requested")
+            if payload is not None:
+                item_count = len(payload.get("funds", []))
+                provider_attempts.append(
+                    build_provider_attempt(
+                        provider,
+                        "ok",
+                        detail=payload.get("fallback_source_date", ""),
+                        item_count=item_count,
+                        ok_count=item_count,
+                        selected=True,
+                        fallback_kind="stale_snapshot",
+                    )
+                )
+                break
+            provider_attempts.append(build_provider_attempt(provider, "miss", detail="no_snapshot_available"))
+            continue
+
+        provider_attempts.append(build_provider_attempt(provider, "unsupported", detail=f"Unsupported quotes provider: {provider}"))
+
+    if payload is None and provider_config.allow_stale_fallback:
+        payload = stale_fallback_from_recent_snapshot(target_path, report_date, "stale_snapshot_auto", "funds", last_error or "all_providers_failed")
+        if payload is not None:
+            item_count = len(payload.get("funds", []))
+            provider_attempts.append(
+                build_provider_attempt(
+                    "stale_snapshot_auto",
+                    "ok",
+                    detail=payload.get("fallback_source_date", ""),
+                    item_count=item_count,
+                    ok_count=item_count,
+                    selected=True,
+                    fallback_kind="stale_snapshot",
+                )
+            )
+
+    if payload is None:
+        payload = build_provider_payload(
+            report_date,
+            f"{provider_config.name}_unavailable",
+            "funds",
+            [],
+            error=last_error or "all configured quote providers failed",
+        )
+
+    payload = attach_provider_metadata(
+        payload,
+        selected_provider=str(payload.get("provider", provider_config.name) or provider_config.name),
+        provider_chain=provider_chain,
+        provider_attempts=provider_attempts,
+        fallback_kind=str(payload.get("fallback_kind", "") or ""),
+    )
+
+    print(dump_json(target_path, payload))
 
 
 if __name__ == "__main__":

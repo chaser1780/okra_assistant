@@ -36,12 +36,19 @@ F:\okra_assistant
 
 ## 关键入口
 
-- 桌面壳：`F:\okra_assistant\app\desktop_shell.py`
+- 桌面壳入口：`F:\okra_assistant\app\desktop_app.py`
+- Qt 桌面主壳：`F:\okra_assistant\app\desktop_shell_qt.py`
 - 日内全链路：`F:\okra_assistant\scripts\run_daily_pipeline.py --mode intraday`
 - 夜间复盘：`F:\okra_assistant\scripts\run_daily_pipeline.py --mode nightly`
 - 交易录入：`F:\okra_assistant\scripts\record_trade.py`
 - 项目版本文件：`F:\okra_assistant\project.toml`
 - 备份脚本：`F:\okra_assistant\backup_okra_assistant.ps1`
+
+## 桌面架构
+
+- 当前桌面端已统一为 `PySide6 / Qt`
+- `Tk` 旧壳与其配套视图代码已从主代码路径移除
+- 启动脚本默认按 Qt 单栈启动
 
 ## 当前定位
 

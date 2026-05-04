@@ -45,6 +45,11 @@ def main() -> None:
     total_baseline_better = sum(item.get("no_trade_summary", {}).get("better_than_no_trade", 0) for item in advice_reviews)
     total_baseline_worse = sum(item.get("no_trade_summary", {}).get("worse_than_no_trade", 0) for item in advice_reviews)
     total_execution_reviews = sum(item.get("aggregate_metrics", {}).get("reviewed_item_count", 0) for item in execution_reviews)
+    diagnostic_counter: dict[str, int] = {}
+    for review in reviews:
+        for label, count in (review.get("diagnostic_summary", {}) or {}).items():
+            diagnostic_counter[label] = diagnostic_counter.get(label, 0) + int(count or 0)
+    top_diagnostics = sorted(diagnostic_counter.items(), key=lambda item: (-item[1], item[0]))[:5]
 
     lines = [
         f"# 夜间复盘报告 - {review_date}",
@@ -58,8 +63,19 @@ def main() -> None:
         f"- 劣于不操作次数：{total_baseline_worse}",
         f"- 执行复盘动作数：{total_execution_reviews}",
         "",
-        "## 本次复盘批次",
+        "## 高频诊断标签",
     ]
+    if top_diagnostics:
+        lines.extend([f"- {label}={count}" for label, count in top_diagnostics])
+    else:
+        lines.append("- 暂无")
+
+    lines.extend(
+        [
+            "",
+        "## 本次复盘批次",
+        ]
+    )
 
     if reviews:
         for review in reviews:
@@ -84,15 +100,20 @@ def main() -> None:
         for item in review.get("items", []):
             lines.append(
                 f"- {item['fund_name']}：动作 `{item.get('source_action', item.get('validated_action', 'hold'))}`，结果 `{item['outcome']}`，"
+                f"评估口径 {item.get('evaluation_basis', 'review_day_change')}，"
+                f"评估收益 {item.get('evaluation_return_pct')}%，"
+                f"诊断标签 {item.get('diagnostic_label', 'unknown')}，"
                 f"复盘日真实涨跌 {item.get('review_day_change_pct')}%，"
                 f"复盘周涨跌 {item.get('review_week_change_pct')}%，"
+                f"持有期收益 {item.get('review_period_return_pct')}%，"
                 f"参考估值信号 {item.get('signal_estimate_change_pct')}%，"
                 f"参考代理信号 {item.get('signal_proxy_change_pct')}%，"
                 f"相对参考基准 {item.get('excess_return_vs_benchmark_pct')}%，"
                 f"相对不操作：{item.get('no_trade_baseline')}，"
                 f"估算边际收益 {item.get('estimated_edge_vs_no_trade_amount')} 元，"
                 f"估算交易成本 {item.get('estimated_transaction_cost_amount')} 元，"
-                f"成本后边际收益 {item.get('net_edge_after_cost_amount')} 元。"
+                f"成本后边际收益 {item.get('net_edge_after_cost_amount')} 元，"
+                f"诊断原因：{item.get('diagnostic_reason', '暂无')}。"
             )
         if not review.get("items"):
             lines.append("- 本批次没有可复盘动作。")

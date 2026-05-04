@@ -10,9 +10,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
+from build_llm_context import build_memory_digest
+from generate_llm_advice import build_committee_advice_from_agents, merge_committee_narrative
+from portfolio_exposure import analyze_portfolio_exposure
 from run_multiagent_research import compact_agent_output, degradation_summary, sanitize_agent_output
 from decision_support import build_agent_stage_snapshot, summarize_fund_stage_signals
-from ui_support import build_auto_realtime_status_text, build_dashboard_text
+from ui_support import build_auto_realtime_status_text, build_dashboard_text, load_state
 
 
 class MultiagentAndReviewTests(unittest.TestCase):
@@ -93,6 +96,8 @@ class MultiagentAndReviewTests(unittest.TestCase):
         self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock")
         aggregate = json.loads((self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "aggregate.json").read_text(encoding="utf-8"))
         self.assertTrue(aggregate["all_agents_ok"])
+        self.assertEqual(aggregate["workflow_version"], "2026-04-19.workflow-v2")
+        self.assertTrue(aggregate["prompt_bundle_sha256"])
         self.assertIn("market_analyst", aggregate["ordered_agents"])
         self.assertIn("portfolio_trader", aggregate["agents"])
         self.assertEqual(aggregate["agents"]["portfolio_trader"]["status"], "ok")
@@ -100,6 +105,18 @@ class MultiagentAndReviewTests(unittest.TestCase):
         self.assertIn("portfolio_trader", aggregate["agent_dependencies"])
         self.assertIn("manager", aggregate["stage_status"])
         self.assertEqual(aggregate["agent_roles"]["research_manager"], "manager")
+        trace = aggregate["workflow_trace"]["market_analyst"]
+        self.assertEqual(trace["status"], "ok")
+        self.assertTrue(trace["agent_input_sha256"])
+        self.assertIn("portfolio_item_count", trace["retrieval_summary"])
+
+    def test_generate_llm_advice_mock_writes_committee_artifact(self):
+        self.build_context()
+        self.agent.run_script("generate_llm_advice.py", "--date", "2026-03-10", "--mock")
+        committee = json.loads((self.agent.root / "db" / "committee_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+        advice = json.loads((self.agent.root / "db" / "llm_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+        self.assertEqual(committee["fund_decisions"], advice["fund_decisions"])
+        self.assertEqual(committee["market_view"]["regime"], advice["market_view"]["regime"])
 
     def test_build_nightly_review_report_aggregates_multiple_horizons(self):
         self.agent.write_json(
@@ -354,6 +371,162 @@ class MultiagentAndReviewTests(unittest.TestCase):
         payload = json.loads((self.agent.root / "db" / "execution_reviews" / "2026-03-10_execution_T1.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["source"], "execution")
         self.assertEqual(payload["aggregate_metrics"]["reviewed_item_count"], 1)
+        self.assertTrue(payload["primary_diagnostic"])
+        self.assertTrue(payload["diagnostic_summary"])
+        self.assertTrue(payload["items"][0]["diagnostic_label"])
+
+    def test_load_state_prefers_selected_snapshot_and_selected_manifest(self):
+        self.agent.write_json(
+            "config/portfolio.json",
+            {"portfolio_name": "测试组合", "as_of_date": "2026-03-11", "total_value": 999.0, "funds": []},
+        )
+        self.agent.write_json(
+            "db/portfolio_state/current.json",
+            {"portfolio_name": "测试组合", "as_of_date": "2026-03-11", "total_value": 999.0, "funds": []},
+        )
+        self.agent.write_json(
+            "db/portfolio_state/snapshots/2026-03-09.json",
+            {"portfolio_name": "测试组合", "as_of_date": "2026-03-09", "total_value": 456.0, "funds": []},
+        )
+        self.agent.write_json(
+            "db/run_manifests/2026-03-09/daily_pipeline_test.json",
+            {"mode": "intraday", "status": "ok", "current_step": "validated"},
+        )
+        self.agent.write_json(
+            "db/realtime_monitor/2026-03-09.json",
+            {"report_date": "2026-03-09", "generated_at": "2026-03-09T14:00:00+08:00", "items": []},
+        )
+        self.agent.write_json(
+            "db/realtime_monitor/2026-03-11.json",
+            {"report_date": "2026-03-11", "generated_at": "2026-03-11T14:00:00+08:00", "items": []},
+        )
+        state = load_state(self.agent.root, "2026-03-09")
+        self.assertEqual(state["portfolio"]["total_value"], 456.0)
+        self.assertEqual(state["portfolio_date"], "2026-03-09")
+        self.assertEqual(state["intraday_manifest"]["status"], "ok")
+        self.assertEqual(state["realtime_date"], "2026-03-09")
+        self.assertEqual(state["live_realtime_date"], "2026-03-11")
+
+    def test_review_advice_uses_period_return_for_multi_day_horizon(self):
+        self.agent.write_json(
+            "config/portfolio.json",
+            {
+                "portfolio_name": "测试组合",
+                "as_of_date": "2026-03-10",
+                "total_value": 1000.0,
+                "holding_pnl": 0.0,
+                "funds": [
+                    {
+                        "fund_code": "F1",
+                        "fund_name": "基金一",
+                        "role": "tactical",
+                        "style_group": "growth",
+                        "current_value": 400.0,
+                        "holding_pnl": 0.0,
+                        "holding_return_pct": 0.0,
+                        "holding_units": 200.0,
+                        "cost_basis_value": 400.0,
+                        "last_valuation_nav": 2.0,
+                        "allow_trade": True,
+                    }
+                ],
+            },
+        )
+        self.agent.write_json(
+            "config/watchlist.json",
+            {"funds": [{"code": "F1", "name": "基金一", "category": "active_equity", "benchmark": "成长代理", "risk_level": "high"}]},
+        )
+        self.agent.write_json(
+            "db/trade_journal/2026-03-10.json",
+            {"trade_date": "2026-03-10", "items": [{"fund_code": "F1", "fund_name": "基金一", "action": "buy", "amount": 100.0, "note": "执行"}]},
+        )
+        self.agent.write_json(
+            "raw/quotes/2026-03-11.json",
+            {"funds": [{"code": "F1", "day_change_pct": 1.2, "week_change_pct": 2.5}]},
+        )
+        self.agent.write_json("db/estimated_nav/2026-03-10.json", {"items": [{"fund_code": "F1", "estimate_change_pct": 0.9}]})
+        self.agent.write_json("db/intraday_proxies/2026-03-10.json", {"proxies": [{"proxy_fund_code": "F1", "change_pct": 1.0}]})
+        self.agent.write_json(
+            "db/fund_nav_history/F1.json",
+            {
+                "fund_code": "F1",
+                "items": [
+                    {"date": "2026-03-10", "nav": 2.0},
+                    {"date": "2026-03-11", "nav": 1.6},
+                ],
+            },
+        )
+        self.agent.run_script("review_advice.py", "--base-date", "2026-03-10", "--review-date", "2026-03-11", "--source", "execution", "--horizon", "1")
+        payload = json.loads((self.agent.root / "db" / "execution_reviews" / "2026-03-10_execution_T1.json").read_text(encoding="utf-8"))
+        item = payload["items"][0]
+        self.assertEqual(item["evaluation_basis"], "period_return")
+        self.assertEqual(item["evaluation_return_pct"], -20.0)
+        self.assertEqual(item["outcome"], "adverse")
+
+    def test_build_memory_digest_prioritizes_relevant_items(self):
+        portfolio = {
+            "portfolio_name": "测试组合",
+            "funds": [
+                {"fund_code": "F1", "fund_name": "成长轮动", "role": "tactical", "style_group": "growth_rotation", "current_value": 300.0},
+                {"fund_code": "F2", "fund_name": "标普", "role": "core_dca", "style_group": "sp500_core", "current_value": 300.0},
+            ],
+        }
+        exposure = analyze_portfolio_exposure(portfolio, {})
+        digest = build_memory_digest(
+            {
+                "_analysis_date": "2026-03-20",
+                "updated_at": "2026-03-20T21:00:00+08:00",
+                "lessons": [
+                    {"base_date": "2026-03-19", "type": "signal", "text": "成长轮动方向要先看修复确认。", "applies_to": "growth_rotation"},
+                    {"base_date": "2025-12-01", "type": "signal", "text": "过旧且不相关。", "applies_to": "commodity_hedge"},
+                ],
+                "review_history": [{"base_date": "2026-03-19", "source": "advice", "memory_summary": "growth_rotation 近期更适合等待确认。"}],
+                "bias_adjustments": [
+                    {"base_date": "2026-03-18", "scope": "tomorrow_open", "target": "growth_rotation", "adjustment": "先等确认", "reason": "最近修复不稳", "expires_on": "2026-03-25"},
+                    {"base_date": "2026-03-18", "scope": "tomorrow_open", "target": "commodity_hedge", "adjustment": "忽略", "reason": "不相关", "expires_on": "2026-03-25"},
+                ],
+                "agent_feedback": [
+                    {"base_date": "2026-03-18", "agent_name": "risk_manager", "bias": "slightly_cautious", "reason": "growth_rotation 上更保守"},
+                ],
+            },
+            portfolio,
+            exposure,
+        )
+        lesson_texts = [item.get("text", "") for item in digest["recent_lessons"]]
+        self.assertIn("成长轮动方向要先看修复确认。", lesson_texts)
+        self.assertNotIn("过旧且不相关。", lesson_texts)
+        self.assertIn("growth_rotation", digest["retrieval_context_tags"])
+
+    def test_build_committee_advice_preserves_committee_priority(self):
+        context = {
+            "funds": [
+                {"fund_code": "F1", "role": "tactical", "current_value": 500.0, "cap_value": 1000.0, "quote": {"week_change_pct": -2.0}, "estimated_nav": {"estimate_change_pct": -1.0}},
+                {"fund_code": "F2", "role": "tactical", "current_value": 400.0, "cap_value": 1000.0, "quote": {"week_change_pct": 2.0}, "estimated_nav": {"estimate_change_pct": 1.0}},
+            ]
+        }
+        agent_bundle = {
+            "agents": {
+                "research_manager": {
+                    "status": "ok",
+                    "output": {"confidence": 0.72, "summary": "先减 F1", "key_points": ["先收敛"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "committee_preference": "reduce", "preferred_action": "reduce", "preferred_size_bucket": "200", "thesis": "F1 转弱"}]},
+                },
+                "risk_manager": {
+                    "status": "ok",
+                    "output": {"confidence": 0.7, "summary": "批准 F1", "key_points": ["控制风险"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "risk_decision": "approve", "action_bias": "reduce", "thesis": "F1 风险更高"}]},
+                },
+                "portfolio_trader": {
+                    "status": "ok",
+                    "output": {"confidence": 0.75, "summary": "执行 F1 reduce_200", "key_points": ["动作集中"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "preferred_action": "reduce", "preferred_size_bucket": "200", "action_bias": "reduce", "comment": "reduce_200", "thesis": "先处理 F1"}]},
+                },
+            }
+        }
+        advice = build_committee_advice_from_agents(context, agent_bundle)
+        self.assertEqual(advice["fund_decisions"][0]["fund_code"], "F1")
+        self.assertEqual(advice["fund_decisions"][0]["action"], "reduce")
+        self.assertEqual(advice["fund_decisions"][0]["priority"], 1)
+        merged = merge_committee_narrative(advice, {"market_summary": "先收敛。", "cross_fund_observations": ["动作应集中。"]})
+        self.assertEqual(merged["fund_decisions"], advice["fund_decisions"])
+        self.assertEqual(merged["market_view"]["summary"], "先收敛。")
 
 
 if __name__ == "__main__":

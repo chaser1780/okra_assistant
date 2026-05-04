@@ -83,6 +83,38 @@ def summarize_fund_stage_signals(aggregate: dict, fund_code: str) -> dict:
     }
     for agent_name, record in (aggregate.get("agents", {}) or {}).items():
         output = record.get("output", {}) or {}
+        signal_cards = output.get("signal_cards", []) or []
+        decision_cards = output.get("decision_cards", []) or []
+        for card in signal_cards:
+            if card.get("fund_code") != fund_code:
+                continue
+            stage = agent_stage(agent_name, aggregate)
+            stage_bucket = summary.setdefault(stage, {"support": [], "caution": [], "neutral": [], "highlights": [], "has_conflict": False})
+            bucket = signal_bucket(card.get("action_bias", ""))
+            detail = str(card.get("comment") or card.get("thesis") or "").strip()
+            if bucket == "support":
+                stage_bucket["support"].append(agent_name)
+            elif bucket == "caution":
+                stage_bucket["caution"].append(agent_name)
+            else:
+                stage_bucket["neutral"].append(agent_name)
+            if detail:
+                stage_bucket["highlights"].append(f"{agent_name}: {detail}")
+        for card in decision_cards:
+            if card.get("fund_code") != fund_code:
+                continue
+            stage = agent_stage(agent_name, aggregate)
+            stage_bucket = summary.setdefault(stage, {"support": [], "caution": [], "neutral": [], "highlights": [], "has_conflict": False})
+            bucket = signal_bucket(card.get("proposed_action", ""))
+            detail = str(card.get("why_now") or card.get("manager_notes") or "").strip()
+            if bucket == "support":
+                stage_bucket["support"].append(agent_name)
+            elif bucket == "caution":
+                stage_bucket["caution"].append(agent_name)
+            else:
+                stage_bucket["neutral"].append(agent_name)
+            if detail:
+                stage_bucket["highlights"].append(f"{agent_name}: {detail}")
         for view in output.get("fund_views", []) or []:
             if view.get("fund_code") != fund_code:
                 continue
@@ -123,6 +155,48 @@ def summarize_fund_agent_signals(aggregate: dict, fund_code: str) -> dict:
     committee_names = {"research_manager", "risk_manager", "portfolio_trader"}
     for agent_name, record in (aggregate.get("agents", {}) or {}).items():
         output = record.get("output", {}) or {}
+        for card in output.get("signal_cards", []) or []:
+            if card.get("fund_code") != fund_code:
+                continue
+            bucket = signal_bucket(card.get("action_bias", ""))
+            comment = str(card.get("comment") or card.get("thesis") or "").strip()
+            risks = [str(item).strip() for item in (card.get("risks") or []) if str(item).strip()]
+            if bucket == "support":
+                summary["supporting_agents"].append(agent_name)
+                if comment:
+                    summary["support_points"].append(f"{agent_name}: {comment}")
+            elif bucket == "caution":
+                summary["caution_agents"].append(agent_name)
+                if comment:
+                    summary["caution_points"].append(f"{agent_name}: {comment}")
+                elif risks:
+                    summary["caution_points"].append(f"{agent_name}: {risks[0]}")
+            else:
+                summary["neutral_agents"].append(agent_name)
+        for card in output.get("decision_cards", []) or []:
+            if card.get("fund_code") != fund_code:
+                continue
+            bucket = signal_bucket(card.get("proposed_action", ""))
+            comment = str(card.get("why_now") or card.get("manager_notes") or "").strip()
+            if bucket == "support":
+                summary["supporting_agents"].append(agent_name)
+                if comment:
+                    summary["support_points"].append(f"{agent_name}: {comment}")
+            elif bucket == "caution":
+                summary["caution_agents"].append(agent_name)
+                if comment:
+                    summary["caution_points"].append(f"{agent_name}: {comment}")
+            else:
+                summary["neutral_agents"].append(agent_name)
+            if agent_name in committee_names:
+                summary["committee_views"].append(
+                    {
+                        "agent_name": agent_name,
+                        "bucket": bucket,
+                        "action_bias": card.get("proposed_action", ""),
+                        "comment": comment,
+                    }
+                )
         for view in output.get("fund_views", []) or []:
             if view.get("fund_code") != fund_code:
                 continue

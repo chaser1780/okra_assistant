@@ -10,6 +10,92 @@ from requests.adapters import HTTPAdapter
 
 from common import dump_json, load_llm_config, timestamp_now
 
+SIGNAL_CARD_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "signal_id": {"type": "string"},
+        "agent_name": {"type": "string"},
+        "signal_type": {"type": "string"},
+        "fund_code": {"type": "string"},
+        "direction": {"type": "string"},
+        "horizon": {"type": "string"},
+        "thesis": {"type": "string"},
+        "catalysts": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "invalidation": {"type": "string"},
+        "portfolio_impact": {"type": "string"},
+        "action_bias": {"type": "string"},
+        "supporting_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "opposing_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "sentiment_relevance": {"type": "number"},
+        "novelty_relevance": {"type": "number"},
+        "crowding_signal": {"type": "string"},
+        "confidence": {"type": "number"},
+        "comment": {"type": "string"},
+        "abstain_reason": {"type": "string"},
+    },
+    "required": [
+        "signal_id",
+        "agent_name",
+        "signal_type",
+        "fund_code",
+        "direction",
+        "horizon",
+        "thesis",
+        "catalysts",
+        "risks",
+        "invalidation",
+        "portfolio_impact",
+        "action_bias",
+        "supporting_evidence_ids",
+        "opposing_evidence_ids",
+        "sentiment_relevance",
+        "novelty_relevance",
+        "crowding_signal",
+        "confidence",
+        "comment",
+        "abstain_reason",
+    ],
+}
+
+DECISION_CARD_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decision_id": {"type": "string"},
+        "agent_name": {"type": "string"},
+        "fund_code": {"type": "string"},
+        "proposed_action": {"type": "string"},
+        "size_bucket": {"type": "string"},
+        "supporting_signal_ids": {"type": "array", "items": {"type": "string"}},
+        "opposing_signal_ids": {"type": "array", "items": {"type": "string"}},
+        "why_now": {"type": "string"},
+        "why_not_more": {"type": "string"},
+        "invalidate_when": {"type": "string"},
+        "risk_decision": {"type": "string"},
+        "manager_notes": {"type": "string"},
+        "confidence": {"type": "number"},
+        "priority": {"type": "integer"},
+    },
+    "required": [
+        "decision_id",
+        "agent_name",
+        "fund_code",
+        "proposed_action",
+        "size_bucket",
+        "supporting_signal_ids",
+        "opposing_signal_ids",
+        "why_now",
+        "why_not_more",
+        "invalidate_when",
+        "risk_decision",
+        "manager_notes",
+        "confidence",
+        "priority",
+    ],
+}
+
 GENERIC_AGENT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -65,6 +151,8 @@ GENERIC_AGENT_SCHEMA = {
                 ],
             },
         },
+        "signal_cards": {"type": "array", "items": SIGNAL_CARD_SCHEMA},
+        "decision_cards": {"type": "array", "items": DECISION_CARD_SCHEMA},
         "watchouts": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
@@ -82,6 +170,10 @@ GENERIC_AGENT_SCHEMA = {
         "watchouts",
     ],
 }
+
+ANALYST_SIGNAL_SCHEMA = GENERIC_AGENT_SCHEMA
+RESEARCHER_DEBATE_SCHEMA = GENERIC_AGENT_SCHEMA
+MANAGER_DECISION_SCHEMA = GENERIC_AGENT_SCHEMA
 
 
 def resolve_api_key(config: dict) -> str:
@@ -240,6 +332,159 @@ def describe_api_failure(status_code: int, snippet: str, request_kind: str, tran
     return f"HTTP {status_code} from {request_kind} API ({transport_name}): {snippet}"
 
 
+def strip_json_fence(value: str) -> str:
+    cleaned = (value or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
+def parse_json_text(value: str):
+    cleaned = strip_json_fence(value)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start : end + 1])
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start : end + 1])
+        raise
+
+
+def _schema_default(schema: dict, path: tuple[str, ...] = ()):
+    explicit_defaults = {
+        ("evidence_strength",): "medium",
+        ("data_freshness",): "mixed",
+    }
+    if path in explicit_defaults:
+        return explicit_defaults[path]
+    if "enum" in schema:
+        return schema.get("enum", [""])[0]
+    schema_type = schema.get("type", "")
+    if schema_type == "string":
+        return ""
+    if schema_type == "number":
+        return 0.0
+    if schema_type == "integer":
+        return 0
+    if schema_type == "boolean":
+        return False
+    if schema_type == "array":
+        return []
+    if schema_type == "object":
+        result = {}
+        properties = schema.get("properties", {}) or {}
+        for key in schema.get("required", []) or []:
+            child = properties.get(key, {"type": "string"})
+            result[key] = _schema_default(child, path + (key,))
+        return result
+    return None
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "ok"}:
+        return True
+    if text in {"0", "false", "no", "n", ""}:
+        return False
+    return bool(value)
+
+
+def _coerce_float(value) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value or "").strip().replace("%", "")
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _normalize_enum(value, enum_values: list[str], path: tuple[str, ...]) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if not enum_values:
+        return text
+    for item in enum_values:
+        if lowered == str(item).lower():
+            return item
+    alias_map = {
+        ("evidence_strength",): {
+            "weak": "low",
+            "normal": "medium",
+            "moderate": "medium",
+            "strong": "high",
+        },
+        ("data_freshness",): {
+            "latest": "fresh",
+            "current": "fresh",
+            "ok": "fresh",
+            "partial": "mixed",
+            "degraded": "mixed",
+            "old": "stale",
+            "unknown": "stale",
+        },
+    }
+    mapped = alias_map.get(path, {}).get(lowered)
+    if mapped in enum_values:
+        return mapped
+    return _schema_default({"enum": enum_values}, path)
+
+
+def normalize_json_against_schema(value, schema: dict, *, defaults: dict | None = None, path: tuple[str, ...] = ()):
+    schema_type = schema.get("type", "")
+    if schema_type == "object":
+        source = value if isinstance(value, dict) else {}
+        result = {}
+        properties = schema.get("properties", {}) or {}
+        required = set(schema.get("required", []) or [])
+        for key, child_schema in properties.items():
+            child_path = path + (key,)
+            if key in source:
+                result[key] = normalize_json_against_schema(source[key], child_schema, path=child_path)
+            elif not path and defaults and key in defaults:
+                result[key] = normalize_json_against_schema(defaults[key], child_schema, path=child_path)
+            elif key in required:
+                result[key] = _schema_default(child_schema, child_path)
+        return result
+
+    if schema_type == "array":
+        item_schema = schema.get("items", {"type": "string"})
+        if isinstance(value, list):
+            items = value
+        elif value in (None, ""):
+            items = []
+        elif item_schema.get("type") == "string":
+            items = [value]
+        else:
+            items = []
+        return [normalize_json_against_schema(item, item_schema, path=path + ("*",)) for item in items]
+
+    if schema_type == "string":
+        if "enum" in schema:
+            return _normalize_enum(value, list(schema.get("enum", []) or []), path)
+        return str(value or "").strip()
+
+    if schema_type == "number":
+        return _coerce_float(value)
+
+    if schema_type == "integer":
+        return int(round(_coerce_float(value)))
+
+    if schema_type == "boolean":
+        return _coerce_bool(value)
+
+    return value
+
+
 def call_json_agent(
     agent_home,
     system_prompt: str,
@@ -251,10 +496,12 @@ def call_json_agent(
     text_verbosity: str | None = None,
     max_output_tokens: int | None = None,
     temperature: float | None = None,
+    fallback_defaults: dict | None = None,
 ) -> dict:
     config = load_llm_config(agent_home)
     provider = config["model_providers"][config["model_provider"]]
     api_key = resolve_api_key(config)
+    effective_schema = schema or GENERIC_AGENT_SCHEMA
     payload = {
         "model": config["model"],
         "stream": True,
@@ -264,17 +511,9 @@ def call_json_agent(
             {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
             {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
         ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "agent_output",
-                "schema": schema or GENERIC_AGENT_SCHEMA,
-                "strict": True,
-            }
-        },
+        "text": {},
     }
-    if text_verbosity:
-        payload["text"]["verbosity"] = text_verbosity
+    payload["text"]["verbosity"] = text_verbosity or "low"
     if max_output_tokens is not None:
         payload["max_output_tokens"] = max_output_tokens
     if temperature is not None:
@@ -338,14 +577,10 @@ def call_json_agent(
                         raise RuntimeError(f"Agent response failed before output text ({transport_name}): {failure_message}")
                     raise RuntimeError(f"Agent response did not contain output text ({transport_name}).")
                 try:
-                    parsed_json = json.loads(text)
+                    parsed_json = parse_json_text(text)
                 except json.JSONDecodeError:
-                    start = text.find("{")
-                    end = text.rfind("}")
-                    if start >= 0 and end > start:
-                        parsed_json = json.loads(text[start : end + 1])
-                    else:
-                        raise
+                    raise
+                normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                 if parsed.get("stream_error"):
                     write_agent_debug_log(
                         agent_home,
@@ -363,7 +598,7 @@ def call_json_agent(
                 return {
                     "request_payload": payload,
                     "response_text": text,
-                    "response_json": parsed_json,
+                    "response_json": normalized_json,
                     "events": events,
                     "transport_name": transport_name,
                 }
@@ -372,11 +607,12 @@ def call_json_agent(
                 joined = "".join(delta_parts).strip()
                 if joined:
                     try:
-                        parsed_json = json.loads(joined)
+                        parsed_json = parse_json_text(joined)
+                        normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                         return {
                             "request_payload": payload,
                             "response_text": joined,
-                            "response_json": parsed_json,
+                            "response_json": normalized_json,
                             "events": events,
                             "stream_incomplete": True,
                             "transport_name": transport_name,
@@ -386,7 +622,8 @@ def call_json_agent(
                         end = joined.rfind("}")
                         if start >= 0 and end > start:
                             try:
-                                parsed_json = json.loads(joined[start : end + 1])
+                                parsed_json = parse_json_text(joined[start : end + 1])
+                                normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                                 write_agent_debug_log(
                                     agent_home,
                                     f"{request_name}_{transport_name}_partial_recovered_attempt{attempt}",
@@ -402,7 +639,7 @@ def call_json_agent(
                                 return {
                                     "request_payload": payload,
                                     "response_text": joined,
-                                    "response_json": parsed_json,
+                                    "response_json": normalized_json,
                                     "events": events,
                                     "stream_incomplete": True,
                                     "transport_name": transport_name,

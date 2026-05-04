@@ -33,6 +33,8 @@ reports/daily/
 
 # Local secrets / machine state
 config/tabcode_api_key.txt
+config/openai_api_key.txt
+config/*cookie*.txt
 config/ui_state.json
 
 # Optional local overrides

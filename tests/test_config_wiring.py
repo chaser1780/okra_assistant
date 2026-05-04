@@ -57,7 +57,7 @@ class ConfigWiringTests(unittest.TestCase):
     def test_preflight_check_writes_result_without_network_probe(self):
         temp = TempAgentHome()
         try:
-            os.environ["TABCODE_API_KEY"] = "test-key"
+            os.environ["OPENAI_API_KEY"] = "test-key"
             result = perform_preflight(temp.root, "intraday", probe_llm=False)
             self.assertIn(result["status"], {"ok", "warning"})
             self.assertTrue((temp.root / "db" / "preflight" / "latest.json").exists())
@@ -65,7 +65,7 @@ class ConfigWiringTests(unittest.TestCase):
             self.assertIn("schedule:intraday", check_names)
             self.assertIn("llm:probe", check_names)
         finally:
-            os.environ.pop("TABCODE_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
             temp.cleanup()
 
 

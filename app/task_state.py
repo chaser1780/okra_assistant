@@ -3,21 +3,21 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from ui_support import file_mtime_text, latest_manifest, money, num, pct, read_json, today_str
+from ui_support import file_mtime_text, latest_manifest, money, read_json, today_str
 
 
 TASK_CARD_SPECS = {
     "intraday": {
         "title": "日内链路",
-        "purpose": "生成当日分析建议与调仓建议",
+        "purpose": "生成当日研究、委员会建议与调仓结果。",
     },
     "realtime": {
         "title": "实时刷新",
-        "purpose": "生成当日实时收益估算快照",
+        "purpose": "刷新实时收益快照与盘中估值状态。",
     },
     "nightly": {
-        "title": "夜间复盘",
-        "purpose": "收盘后复盘当日建议是否有效",
+        "title": "学习周期",
+        "purpose": "运行夜间复盘、长期记忆更新和学习报告生成。",
     },
 }
 
@@ -30,10 +30,10 @@ def current_task_result_info(home: Path, task_kind: str) -> dict:
         manifest = latest_manifest(home, "daily_pipeline", run_date, mode="intraday")
         return {
             "exists": path.exists(),
-            "result_date": payload.get("report_date", "—"),
+            "result_date": payload.get("report_date", "--"),
             "generated_at": payload.get("generated_at", file_mtime_text(path)),
-            "market_time": "—",
-            "extra": payload.get("market_view", {}).get("regime", "—"),
+            "market_time": "--",
+            "extra": payload.get("market_view", {}).get("regime", "--"),
             "extra_label": "市场状态",
             "manifest_status": manifest.get("status", ""),
             "manifest_current_step": manifest.get("current_step", ""),
@@ -45,42 +45,35 @@ def current_task_result_info(home: Path, task_kind: str) -> dict:
         manifest = latest_manifest(home, "realtime_monitor", run_date, mode="realtime")
         return {
             "exists": path.exists(),
-            "result_date": payload.get("report_date", "—"),
+            "result_date": payload.get("report_date", "--"),
             "generated_at": payload.get("generated_at", file_mtime_text(path)),
-            "market_time": payload.get("market_timestamp", "—"),
-            "extra": money(payload.get("totals", {}).get("estimated_intraday_pnl_amount", 0)) if path.exists() else "—",
+            "market_time": payload.get("market_timestamp", "--"),
+            "extra": money(payload.get("totals", {}).get("estimated_intraday_pnl_amount", 0)) if path.exists() else "--",
             "extra_label": "组合实时收益",
             "manifest_status": manifest.get("status", ""),
             "manifest_current_step": manifest.get("current_step", ""),
             "manifest_error": ((manifest.get("errors") or [{}])[-1].get("error", "")),
         }
-    path = home / "db" / "review_results" / f"{run_date}_T0.json"
-    report_path = home / "reports" / "daily" / f"{run_date}_review.md"
+
+    cycle_path = home / "db" / "review_memory" / "cycles" / f"{run_date}.json"
+    cycle = read_json(cycle_path, {})
+    report_path = home / "reports" / "daily" / f"{run_date}_learning.md"
     valuation_path = home / "db" / "portfolio_valuation" / f"{run_date}.json"
     valuation_payload = read_json(valuation_path, {})
     manifest = latest_manifest(home, "daily_pipeline", run_date, mode="nightly")
-    review_batches = []
-    review_dir = home / "db" / "review_results"
-    if review_dir.exists():
-        for review_path in sorted(review_dir.glob("*.json")):
-            payload = read_json(review_path, {})
-            if payload.get("review_date") == run_date:
-                review_batches.append(payload)
-    review_batches.sort(key=lambda item: (int(item.get("horizon", 0)), item.get("base_date", "")))
-    payload = read_json(path, {})
-    aggregated_supportive = sum(item.get("summary", {}).get("supportive", 0) for item in review_batches)
-    aggregated_adverse = sum(item.get("summary", {}).get("adverse", 0) for item in review_batches)
+    ledger = read_json(home / "db" / "review_memory" / "ledger.json", {"summary": {}})
     return {
-        "exists": bool(review_batches) or report_path.exists(),
-        "result_date": (review_batches[0].get("review_date") if review_batches else payload.get("review_date", run_date if report_path.exists() else "—")),
-        "generated_at": file_mtime_text(report_path if report_path.exists() else path),
-        "market_time": "—",
+        "exists": cycle_path.exists() or report_path.exists(),
+        "result_date": cycle.get("review_date", run_date if report_path.exists() else "--"),
+        "generated_at": cycle.get("generated_at", file_mtime_text(report_path if report_path.exists() else cycle_path)),
+        "market_time": "--",
         "extra": (
-            f"supportive={aggregated_supportive} / adverse={aggregated_adverse} / 批次={len(review_batches)}"
-            if review_batches
-            else ("已完成官方净值重估" if valuation_path.exists() else "—")
+            f"batches={cycle.get('batch_count', 0)} / strategic={ledger.get('summary', {}).get('strategic', 0)} / "
+            f"permanent={ledger.get('summary', {}).get('permanent', 0)} / core={ledger.get('summary', {}).get('core_permanent', 0)}"
+            if cycle
+            else ("已完成官方净值重估" if valuation_path.exists() else "--")
         ),
-        "extra_label": "复盘摘要",
+        "extra_label": "学习摘要",
         "valuation_exists": valuation_path.exists(),
         "valuation_generated_at": valuation_payload.get("generated_at", file_mtime_text(valuation_path)),
         "manifest_status": manifest.get("status", ""),
@@ -101,7 +94,7 @@ def build_task_card_text(task_kind: str, runtime: dict, info: dict) -> str:
         f"定位：{spec['purpose']}",
         f"手动运行日期：{today_str()}",
         f"当前状态：{status_map.get(runtime['status'], runtime['status'])}",
-        f"当前步骤：{runtime.get('step', '—')}",
+        f"当前步骤：{runtime.get('step', '--')}",
         f"今日结果：{'已生成' if info['exists'] else '未生成'}",
         f"结果日期：{info['result_date']}",
         f"结果生成时间：{info['generated_at']}",
@@ -112,13 +105,13 @@ def build_task_card_text(task_kind: str, runtime: dict, info: dict) -> str:
         lines.append(f"{info['extra_label']}：{info['extra']}")
     if task_kind == "nightly":
         lines.append(f"官方净值重估：{'已生成' if info.get('valuation_exists') else '未生成'}")
-        lines.append(f"重估生成时间：{info.get('valuation_generated_at', '—')}")
+        lines.append(f"重估生成时间：{info.get('valuation_generated_at', '--')}")
     if info.get("manifest_status"):
-        lines.append(f"最近 manifest 状态：{info.get('manifest_status')}")
+        lines.append(f"最新 manifest 状态：{info.get('manifest_status')}")
     if info.get("manifest_current_step"):
-        lines.append(f"最近 manifest 当前步骤：{info.get('manifest_current_step')}")
+        lines.append(f"最新 manifest 当前步骤：{info.get('manifest_current_step')}")
     if info.get("manifest_error"):
-        lines.append(f"最近 manifest 错误：{info.get('manifest_error')}")
+        lines.append(f"最新 manifest 错误：{info.get('manifest_error')}")
     if runtime.get("started_at"):
         lines.append(f"开始时间：{format_timestamp(runtime['started_at'])}")
     if runtime.get("ended_at"):
@@ -138,6 +131,8 @@ def interpret_run_output_line(clean: str) -> str | None:
         (">>> AGENT_DONE ", "最近完成 Agent："),
         (">>> AGENT_FAIL ", "Agent 失败："),
         (">>> PIPELINE_DONE ", "流水线完成："),
+        (">>> LEARNING_REVIEW ", "学习复盘："),
+        (">>> LEARNING_CYCLE_DONE ", "学习周期完成："),
     ]
     for prefix, label in mapping:
         if clean.startswith(prefix):
@@ -147,24 +142,24 @@ def interpret_run_output_line(clean: str) -> str | None:
 
 def normalize_task_step_text(step_label: str) -> str:
     value = step_label or ""
-    for prefix in ("当前步骤：", "最近完成：", "当前 Agent：", "最近完成 Agent：", "流水线完成：", "Agent 失败："):
+    for prefix in ("当前步骤：", "最近完成：", "当前 Agent：", "最近完成 Agent：", "流水线完成：", "Agent 失败：", "学习复盘：", "学习周期完成："):
         value = value.replace(prefix, "")
-    return value or "—"
+    return value or "--"
 
 
 def running_hint_text(job_name: str, task_date: str, elapsed: int) -> str:
-    return f"当前任务：{job_name}｜运行日期 {task_date}｜已运行 {elapsed}s"
+    return f"当前任务：{job_name} | 日期 {task_date} | 已运行 {elapsed}s"
 
 
 def finished_hint_text(job_name: str, task_date: str, elapsed: int, success: bool) -> str:
-    return f"最近任务：{job_name}｜运行日期 {task_date}｜耗时 {elapsed}s｜{'已完成' if success else '失败'}"
+    return f"最近任务：{job_name} | 日期 {task_date} | 耗时 {elapsed}s | {'已完成' if success else '失败'}"
 
 
 def initial_task_status() -> dict[str, dict]:
     return {
         key: {
             "status": "idle",
-            "step": "—",
+            "step": "--",
             "run_date": today_str(),
             "started_at": None,
             "ended_at": None,
@@ -220,5 +215,5 @@ def format_timestamp(value) -> str:
     if isinstance(value, datetime):
         return value.isoformat(timespec="seconds")
     if not value:
-        return "—"
+        return "--"
     return str(value)

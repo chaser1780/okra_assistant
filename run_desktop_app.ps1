@@ -61,5 +61,5 @@ $pythonCommand = Resolve-PythonCommand -ProjectRoot $agentHome
 $env:OKRA_PYTHON_EXE = $pythonCommand.Exe
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $logPath = Join-Path $logDir ("desktop_" + $timestamp + ".log")
-& $pythonCommand.Exe @($pythonCommand.Prefix) -B -X utf8 $appPath *> $logPath
+& $pythonCommand.Exe @($pythonCommand.Prefix) -B -X utf8 $appPath --backend qt *> $logPath
 exit $LASTEXITCODE

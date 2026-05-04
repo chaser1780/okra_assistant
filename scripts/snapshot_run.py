@@ -4,7 +4,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-from common import agent_snapshot_root, ensure_layout, llm_context_path, llm_advice_path, portfolio_report_path, resolve_agent_home, resolve_date, validated_advice_path
+from common import agent_snapshot_root, committee_advice_path, ensure_layout, llm_context_path, llm_advice_path, portfolio_report_path, resolve_agent_home, resolve_date, validated_advice_path
 
 
 def next_snapshot_dir(agent_home: Path, report_date: str) -> Path:
@@ -34,6 +34,7 @@ def main() -> None:
     snapshot_dir = next_snapshot_dir(agent_home, report_date)
 
     safe_copy(llm_context_path(agent_home, report_date), snapshot_dir / "llm_context.json")
+    safe_copy(committee_advice_path(agent_home, report_date), snapshot_dir / "committee_advice.json")
     safe_copy(llm_advice_path(agent_home, report_date), snapshot_dir / "llm_advice.json")
     safe_copy(validated_advice_path(agent_home, report_date), snapshot_dir / "validated_advice.json")
     safe_copy(portfolio_report_path(agent_home, report_date), snapshot_dir / "final_report.md")

@@ -2,6 +2,10 @@
 
 ## 核心文档
 
+- 说明
+  - 当前桌面端已统一为 `PySide6 / Qt` 单栈
+  - 部分历史规划文档仍会提到 `app/desktop_shell.py`、`app/views/`、`app/theme.py`、`app/widgets.py`
+  - 这些引用应视为历史上下文，不代表当前主代码路径
 - `README.md`
   - 项目概览、目录结构与关键入口
 - `project.toml`
@@ -23,6 +27,8 @@
   - 面向后续演进的整体改进建议
 - `docs/improvement_execution_roadmap.md`
   - 中长期执行路线图
+- `docs/portfolio_upgrade_roadmap_2026-04-19.md`
+  - 面向 replay、evidence retrieval、portfolio optimization 的落地升级路线图
 - `docs/implementation_batch_2026-03-18.md`
   - 2026-03-18 本轮直接落地的实施批次、文件级任务与验收标准
 - `docs/fund_assistant_upgrade_plan_2026-03-19.md`

@@ -12,16 +12,22 @@ from pathlib import Path
 from common import load_review_config, resolve_agent_home, resolve_date
 from common import (
     agent_output_dir,
+    committee_advice_path,
+    evidence_index_path,
     estimated_nav_path,
     fund_profile_path,
     intraday_proxy_path,
+    learning_report_path,
     llm_advice_path,
     llm_context_path,
     news_path,
     portfolio_report_path,
     quote_path,
+    recommendation_delta_path,
     report_path,
     score_path,
+    source_health_path,
+    evaluation_snapshot_path,
     validated_advice_path,
 )
 from preflight_check import perform_preflight
@@ -54,13 +60,24 @@ def step_output_exists(agent_home: Path, report_date: str, script_name: str, ext
         return estimated_nav_path(agent_home, report_date).exists()
     if script_name == "build_llm_context.py":
         return llm_context_path(agent_home, report_date).exists()
+    if script_name == "build_evidence_index.py":
+        return evidence_index_path(agent_home, report_date).exists()
+    if script_name == "build_source_health_snapshot.py":
+        return source_health_path(agent_home, report_date).exists()
+    if script_name == "run_learning_cycle.py":
+        return learning_report_path(agent_home, report_date).exists()
     if script_name == "run_multiagent_research.py":
         aggregate = agent_output_dir(agent_home, report_date) / "aggregate.json"
         return aggregate.exists()
     if script_name == "generate_llm_advice.py":
-        return is_up_to_date(llm_advice_path(agent_home, report_date), agent_output_dir(agent_home, report_date) / "aggregate.json")
+        aggregate = agent_output_dir(agent_home, report_date) / "aggregate.json"
+        return is_up_to_date(llm_advice_path(agent_home, report_date), aggregate) and is_up_to_date(committee_advice_path(agent_home, report_date), aggregate)
     if script_name == "validate_llm_advice.py":
         return is_up_to_date(validated_advice_path(agent_home, report_date), llm_advice_path(agent_home, report_date))
+    if script_name == "build_recommendation_delta.py":
+        return recommendation_delta_path(agent_home, report_date).exists()
+    if script_name == "build_evaluation_snapshot.py":
+        return evaluation_snapshot_path(agent_home, report_date).exists()
     if script_name == "build_portfolio_report.py":
         return is_up_to_date(portfolio_report_path(agent_home, report_date), validated_advice_path(agent_home, report_date))
     return False
@@ -186,6 +203,22 @@ def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool,
         resume_existing=resume_existing,
         record_step=record_step,
     )
+    timings["build_evidence_index.py"] = maybe_run_step(
+        "build_evidence_index.py",
+        agent_home,
+        report_date,
+        False,
+        resume_existing=resume_existing,
+        record_step=record_step,
+    )
+    timings["build_source_health_snapshot.py"] = maybe_run_step(
+        "build_source_health_snapshot.py",
+        agent_home,
+        report_date,
+        False,
+        resume_existing=resume_existing,
+        record_step=record_step,
+    )
     multiagent_args = ["--mock"] if llm_mock else []
     if resume_existing:
         multiagent_args.append("--use-existing")
@@ -208,6 +241,8 @@ def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool,
         record_step=record_step,
     )
     timings["validate_llm_advice.py"] = maybe_run_step("validate_llm_advice.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
+    timings["build_recommendation_delta.py"] = maybe_run_step("build_recommendation_delta.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
+    timings["build_evaluation_snapshot.py"] = maybe_run_step("build_evaluation_snapshot.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_daily_report.py"] = maybe_run_step("build_daily_report.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_portfolio_report.py"] = maybe_run_step("build_portfolio_report.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["snapshot_run.py"] = run_step("snapshot_run.py", agent_home, report_date, False, record_step=record_step)
@@ -283,60 +318,20 @@ def run_nightly(agent_home: Path, report_date: str, demo: bool, resume_existing:
         )
     )
     timings["revalue_portfolio_official_nav.py"] = run_step("revalue_portfolio_official_nav.py", agent_home, report_date, False, record_step=record_step)
-    jobs = due_review_jobs(agent_home, report_date)
-    if jobs:
-        for job in jobs:
-            if job.get("has_advice"):
-                advice_key = f"review_advice_{job['base_date']}_T{job['horizon']}"
-                timings[advice_key] = run_step(
-                    "review_advice.py",
-                    agent_home,
-                    report_date,
-                    False,
-                    ["--base-date", job["base_date"], "--review-date", job["review_date"], "--horizon", str(job["horizon"]), "--source", "advice"],
-                    step_label=job["label"],
-                    record_step=record_step,
-                )
-                advice_memory_key = f"update_review_memory_advice_{job['base_date']}_T{job['horizon']}"
-                timings[advice_memory_key] = run_step(
-                    "update_review_memory.py",
-                    agent_home,
-                    report_date,
-                    False,
-                    ["--base-date", job["base_date"], "--horizon", str(job["horizon"]), "--source", "advice"],
-                    step_label=f"memory_{job['base_date']}_T{job['horizon']}",
-                    record_step=record_step,
-                )
-            if job.get("has_execution"):
-                execution_key = f"review_execution_{job['base_date']}_T{job['horizon']}"
-                timings[execution_key] = run_step(
-                    "review_advice.py",
-                    agent_home,
-                    report_date,
-                    False,
-                    ["--base-date", job["base_date"], "--review-date", job["review_date"], "--horizon", str(job["horizon"]), "--source", "execution"],
-                    step_label=f"execution_{job['base_date']}_T{job['horizon']}",
-                    record_step=record_step,
-                )
-                execution_memory_key = f"update_review_memory_execution_{job['base_date']}_T{job['horizon']}"
-                timings[execution_memory_key] = run_step(
-                    "update_review_memory.py",
-                    agent_home,
-                    report_date,
-                    False,
-                    ["--base-date", job["base_date"], "--horizon", str(job["horizon"]), "--source", "execution"],
-                    step_label=f"memory_execution_{job['base_date']}_T{job['horizon']}",
-                    record_step=record_step,
-                )
-    else:
-        print(f">>> INFO no_due_review_jobs review_date={report_date}", flush=True)
-    timings["build_nightly_review_report.py"] = run_step(
-        "build_nightly_review_report.py",
+    timings["run_learning_cycle.py"] = maybe_run_step(
+        "run_learning_cycle.py",
         agent_home,
         report_date,
         False,
-        ["--review-date", report_date],
-        step_label="build_nightly_review_report",
+        resume_existing=resume_existing,
+        record_step=record_step,
+    )
+    timings["build_evaluation_snapshot.py"] = maybe_run_step(
+        "build_evaluation_snapshot.py",
+        agent_home,
+        report_date,
+        False,
+        resume_existing=resume_existing,
         record_step=record_step,
     )
     return timings

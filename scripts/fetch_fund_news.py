@@ -473,6 +473,7 @@ $aes.Decrypt($nonce, $cipher, $tag, $plain, $null)
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=20,
         check=False,
@@ -518,6 +519,7 @@ try {{
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
         timeout=20,
         check=False,
     )

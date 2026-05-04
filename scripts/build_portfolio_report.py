@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 
-from common import ensure_layout, fund_profile_path, load_json, load_portfolio, load_strategy, portfolio_report_path, resolve_agent_home, resolve_date, validated_advice_path
+from common import ensure_layout, evaluation_snapshot_path, fund_profile_path, load_json, load_portfolio, load_review_memory, load_strategy, portfolio_report_path, recommendation_delta_path, resolve_agent_home, resolve_date, validated_advice_path
 from portfolio_exposure import STRATEGY_BUCKET_LABELS, analyze_portfolio_exposure
 
 
@@ -66,10 +66,13 @@ def render_bucket_holdings(exposure: dict) -> list[str]:
     return lines
 
 
-def build_markdown(portfolio: dict, advice: dict, strategy: dict, report_date: str) -> str:
+def build_markdown(agent_home, portfolio: dict, advice: dict, strategy: dict, report_date: str) -> str:
     exposure = analyze_portfolio_exposure(portfolio, strategy)
     advice_mode = advice.get("advice_mode") or advice.get("source_mode") or "validated"
     allocation_plan = exposure.get("allocation_plan", {})
+    delta_payload = load_json(recommendation_delta_path(agent_home, report_date)) if recommendation_delta_path(agent_home, report_date).exists() else {"items": []}
+    evaluation = load_json(evaluation_snapshot_path(agent_home, report_date)) if evaluation_snapshot_path(agent_home, report_date).exists() else {}
+    memory = load_review_memory(agent_home)
     lines = [
         f"# 组合调仓建议 - {report_date}",
         "",
@@ -83,6 +86,7 @@ def build_markdown(portfolio: dict, advice: dict, strategy: dict, report_date: s
         f"- 今日固定定投合计：{money_line(float(advice['fixed_dca_total']))}",
         f"- 资金存储仓可调拨参考：{money_line(float(advice['cash_hub_available']))}",
         f"- 建议模式：{advice_mode}",
+        f"- 决策来源：{advice.get('decision_source', 'unknown') or 'unknown'}",
         "",
         "## 可信度横幅",
         f"- 建议是否 fallback：{'是' if advice.get('advice_is_fallback') else '否'}",
@@ -160,6 +164,34 @@ def build_markdown(portfolio: dict, advice: dict, strategy: dict, report_date: s
             lines.append(f"- {item}")
 
     lines.append("")
+    lines.append("## 变化解释")
+    if delta_payload.get("items"):
+        for item in delta_payload.get("items", [])[:8]:
+            lines.append(
+                f"- {item.get('fund_name', item.get('fund_code', ''))}：{item.get('prev_action', 'none')} {money_line(float(item.get('prev_amount', 0.0) or 0.0))}"
+                f" -> {item.get('new_action', 'none')} {money_line(float(item.get('new_amount', 0.0) or 0.0))} | {item.get('delta_reason', '')}"
+            )
+    else:
+        lines.append("- 相比上一期，没有明显建议变化。")
+
+    lines.append("")
+    lines.append("## 长期记忆影响")
+    for item in (memory.get("permanent_memory", []) or [])[:6]:
+        lines.append(f"- permanent | {item.get('text', '')}")
+    for item in (memory.get("strategic_memory", []) or [])[:6]:
+        lines.append(f"- strategic | {item.get('text', '')}")
+    if not (memory.get("permanent_memory", []) or memory.get("strategic_memory", [])):
+        lines.append("- 暂无长期记忆命中。")
+
+    if evaluation:
+        lines.append("")
+        lines.append("## 近期评估")
+        baseline = evaluation.get("no_trade_baseline_scorecard", {}) or {}
+        lines.append(f"- no-trade 对照：better={baseline.get('better_than_no_trade', 0)} | worse={baseline.get('worse_than_no_trade', 0)} | same={baseline.get('same_as_no_trade', 0)}")
+        lines.append(f"- 新闻价值统计：{evaluation.get('news_source_scorecard', {})}")
+        lines.append(f"- 情绪价值统计：{evaluation.get('sentiment_usefulness_scorecard', {})}")
+
+    lines.append("")
     lines.append("## 说明")
     lines.append("- 本报告先由多智能体进行研究，再由规则层完成金额与角色约束校验。")
     lines.append("- 若盘中代理并非当日完整交易数据，模型会基于最近交易日与实时估值给出谨慎判断。")
@@ -189,7 +221,7 @@ def main() -> None:
     advice = load_json(validated_advice_path(agent_home, report_date))
 
     output_path = portfolio_report_path(agent_home, report_date)
-    output_path.write_text(build_markdown(portfolio, advice, strategy, report_date), encoding="utf-8")
+    output_path.write_text(build_markdown(agent_home, portfolio, advice, strategy, report_date), encoding="utf-8")
     print(output_path)
 
 

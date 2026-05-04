@@ -20,8 +20,10 @@ currency = "CNY"
 
 [providers.quotes]
 name = "eastmoney_nav_api"
+fallbacks = ["stale_snapshot"]
 timeout_seconds = 15
 history_page_size = 120
+allow_stale_fallback = true
 
 [providers.news]
 name = "eastmoney_notice_and_articles"
@@ -30,13 +32,37 @@ lookback_hours = 72
 max_notices = 4
 max_articles = 3
 
+[providers.sentiment_news]
+primary = "xueqiu_web"
+fallbacks = ["douyin_web"]
+timeout_seconds = 20
+lookback_hours = 48
+source_role = "sentiment_news"
+allow_stale_fallback = true
+health_threshold = "warning"
+use_env_proxy = true
+keyword_limit = 18
+results_per_keyword = 6
+xueqiu_cookie_file = "config/xueqiu_cookie.txt"
+douyin_cookie_file = "config/douyin_cookie.txt"
+xueqiu_browser = "edge"
+xueqiu_profile = "Default"
+xueqiu_profile_path = ""
+douyin_browser = "edge"
+douyin_profile = "Default"
+douyin_profile_path = ""
+
 [providers.intraday_proxy]
 name = "sina_hq_proxy"
+fallbacks = ["stale_snapshot"]
 timeout_seconds = 20
+allow_stale_fallback = true
 
 [providers.estimated_nav]
 name = "fundgz_1234567"
+fallbacks = ["quote_nav_derived", "stale_snapshot"]
 timeout_seconds = 30
+allow_stale_fallback = true
 
 [advice]
 mode = "research"
@@ -208,20 +234,23 @@ max_staleness_minutes = 20
 """
 
 
-BASE_LLM_TOML = """model_provider = "tabcode"
+BASE_LLM_TOML = """model_provider = "OpenAI"
 model = "gpt-5.4"
-model_context_window = 900000
+review_model = "gpt-5.4"
+model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
+network_access = "enabled"
+windows_wsl_setup_acknowledged = true
 preferred_auth_method = "apikey"
-api_key_env = "TABCODE_API_KEY"
+api_key_env = "OPENAI_API_KEY"
 api_key_file = ""
 personality = "friendly"
 
-[model_providers.tabcode]
-name = "openai"
-base_url = "https://api.tabcode.cc/openai"
+[model_providers.OpenAI]
+name = "OpenAI"
+base_url = "https://api.vip1129.cc"
 wire_api = "responses"
 requires_openai_auth = true
 """
@@ -236,7 +265,7 @@ created_at = "2026-03-13"
 owner = "test"
 language = "zh-CN"
 platform = "windows-local"
-entry_desktop = "app/desktop_shell.py"
+entry_desktop = "app/desktop_app.py"
 entry_intraday = "scripts/run_daily_pipeline.py"
 entry_nightly = "scripts/run_daily_pipeline.py"
 
@@ -266,13 +295,19 @@ class TempAgentHome:
             "db/realtime_monitor",
             "db/portfolio_advice",
             "db/llm_context",
+            "db/evidence_index",
             "db/llm_advice",
+            "db/committee_advice",
             "db/llm_raw",
             "db/validated_advice",
             "db/agent_outputs",
             "db/agent_snapshots",
+            "db/replay_experiments",
+            "db/portfolio_state",
+            "db/portfolio_state/snapshots",
             "db/review_results",
             "db/review_memory",
+            "db/review_memory/cycles",
             "db/trade_journal",
             "db/estimated_nav",
             "db/portfolio_valuation",

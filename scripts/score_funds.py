@@ -32,6 +32,29 @@ def choose_action(score: float) -> str:
     return "avoid"
 
 
+def item_impact(item: dict) -> str:
+    if item.get("impact"):
+        return str(item.get("impact", "neutral"))
+    sentiment = float(item.get("sentiment_score", 0.0) or 0.0)
+    if sentiment >= 0.2:
+        return "positive"
+    if sentiment <= -0.2:
+        return "negative"
+    return "neutral"
+
+
+def item_news_score(item: dict, impact_weights: dict) -> float:
+    impact = item_impact(item)
+    base = float(impact_weights.get(impact, 0.0) or 0.0)
+    if str(item.get("source_role", "") or "") == "sentiment_news":
+        virality = float(item.get("virality_score", 0.0) or 0.0)
+        sentiment = float(item.get("sentiment_score", 0.0) or 0.0)
+        # Keep the fallback scorer lightweight: sentiment can tilt the score, but should not dominate price data.
+        base += sentiment * 4.0
+        base += virality * max(0.0, sentiment) * 2.0
+    return round(base, 2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Combine quotes and news into daily fund scores.")
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
@@ -68,7 +91,7 @@ def main() -> None:
         performance_score += quote["day_change_pct"] * scoring["day_change_weight"]
         performance_score += quote["month_change_pct"] * scoring["month_change_weight"]
 
-        news_score = sum(impact_weights[item["impact"]] for item in related_news)
+        news_score = sum(item_news_score(item, impact_weights) for item in related_news)
         volatility_penalty = 0.0
         if conservative_mode and fund.get("risk_level") == "high":
             volatility_penalty = scoring["high_volatility_penalty"]
@@ -84,8 +107,10 @@ def main() -> None:
         risk_flags: list[str] = []
         if quote["day_change_pct"] <= scoring["drawdown_alert_pct"]:
             risk_flags.append("当日跌幅触发预警阈值")
-        if any(item["impact"] == "negative" for item in related_news):
+        if any(item_impact(item) == "negative" for item in related_news):
             risk_flags.append("出现负面新闻")
+        if any(str(item.get("source_role", "") or "") == "sentiment_news" and float(item.get("virality_score", 0.0) or 0.0) >= 0.7 for item in related_news):
+            risk_flags.append("出现高热度情绪样本")
         if fund.get("risk_level") == "high":
             risk_flags.append("基金自身波动级别较高")
         if not related_news:
@@ -108,6 +133,16 @@ def main() -> None:
                 "reasons": reasons,
                 "risk_flags": risk_flags,
                 "news_count": len(related_news),
+                "news_breakdown": [
+                    {
+                        "title": item.get("title", ""),
+                        "impact": item_impact(item),
+                        "source_role": item.get("source_role", ""),
+                        "provider": item.get("provider", ""),
+                        "score": item_news_score(item, impact_weights),
+                    }
+                    for item in related_news
+                ],
                 "quote": quote,
             }
         )

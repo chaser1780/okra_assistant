@@ -6,8 +6,15 @@ import time
 
 import requests
 
-from common import classify_intraday_freshness, dump_json, ensure_layout, intraday_proxy_path, load_json, load_portfolio, load_settings, resolve_agent_home, resolve_date, timestamp_now
-from provider_adapters import build_provider_payload, resolve_provider_config, stale_fallback_payload
+from common import classify_intraday_freshness, dump_json, ensure_layout, intraday_proxy_path, load_portfolio, load_settings, resolve_agent_home, resolve_date, timestamp_now
+from provider_adapters import (
+    attach_provider_metadata,
+    build_provider_attempt,
+    build_provider_payload,
+    resolve_provider_chain,
+    resolve_provider_config,
+    stale_fallback_from_recent_snapshot,
+)
 
 SINA_HQ_URL = "https://hq.sinajs.cn/list="
 DEFAULT_HEADERS = {
@@ -48,6 +55,13 @@ def build_demo_payload(portfolio: dict, report_date: str) -> dict:
                 "proxy_fund_code": fund["fund_code"],
                 "proxy_fund_name": fund["fund_name"],
                 "proxy_name": fund.get("proxy_name", proxy_symbol),
+                "provider": "demo_intraday_proxy",
+                "source_url": f"https://finance.sina.com.cn/realstock/company/{proxy_symbol}/nc.shtml",
+                "source_title": fund.get("proxy_name", proxy_symbol),
+                "entity_id": fund["fund_code"],
+                "entity_type": "fund",
+                "retrieved_at": timestamp_now(),
+                "confidence": 0.72,
             }
         )
     return {"report_date": report_date, "provider": "demo_intraday_proxy", "generated_at": timestamp_now(), "proxies": proxies}
@@ -144,9 +158,23 @@ def attach_fund_meta(portfolio: dict, quote_map: dict[str, dict], report_date: s
                 "freshness_status": "cross_day" if stale_override and freshness["status"] == "same_day" else freshness["status"],
                 "freshness_label": "代理行情沿用旧快照" if stale_override else freshness["label"],
                 "freshness_business_day_gap": freshness["business_day_gap"],
+                "provider": "sina_hq_proxy",
+                "source_url": f"https://finance.sina.com.cn/realstock/company/{proxy_symbol}/nc.shtml",
+                "source_title": fund.get("proxy_name", item["name"]),
+                "entity_id": fund["fund_code"],
+                "entity_type": "fund",
+                "retrieved_at": timestamp_now(),
+                "confidence": 0.72 if not (stale_override or freshness["is_stale"]) else 0.5,
             }
         )
     return proxies
+
+
+def build_live_payload(portfolio: dict, report_date: str, provider_name: str) -> dict:
+    symbols = sorted({fund["proxy_symbol"] for fund in portfolio["funds"] if fund.get("proxy_symbol")})
+    quote_map = fetch_quotes(symbols)
+    proxies = attach_fund_meta(portfolio, quote_map, report_date)
+    return build_provider_payload(report_date, provider_name, "proxies", proxies)
 
 
 def main() -> None:
@@ -162,29 +190,95 @@ def main() -> None:
     settings = load_settings(agent_home)
     report_date = resolve_date(args.date)
     provider_config = resolve_provider_config(settings, "intraday_proxy", args.provider)
-    provider = provider_config.name
+    provider_chain = resolve_provider_chain(settings, "intraday_proxy", args.provider)
     portfolio = load_portfolio(agent_home)
+    target_path = intraday_proxy_path(agent_home, report_date)
 
-    if args.demo or provider.startswith("demo"):
-        payload = build_demo_payload(portfolio, report_date)
-        payload["provider"] = provider
-    else:
-        symbols = sorted({fund["proxy_symbol"] for fund in portfolio["funds"] if fund.get("proxy_symbol")})
-        try:
-            quote_map = fetch_quotes(symbols)
-            proxies = attach_fund_meta(portfolio, quote_map, report_date)
-            payload = build_provider_payload(report_date, provider, "proxies", proxies)
-        except Exception as exc:
-            fallback_path = intraday_proxy_path(agent_home, report_date)
-            if fallback_path.exists():
-                payload = stale_fallback_payload(load_json(fallback_path), f"{provider}_fallback", "proxies", str(exc))
+    payload: dict | None = None
+    provider_attempts: list[dict] = []
+    last_error = ""
+
+    for provider in provider_chain:
+        if args.demo or provider.startswith("demo"):
+            payload = build_demo_payload(portfolio, report_date)
+            payload["provider"] = provider
+            provider_attempts.append(
+                build_provider_attempt(provider, "ok", item_count=len(payload.get("proxies", [])), ok_count=len(payload.get("proxies", [])), selected=True)
+            )
+            break
+
+        if provider in {"sina_hq_proxy", "sina_hq"}:
+            try:
+                payload = build_live_payload(portfolio, report_date, provider)
+                item_count = len(payload.get("proxies", []))
+                provider_attempts.append(build_provider_attempt(provider, "ok", item_count=item_count, ok_count=item_count, selected=True))
+                break
+            except Exception as exc:
+                last_error = str(exc)
+                provider_attempts.append(build_provider_attempt(provider, "error", detail=last_error))
+                continue
+
+        if provider == "stale_snapshot":
+            payload = stale_fallback_from_recent_snapshot(target_path, report_date, provider, "proxies", last_error or "fallback_requested")
+            if payload is not None:
                 for item in payload.get("proxies", []):
                     item["freshness_status"] = "cross_day"
                     item["freshness_label"] = "代理行情抓取失败，沿用旧快照"
-            else:
-                payload = build_provider_payload(report_date, f"{provider}_unavailable", "proxies", [])
+                item_count = len(payload.get("proxies", []))
+                provider_attempts.append(
+                    build_provider_attempt(
+                        provider,
+                        "ok",
+                        detail=payload.get("fallback_source_date", ""),
+                        item_count=item_count,
+                        ok_count=item_count,
+                        selected=True,
+                        fallback_kind="stale_snapshot",
+                    )
+                )
+                break
+            provider_attempts.append(build_provider_attempt(provider, "miss", detail="no_snapshot_available"))
+            continue
 
-    print(dump_json(intraday_proxy_path(agent_home, report_date), payload))
+        provider_attempts.append(build_provider_attempt(provider, "unsupported", detail=f"Unsupported proxy provider: {provider}"))
+
+    if payload is None and provider_config.allow_stale_fallback:
+        payload = stale_fallback_from_recent_snapshot(target_path, report_date, "stale_snapshot_auto", "proxies", last_error or "all_providers_failed")
+        if payload is not None:
+            for item in payload.get("proxies", []):
+                item["freshness_status"] = "cross_day"
+                item["freshness_label"] = "代理行情抓取失败，沿用旧快照"
+            item_count = len(payload.get("proxies", []))
+            provider_attempts.append(
+                build_provider_attempt(
+                    "stale_snapshot_auto",
+                    "ok",
+                    detail=payload.get("fallback_source_date", ""),
+                    item_count=item_count,
+                    ok_count=item_count,
+                    selected=True,
+                    fallback_kind="stale_snapshot",
+                )
+            )
+
+    if payload is None:
+        payload = build_provider_payload(
+            report_date,
+            f"{provider_config.name}_unavailable",
+            "proxies",
+            [],
+            error=last_error or "all configured intraday proxy providers failed",
+        )
+
+    payload = attach_provider_metadata(
+        payload,
+        selected_provider=str(payload.get("provider", provider_config.name) or provider_config.name),
+        provider_chain=provider_chain,
+        provider_attempts=provider_attempts,
+        fallback_kind=str(payload.get("fallback_kind", "") or ""),
+    )
+
+    print(dump_json(target_path, payload))
 
 
 if __name__ == "__main__":

@@ -236,11 +236,16 @@ def check_llm(agent_home: Path, result: dict, probe_network: bool) -> None:
         return
 
     probe = probe_llm_model(agent_home, config)
+    status = probe["status"]
+    detail = probe["detail"]
+    if probe["status"] == "error":
+        status = "warning"
+        detail = probe["detail"] + " | 将在运行时降级为 mock/degraded outputs。"
     _add_check(
         result,
         "llm:probe",
-        probe["status"],
-        probe["detail"],
+        status,
+        detail,
         transport_name=probe.get("transport_name", ""),
     )
 

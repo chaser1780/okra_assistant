@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from config_mutations import update_fund_cap_value, update_strategy_controls, upsert_watchlist_item
+from config_mutations import update_fund_cap_value, update_fund_dca_settings, update_strategy_controls, upsert_watchlist_item
 from portfolio_state import load_execution_status, rebuild_portfolio_state
 from update_portfolio_from_trade import apply_trade
 
@@ -177,6 +177,55 @@ class ValidationAndTradeTests(unittest.TestCase):
         tactical = next(item for item in payload["tactical_actions"] if item["fund_code"] == "TRED")
         self.assertEqual(tactical["validated_action"], "reduce")
         self.assertEqual(tactical["validated_amount"], 250.0)
+
+    def test_validate_llm_advice_uses_portfolio_optimizer_for_competing_candidates(self):
+        self.build_portfolio()
+        strategy_path = self.agent.root / "config" / "strategy.toml"
+        text = strategy_path.read_text(encoding="utf-8")
+        text = text.replace("max_actions_per_day = 3", "max_actions_per_day = 1")
+        strategy_path.write_text(text, encoding="utf-8")
+        self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {
+                "market_view": {"regime": "mixed", "summary": "optimizer test", "key_drivers": []},
+                "cross_fund_observations": [],
+                "fund_decisions": [
+                    {
+                        "fund_code": "TADD",
+                        "action": "add",
+                        "suggest_amount": 200.0,
+                        "priority": 1,
+                        "confidence": 0.72,
+                        "thesis": "possible add",
+                        "evidence": ["trend"],
+                        "risks": [],
+                        "agent_support": ["portfolio_trader"],
+                    },
+                    {
+                        "fund_code": "TRED",
+                        "action": "reduce",
+                        "suggest_amount": 200.0,
+                        "priority": 2,
+                        "confidence": 0.9,
+                        "thesis": "de-risk first",
+                        "evidence": ["overweight"],
+                        "risks": [],
+                        "agent_support": ["risk_manager"],
+                    },
+                ],
+            },
+        )
+        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["optimization_summary"]["mode"], "portfolio_search")
+        self.assertEqual(payload["optimization_summary"]["selected_candidate_count"], 1)
+        self.assertEqual(payload["optimization_summary"]["candidate_diagnostics_count"], 2)
+        self.assertIn("dominated_by_higher_portfolio_objective", payload["optimization_summary"]["rejection_reason_counts"])
+        self.assertEqual(len(payload["optimizer_candidates"]), 2)
+        self.assertEqual(payload["tactical_actions"][0]["fund_code"], "TRED")
+        rejected = next(item for item in payload["hold_actions"] if item["fund_code"] == "TADD")
+        self.assertEqual(rejected["validated_action"], "hold")
+        self.assertTrue(any("optimizer" in note.lower() for note in rejected["validation_notes"]))
 
     def test_apply_trade_buy_uses_cash_hub_and_precise_units(self):
         portfolio = {
@@ -402,6 +451,41 @@ class ValidationAndTradeTests(unittest.TestCase):
         )
         watchlist = json.loads(watchlist_path.read_text(encoding="utf-8"))
         self.assertTrue(any(item["code"] == "NEW1" for item in watchlist["funds"]))
+
+    def test_update_fund_dca_settings_enable_and_disable(self):
+        self.build_portfolio()
+        definition_path, current_path = update_fund_dca_settings(
+            self.agent.root,
+            "TADD",
+            enabled=True,
+            daily_amount=66.0,
+            allow_extra_buys=True,
+        )
+        definition = json.loads(definition_path.read_text(encoding="utf-8"))
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        enabled_definition = next(item for item in definition["funds"] if item["fund_code"] == "TADD")
+        enabled_current = next(item for item in current["funds"] if item["fund_code"] == "TADD")
+        self.assertEqual(enabled_definition["role"], "core_dca")
+        self.assertEqual(enabled_current["role"], "core_dca")
+        self.assertEqual(enabled_definition["fixed_daily_buy_amount"], 66.0)
+        self.assertTrue(enabled_current["allow_extra_buys"])
+        self.assertEqual(enabled_definition["previous_role_before_dca"], "tactical")
+
+        definition_path, current_path = update_fund_dca_settings(
+            self.agent.root,
+            "TADD",
+            enabled=False,
+            daily_amount=0.0,
+            allow_extra_buys=False,
+        )
+        definition = json.loads(definition_path.read_text(encoding="utf-8"))
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        disabled_definition = next(item for item in definition["funds"] if item["fund_code"] == "TADD")
+        disabled_current = next(item for item in current["funds"] if item["fund_code"] == "TADD")
+        self.assertEqual(disabled_definition["role"], "tactical")
+        self.assertEqual(disabled_current["role"], "tactical")
+        self.assertNotIn("fixed_daily_buy_amount", disabled_definition)
+        self.assertFalse(disabled_current["allow_extra_buys"])
 
 
 if __name__ == "__main__":

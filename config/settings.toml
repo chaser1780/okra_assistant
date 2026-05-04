@@ -6,23 +6,84 @@ currency = "CNY"
 
 [providers.quotes]
 name = "eastmoney_nav_api"
+primary = "eastmoney_nav_api"
+fallbacks = ["stale_snapshot"]
 timeout_seconds = 15
 history_page_size = 120
+allow_stale_fallback = true
+health_threshold = "warning"
+source_role = "official_nav"
 
 [providers.news]
 name = "eastmoney_notice_and_articles"
+primary = "eastmoney_notice_and_articles"
+fallbacks = []
 timeout_seconds = 15
 lookback_hours = 72
 max_notices = 4
 max_articles = 3
+allow_stale_fallback = true
+health_threshold = "warning"
+source_role = "fund_news"
+
+[providers.fund_news]
+primary = "eastmoney_notice_and_articles"
+fallbacks = []
+timeout_seconds = 15
+lookback_hours = 72
+source_role = "fund_news"
+
+[providers.theme_news]
+primary = "eastmoney_notice_and_articles"
+fallbacks = []
+timeout_seconds = 15
+lookback_hours = 72
+source_role = "theme_news"
+
+[providers.market_news]
+primary = "eastmoney_notice_and_articles"
+fallbacks = []
+timeout_seconds = 15
+lookback_hours = 72
+source_role = "market_news"
+
+[providers.sentiment_news]
+primary = "xueqiu_web"
+fallbacks = ["douyin_web"]
+timeout_seconds = 20
+lookback_hours = 48
+source_role = "sentiment_news"
+allow_stale_fallback = true
+health_threshold = "warning"
+use_env_proxy = true
+keyword_limit = 18
+results_per_keyword = 6
+xueqiu_cookie_file = "F:\\okra_assistant\\config\\xueqiu_cookie.txt"
+douyin_cookie_file = "F:\\okra_assistant\\config\\douyin_cookie.txt"
+xueqiu_browser = "edge"
+xueqiu_profile = "Default"
+xueqiu_profile_path = ""
+douyin_browser = "edge"
+douyin_profile = "Default"
+douyin_profile_path = ""
 
 [providers.intraday_proxy]
 name = "sina_hq_proxy"
+primary = "sina_hq_proxy"
+fallbacks = ["stale_snapshot"]
 timeout_seconds = 20
+allow_stale_fallback = true
+health_threshold = "warning"
+source_role = "intraday_proxy"
 
 [providers.estimated_nav]
 name = "fundgz_1234567"
+primary = "fundgz_1234567"
+fallbacks = ["quote_nav_derived", "stale_snapshot"]
 timeout_seconds = 30
+allow_stale_fallback = true
+health_threshold = "warning"
+source_role = "estimated_nav"
 
 [advice]
 mode = "research"

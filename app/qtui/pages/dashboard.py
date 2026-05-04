@@ -1,104 +1,115 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
-
-from ui_support import (
-    build_action_change_lines,
-    build_dashboard_alerts,
-    build_dashboard_text,
-    build_plain_language_summary,
-    load_validated_for_date,
-    previous_date,
-    summarize_state,
-)
-from portfolio_exposure import analyze_portfolio_exposure
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..theme import QT
-from ..widgets import MetricCard, SectionBox, bullet_lines, make_browser, set_browser_text
+from ..widgets import HeroCard, SectionBox, make_browser, set_browser_text, style_button
 
 
 class DashboardPage(QWidget):
-    def __init__(self):
+    def __init__(self, shell=None):
         super().__init__()
+        self.shell = shell
+        self.primary_fund_code = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
+        header_frame = QFrame()
+        header_frame.setObjectName("TopBar")
+        header = QHBoxLayout(header_frame)
+        header.setContentsMargins(16, 13, 16, 13)
+        header.setSpacing(10)
+        title_block = QVBoxLayout()
+        title_block.setSpacing(3)
+        self.title = QLabel("基金研究驾驶舱")
+        self.title.setStyleSheet(f"color:{QT['text']}; font-family:'Microsoft YaHei UI', 'Segoe UI'; font-size:20pt; font-weight:850;")
         self.meta = QLabel("")
-        self.meta.setStyleSheet(f"color:{QT['text_soft']};")
-        layout.addWidget(self.meta)
+        self.meta.setStyleSheet(f"color:{QT['text_soft']}; font-family:'Microsoft YaHei UI', 'Segoe UI'; font-size:9pt;")
+        title_block.addWidget(self.title)
+        title_block.addWidget(self.meta)
+        header.addLayout(title_block)
+        header.addStretch(1)
 
-        metric_grid = QGridLayout()
-        metric_grid.setHorizontalSpacing(10)
-        metric_grid.setVerticalSpacing(10)
-        self.metric_cards = [MetricCard() for _ in range(4)]
-        for idx, card in enumerate(self.metric_cards):
-            metric_grid.addWidget(card, idx // 2, idx % 2)
-        layout.addLayout(metric_grid)
+        self.open_research_button = style_button(QPushButton("研究"), "ghost")
+        self.open_realtime_button = style_button(QPushButton("实时"), "ghost")
+        self.run_intraday_button = style_button(QPushButton("运行日内"), "primary")
+        self.run_realtime_button = style_button(QPushButton("刷新"), "secondary")
+        self.open_primary_button = style_button(QPushButton("主基金"), "secondary")
+        self.open_primary_button.setEnabled(False)
+        for button in (self.open_research_button, self.open_realtime_button, self.run_intraday_button, self.run_realtime_button, self.open_primary_button):
+            button.setMinimumWidth(76)
+            button.setMinimumHeight(34)
+            header.addWidget(button)
+        layout.addWidget(header_frame)
 
-        sections = QGridLayout()
-        sections.setHorizontalSpacing(10)
-        sections.setVerticalSpacing(10)
-        self.focus_box = SectionBox("今日关注")
+        hero_grid = QGridLayout()
+        hero_grid.setHorizontalSpacing(12)
+        hero_grid.setVerticalSpacing(12)
+        self.hero_cards = [HeroCard() for _ in range(4)]
+        for idx, card in enumerate(self.hero_cards):
+            hero_grid.addWidget(card, 0, idx)
+        layout.addLayout(hero_grid)
+
+        cockpit = QGridLayout()
+        cockpit.setHorizontalSpacing(12)
+        cockpit.setVerticalSpacing(12)
+        self.focus_box = SectionBox("今日决策流")
         self.market_box = SectionBox("市场与风险")
-        self.change_box = SectionBox("与上一期相比")
-        self.summary_box = SectionBox("一句话摘要")
+        self.committee_box = SectionBox("投委会分歧与裁决")
+        self.provider_box = SectionBox("数据可信度")
         self.focus_view = make_browser()
         self.market_view = make_browser()
-        self.change_view = make_browser()
-        self.summary_view = make_browser()
+        self.committee_view = make_browser()
+        self.provider_view = make_browser()
         self.focus_box.body.addWidget(self.focus_view)
         self.market_box.body.addWidget(self.market_view)
+        self.committee_box.body.addWidget(self.committee_view)
+        self.provider_box.body.addWidget(self.provider_view)
+        cockpit.addWidget(self.focus_box, 0, 0, 2, 1)
+        cockpit.addWidget(self.market_box, 0, 1)
+        cockpit.addWidget(self.committee_box, 1, 1)
+        cockpit.addWidget(self.provider_box, 0, 2, 2, 1)
+        layout.addLayout(cockpit, 3)
+
+        lower_grid = QGridLayout()
+        lower_grid.setHorizontalSpacing(12)
+        lower_grid.setVerticalSpacing(12)
+        self.change_box = SectionBox("与上一期相比")
+        self.summary_box = SectionBox("一句话摘要")
+        self.change_view = make_browser()
+        self.summary_view = make_browser()
         self.change_box.body.addWidget(self.change_view)
         self.summary_box.body.addWidget(self.summary_view)
-        sections.addWidget(self.focus_box, 0, 0)
-        sections.addWidget(self.market_box, 0, 1)
-        sections.addWidget(self.change_box, 1, 0)
-        sections.addWidget(self.summary_box, 1, 1)
-        layout.addLayout(sections)
+        lower_grid.addWidget(self.change_box, 0, 0)
+        lower_grid.addWidget(self.summary_box, 0, 1)
+        layout.addLayout(lower_grid)
 
         raw_box = SectionBox("工作台详情")
         self.raw_view = make_browser()
         raw_box.body.addWidget(self.raw_view)
         layout.addWidget(raw_box, 1)
 
-    def refresh_data(self, home: Path, state: dict) -> None:
-        summary = summarize_state(state)
-        validated = state.get("validated", {})
-        exposure = state.get("llm_context", {}).get("exposure_summary") or analyze_portfolio_exposure(state.get("portfolio", {}), state.get("strategy", {}))
-        alerts = build_dashboard_alerts({**state, "home": home})
-        prev_date = previous_date(state.get("dates", []), state.get("selected_date", ""))
-        prev_validated = load_validated_for_date(home, prev_date)
-        changes = build_action_change_lines(validated, prev_validated, prev_date)
-        plain = build_plain_language_summary(summary, validated, exposure, alerts)
-        tactical = validated.get("tactical_actions", []) or []
-        dca = validated.get("dca_actions", []) or []
-        holds = validated.get("hold_actions", []) or []
-        top = tactical[0] if tactical else (dca[0] if dca else {})
-        market = validated.get("market_view", {}) or {}
-        self.meta.setText(
-            f"查看日 {state.get('selected_date', '')} | "
-            f"建议 {len(tactical) + len(dca)} 条 | 观察 {len(holds)} 条 | "
-            f"失败智能体 {len(summary.get('failed_agent_names', []))}"
-        )
+        self.open_research_button.clicked.connect(lambda: self.shell.jump_to_page("research") if self.shell else None)
+        self.open_realtime_button.clicked.connect(lambda: self.shell.jump_to_page("rt") if self.shell else None)
+        self.run_intraday_button.clicked.connect(lambda: self.shell.run_pipeline("intraday") if self.shell else None)
+        self.run_realtime_button.clicked.connect(lambda: self.shell.run_realtime() if self.shell else None)
+        self.open_primary_button.clicked.connect(self._open_primary_fund)
 
-        self.metric_cards[0].set_content("今日主动作", top.get("fund_name", "暂无"), top.get("thesis", "今天没有需要立刻执行的主动动作。"), tone="accent")
-        self.metric_cards[1].set_content("市场状态", market.get("regime", "暂无"), market.get("summary", "等待市场摘要。"), tone="info")
-        self.metric_cards[2].set_content("建议模式", summary.get("advice_mode", "unknown"), f"通道 {summary.get('transport_name', '暂无') or '暂无'}", tone="warning" if summary.get("advice_is_fallback") else "success")
-        self.metric_cards[3].set_content("风险提醒", f"{len(alerts)} 条" if alerts else "稳定", alerts[0] if alerts else "暂无高优先级风险提醒。", tone="danger" if alerts else "success")
+    def _open_primary_fund(self) -> None:
+        if self.shell and self.primary_fund_code:
+            self.shell.open_fund_detail(self.primary_fund_code, source_key="dash")
 
-        focus_lines = []
-        for item in (tactical[:3] + dca[:2]):
-            focus_lines.append(f"{item.get('fund_name', item.get('fund_code', ''))}：{item.get('validated_action')} {item.get('validated_amount', 0)}")
-        set_browser_text(self.focus_view, bullet_lines(focus_lines, "暂无需要立刻执行的动作"))
-
-        market_lines = [market.get("summary", "暂无市场摘要")] + alerts[:5]
-        set_browser_text(self.market_view, bullet_lines(market_lines, "暂无额外风险提示"))
-        set_browser_text(self.change_view, "\n".join(changes or ["- 暂无明显变化"]))
-        set_browser_text(self.summary_view, bullet_lines(plain, "暂无摘要"))
-        set_browser_text(
-            self.raw_view,
-            build_dashboard_text(summary, validated, state.get("portfolio", {}), state.get("portfolio_report", ""), exposure, changes, alerts, plain),
-        )
+    def refresh_view_model(self, view_model) -> None:
+        self.meta.setText(view_model.meta)
+        self.primary_fund_code = view_model.primary_fund_code
+        self.open_primary_button.setEnabled(bool(self.primary_fund_code))
+        for idx, metric in enumerate(view_model.metrics[:4]):
+            self.hero_cards[idx].set_content(metric.title, metric.value, metric.body, tone=metric.tone, pill=metric.tone.upper())
+        set_browser_text(self.focus_view, view_model.focus_text)
+        set_browser_text(self.market_view, view_model.market_text)
+        set_browser_text(self.change_view, view_model.change_text)
+        set_browser_text(self.summary_view, view_model.summary_text)
+        set_browser_text(self.raw_view, view_model.detail_text)
+        set_browser_text(self.committee_view, getattr(view_model, "committee_text", "- 暂无投委会结构化摘要"))
+        set_browser_text(self.provider_view, getattr(view_model, "provider_text", "- 暂无数据源健康摘要"))
