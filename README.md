@@ -16,7 +16,7 @@
 
 ```text
 F:\okra_assistant
-├─ app                  桌面壳、图标、启动辅助脚本
+├─ app                  本地 API、工作台状态聚合、启动辅助脚本
 ├─ agents               模型/agent 相关静态配置
 ├─ assets               报告模板等资源
 ├─ cache                缓存与 pycache
@@ -27,7 +27,8 @@ F:\okra_assistant
 ├─ raw                  原始行情与新闻快照
 ├─ references           评分与来源策略说明
 ├─ reports              人类可读报告
-├─ scripts              核心 Python 代码
+├─ scripts              核心 Python 数据、研究、复盘链路
+├─ frontend             React / Tauri 工作台前端
 ├─ temp                 临时目录
 ├─ run_daily_report.ps1 日内任务启动脚本
 ├─ run_nightly_review.ps1 夜间复盘启动脚本
@@ -36,8 +37,8 @@ F:\okra_assistant
 
 ## 关键入口
 
-- 桌面壳入口：`F:\okra_assistant\app\desktop_app.py`
-- Qt 桌面主壳：`F:\okra_assistant\app\desktop_shell_qt.py`
+- 本地 API 入口：`F:\okra_assistant\app\web_api.py`
+- React/Tauri 工作台：`F:\okra_assistant\frontend`
 - 日内全链路：`F:\okra_assistant\scripts\run_daily_pipeline.py --mode intraday`
 - 夜间复盘：`F:\okra_assistant\scripts\run_daily_pipeline.py --mode nightly`
 - 交易录入：`F:\okra_assistant\scripts\record_trade.py`
@@ -46,9 +47,9 @@ F:\okra_assistant
 
 ## 桌面架构
 
-- 当前桌面端已统一为 `PySide6 / Qt`
-- `Tk` 旧壳与其配套视图代码已从主代码路径移除
-- 启动脚本默认按 Qt 单栈启动
+- 当前桌面端使用 `React + Tauri` 工作台，后端由本地 Python API 提供数据。
+- `run_desktop_app.ps1` 会启动 `app\web_api.py`，并打开或构建 `frontend` 工作台。
+- 旧 Qt 壳层文件已从当前主代码路径移除；历史文档中提到的 Qt 入口仅作为迁移上下文。
 
 ## 当前定位
 

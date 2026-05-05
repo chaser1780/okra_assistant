@@ -47,6 +47,16 @@ REQUIRED_DIRS = (
     "db/review_memory/promotion_log",
     "db/review_memory/permanent",
     "db/review_memory/user_confirmed",
+    "db/long_memory",
+    "db/long_memory/funds",
+    "db/long_memory/market",
+    "db/long_memory/market/regime_daily",
+    "db/long_memory/execution",
+    "db/long_memory/portfolio",
+    "db/long_memory/candidates",
+    "db/long_memory/approvals",
+    "db/long_memory/exports",
+    "db/daily_workspace",
     "db/trade_journal",
     "db/estimated_nav",
     "db/fund_nav_history",
@@ -497,6 +507,22 @@ def review_memory_permanent_path(agent_home: Path) -> Path:
 
 def review_memory_user_confirmed_path(agent_home: Path) -> Path:
     return agent_home / "db" / "review_memory" / "user_confirmed" / "memory.json"
+
+
+def long_memory_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "long_memory"
+
+
+def long_memory_db_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "memory.sqlite"
+
+
+def long_memory_index_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "index.sqlite"
+
+
+def daily_workspace_dir(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "daily_workspace" / report_date
 
 
 def trade_journal_path(agent_home: Path, trade_date: str) -> Path:

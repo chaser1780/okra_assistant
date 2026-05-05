@@ -265,7 +265,7 @@ created_at = "2026-03-13"
 owner = "test"
 language = "zh-CN"
 platform = "windows-local"
-entry_desktop = "app/desktop_app.py"
+entry_desktop = "app/web_api.py"
 entry_intraday = "scripts/run_daily_pipeline.py"
 entry_nightly = "scripts/run_daily_pipeline.py"
 
@@ -308,6 +308,21 @@ class TempAgentHome:
             "db/review_results",
             "db/review_memory",
             "db/review_memory/cycles",
+            "db/review_memory/permanent",
+            "db/review_memory/user_confirmed",
+            "db/review_memory/candidates",
+            "db/review_memory/promotion_log",
+            "db/long_memory",
+            "db/long_memory/funds",
+            "db/long_memory/market",
+            "db/long_memory/market/regime_daily",
+            "db/long_memory/execution",
+            "db/long_memory/portfolio",
+            "db/long_memory/candidates",
+            "db/long_memory/approvals",
+            "db/long_memory/exports",
+            "db/daily_workspace",
+            "db/execution_reviews",
             "db/trade_journal",
             "db/estimated_nav",
             "db/portfolio_valuation",

@@ -7,7 +7,7 @@ created_at = "2026-03-10"
 owner = "qmq"
 language = "zh-CN"
 platform = "windows-local"
-entry_desktop = "F:\\okra_assistant\\app\\desktop_app.py"
+entry_desktop = "F:\\okra_assistant\\app\\web_api.py"
 entry_intraday = "F:\\okra_assistant\\scripts\\run_daily_pipeline.py"
 entry_nightly = "F:\\okra_assistant\\scripts\\run_daily_pipeline.py"
 

@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --background: 220 28% 5%;
+  --foreground: 210 30% 96%;
+  --card: 219 26% 9%;
+  --card-foreground: 210 30% 96%;
+  --muted: 218 22% 13%;
+  --muted-foreground: 215 14% 66%;
+  --accent: 188 94% 43%;
+  --accent-foreground: 210 30% 98%;
+  --border: 216 22% 18%;
+  --success: 160 78% 45%;
+  --warning: 39 95% 55%;
+  --danger: 349 89% 64%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 1280px;
+  background: radial-gradient(circle at 20% 0%, rgba(8, 145, 178, 0.12), transparent 34%),
+    linear-gradient(135deg, #090d14 0%, #060910 48%, #02040a 100%);
+  color: hsl(var(--foreground));
+  font-family: "Inter", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070b12;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #263345;
+  border-radius: 999px;
+}
+
+.okra-card {
+  border: 1px solid hsl(var(--border));
+  background: linear-gradient(145deg, rgba(20, 29, 44, 0.92), rgba(10, 15, 24, 0.96));
+  border-radius: 8px;
+}
+
+.okra-panel {
+  border: 1px solid hsl(var(--border));
+  background: rgba(9, 14, 23, 0.86);
+  border-radius: 8px;
+}
+
+.metric-number {
+  font-variant-numeric: tabular-nums;
+}

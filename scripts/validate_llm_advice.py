@@ -5,7 +5,7 @@ import argparse
 from common import dump_json, ensure_layout, llm_advice_path, llm_raw_path, load_json, load_portfolio, load_strategy, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from decision_ledger import build_and_write_decisions
 from models import FinalAdvice, PortfolioFund, PortfolioState, ValidatedAction, ValidatedAdvice
-from portfolio_exposure import STRATEGY_BUCKET_LABELS, analyze_portfolio_exposure, infer_strategy_bucket, infer_theme_family, safe_float
+from portfolio_exposure import analyze_portfolio_exposure, infer_strategy_bucket, infer_theme_family
 from portfolio_optimizer import optimize_portfolio_actions
 from trade_constraints import build_trade_constraints
 

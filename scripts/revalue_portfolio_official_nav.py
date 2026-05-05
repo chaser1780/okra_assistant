@@ -16,7 +16,7 @@ from common import (
     timestamp_now,
 )
 from portfolio_state import save_portfolio_state
-from update_portfolio_from_trade import ensure_cost_basis, ensure_units, recalc_fund, save_portfolio
+from update_portfolio_from_trade import ensure_cost_basis, ensure_units, recalc_fund
 
 
 def safe_float(value) -> float | None:

@@ -28,6 +28,11 @@ from common import (
 from models import EvidenceItem, EvidenceRef, EstimateSnapshot, FundContextItem, FundProfile, LlmContext, MemoryRecord, NewsItem, PortfolioFund, ProxySnapshot, QuoteSnapshot, SourceHealthItem
 from portfolio_exposure import analyze_portfolio_exposure, infer_strategy_bucket, infer_theme_family
 from provider_adapters import aggregate_source_health, build_source_health_item
+try:
+    from long_memory_store import list_memory_records, search_long_memory
+except Exception:
+    list_memory_records = None
+    search_long_memory = None
 
 
 def summarize_news(items: list[NewsItem], limit: int = 5) -> list[NewsItem]:
@@ -573,10 +578,28 @@ def build_memory_digest(memory: dict, portfolio: dict, exposure_summary: dict) -
         for item in memory.get("bias_adjustments", [])
         if analysis_day is not None and parse_date_text(item.get("expires_on")) is not None and parse_date_text(item.get("expires_on")) < analysis_day
     )
+    long_memory_hits: list[dict] = []
+    if list_memory_records is not None:
+        try:
+            query = " ".join(sorted(context_tags)[:32])
+            long_memory_hits = search_long_memory(memory.get("_agent_home"), query, limit=18) if search_long_memory and memory.get("_agent_home") else []
+            if not long_memory_hits and memory.get("_agent_home"):
+                long_memory_hits = list_memory_records(memory.get("_agent_home"), limit=18)
+        except Exception:
+            long_memory_hits = []
+    fund_long_memory = [item for item in long_memory_hits if item.get("domain") == "fund"][:8]
+    market_long_memory = [item for item in long_memory_hits if item.get("domain") == "market"][:6]
+    execution_long_memory = [item for item in long_memory_hits if item.get("domain") == "execution"][:6]
+    policy_long_memory = [item for item in long_memory_hits if item.get("domain") == "portfolio"][:6]
     return {
         "updated_at": memory.get("updated_at", ""),
         "memory_ledger_summary": memory.get("memory_ledger_summary", {}),
         "retrieval_context_tags": sorted(context_tags)[:20],
+        "long_memory_hits": long_memory_hits[:18],
+        "fund_profile_memory_hits": fund_long_memory,
+        "market_regime_memory_hits": market_long_memory,
+        "execution_memory_hits": execution_long_memory,
+        "portfolio_policy_memory_hits": policy_long_memory,
         "recent_lessons": [item for item in recent_review_memory if item.get("provenance", {}).get("kind") == "lesson"][:8],
         "recent_review_history": [item for item in recent_review_memory if item.get("provenance", {}).get("kind") == "review_history"][:5],
         "recent_bias_adjustments": strategic_memory_hits[:8],
@@ -586,7 +609,7 @@ def build_memory_digest(memory: dict, portfolio: dict, exposure_summary: dict) -
         "core_permanent_memory_hits": core_permanent_memory_hits,
         "permanent_memory_hits": permanent_memory_hits,
         "historical_event_hits": historical_event_hits,
-        "active_memory_records": (core_permanent_memory_hits + permanent_memory_hits + strategic_memory_hits + recent_review_memory)[:16],
+        "active_memory_records": (long_memory_hits[:10] + core_permanent_memory_hits + permanent_memory_hits + strategic_memory_hits + recent_review_memory)[:24],
     }
 
 
@@ -657,6 +680,7 @@ def main() -> None:
     overrides = load_market_overrides(agent_home)
     memory = load_review_memory(agent_home)
     memory["_analysis_date"] = report_date
+    memory["_agent_home"] = agent_home
     quotes_payload = load_json(quote_path(agent_home, report_date))
     news_payload = load_json(news_path(agent_home, report_date))
     proxies_payload = load_json(intraday_proxy_path(agent_home, report_date))

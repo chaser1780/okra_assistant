@@ -36,51 +36,47 @@ from run_manifest_utils import begin_step, finalize_manifest, finish_step, new_r
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def step_output_exists(agent_home: Path, report_date: str, script_name: str, extra_args: list[str] | None = None) -> bool:
-    def is_up_to_date(target: Path, dependency: Path | None = None) -> bool:
-        if not target.exists():
-            return False
-        if dependency is None or not dependency.exists():
-            return True
-        return target.stat().st_mtime >= dependency.stat().st_mtime
+def _is_up_to_date(target: Path, dependency: Path | None = None) -> bool:
+    if not target.exists():
+        return False
+    if dependency is None or not dependency.exists():
+        return True
+    return target.stat().st_mtime >= dependency.stat().st_mtime
 
-    if script_name == "fetch_fund_quotes.py":
-        return quote_path(agent_home, report_date).exists()
-    if script_name == "fetch_fund_news.py":
-        return news_path(agent_home, report_date).exists()
-    if script_name == "fetch_fund_profiles.py":
-        return fund_profile_path(agent_home, report_date).exists()
-    if script_name == "score_funds.py":
-        return score_path(agent_home, report_date).exists()
-    if script_name == "build_daily_report.py":
-        return is_up_to_date(report_path(agent_home, report_date), validated_advice_path(agent_home, report_date))
-    if script_name == "fetch_intraday_proxies.py":
-        return intraday_proxy_path(agent_home, report_date).exists()
-    if script_name == "fetch_realtime_estimate.py":
-        return estimated_nav_path(agent_home, report_date).exists()
-    if script_name == "build_llm_context.py":
-        return llm_context_path(agent_home, report_date).exists()
-    if script_name == "build_evidence_index.py":
-        return evidence_index_path(agent_home, report_date).exists()
-    if script_name == "build_source_health_snapshot.py":
-        return source_health_path(agent_home, report_date).exists()
-    if script_name == "run_learning_cycle.py":
-        return learning_report_path(agent_home, report_date).exists()
-    if script_name == "run_multiagent_research.py":
-        aggregate = agent_output_dir(agent_home, report_date) / "aggregate.json"
-        return aggregate.exists()
-    if script_name == "generate_llm_advice.py":
-        aggregate = agent_output_dir(agent_home, report_date) / "aggregate.json"
-        return is_up_to_date(llm_advice_path(agent_home, report_date), aggregate) and is_up_to_date(committee_advice_path(agent_home, report_date), aggregate)
-    if script_name == "validate_llm_advice.py":
-        return is_up_to_date(validated_advice_path(agent_home, report_date), llm_advice_path(agent_home, report_date))
-    if script_name == "build_recommendation_delta.py":
-        return recommendation_delta_path(agent_home, report_date).exists()
-    if script_name == "build_evaluation_snapshot.py":
-        return evaluation_snapshot_path(agent_home, report_date).exists()
-    if script_name == "build_portfolio_report.py":
-        return is_up_to_date(portfolio_report_path(agent_home, report_date), validated_advice_path(agent_home, report_date))
-    return False
+
+def _aggregate_path(agent_home: Path, report_date: str) -> Path:
+    return agent_output_dir(agent_home, report_date) / "aggregate.json"
+
+
+def _simple_output_exists(path_builder):
+    return lambda agent_home, report_date: path_builder(agent_home, report_date).exists()
+
+
+STEP_OUTPUT_CHECKS = {
+    "fetch_fund_quotes.py": _simple_output_exists(quote_path),
+    "fetch_fund_news.py": _simple_output_exists(news_path),
+    "fetch_fund_profiles.py": _simple_output_exists(fund_profile_path),
+    "score_funds.py": _simple_output_exists(score_path),
+    "fetch_intraday_proxies.py": _simple_output_exists(intraday_proxy_path),
+    "fetch_realtime_estimate.py": _simple_output_exists(estimated_nav_path),
+    "build_llm_context.py": _simple_output_exists(llm_context_path),
+    "build_evidence_index.py": _simple_output_exists(evidence_index_path),
+    "build_source_health_snapshot.py": _simple_output_exists(source_health_path),
+    "run_learning_cycle.py": _simple_output_exists(learning_report_path),
+    "run_multiagent_research.py": lambda agent_home, report_date: _aggregate_path(agent_home, report_date).exists(),
+    "build_recommendation_delta.py": _simple_output_exists(recommendation_delta_path),
+    "build_evaluation_snapshot.py": _simple_output_exists(evaluation_snapshot_path),
+    "build_daily_report.py": lambda agent_home, report_date: _is_up_to_date(report_path(agent_home, report_date), validated_advice_path(agent_home, report_date)),
+    "generate_llm_advice.py": lambda agent_home, report_date: _is_up_to_date(llm_advice_path(agent_home, report_date), _aggregate_path(agent_home, report_date))
+    and _is_up_to_date(committee_advice_path(agent_home, report_date), _aggregate_path(agent_home, report_date)),
+    "validate_llm_advice.py": lambda agent_home, report_date: _is_up_to_date(validated_advice_path(agent_home, report_date), llm_advice_path(agent_home, report_date)),
+    "build_portfolio_report.py": lambda agent_home, report_date: _is_up_to_date(portfolio_report_path(agent_home, report_date), validated_advice_path(agent_home, report_date)),
+}
+
+
+def step_output_exists(agent_home: Path, report_date: str, script_name: str, extra_args: list[str] | None = None) -> bool:
+    checker = STEP_OUTPUT_CHECKS.get(script_name)
+    return bool(checker and checker(agent_home, report_date))
 
 
 def run_step(

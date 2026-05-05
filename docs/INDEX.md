@@ -3,8 +3,8 @@
 ## 核心文档
 
 - 说明
-  - 当前桌面端已统一为 `PySide6 / Qt` 单栈
-  - 部分历史规划文档仍会提到 `app/desktop_shell.py`、`app/views/`、`app/theme.py`、`app/widgets.py`
+  - 当前桌面端主路径是 `React + Tauri` 工作台，后端入口是 `app/web_api.py`
+  - 部分历史规划文档仍会提到 `PySide6 / Qt`、`app/desktop_shell.py`、`app/views/`、`app/theme.py`、`app/widgets.py`
   - 这些引用应视为历史上下文，不代表当前主代码路径
 - `README.md`
   - 项目概览、目录结构与关键入口

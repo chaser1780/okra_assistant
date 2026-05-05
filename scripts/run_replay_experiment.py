@@ -18,6 +18,7 @@ from common import (
     validated_advice_path,
 )
 from learning_memory import apply_replay_summary_to_ledger
+from long_memory_store import stable_memory_id, sync_legacy_review_memory, upsert_memory_record
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
 from validate_llm_advice import build_validated_payload
 from decision_ledger import load_decisions
@@ -492,6 +493,41 @@ def main() -> None:
 
     if args.write_learning:
         ledger, memory = apply_replay_summary_to_ledger(agent_home, summary)
+        for impact in summary.get("learning_impacts", []) or []:
+            label = str(impact.get("rule_label", "") or "")
+            if not label:
+                continue
+            title = f"Replay impact: {label}"
+            support = int(impact.get("support_count", 0) or 0)
+            contradiction = int(impact.get("contradiction_count", 0) or 0)
+            upsert_memory_record(
+                agent_home,
+                {
+                    "memory_id": stable_memory_id("portfolio", label, title, "portfolio_policy_memory"),
+                    "memory_type": "portfolio_policy_memory",
+                    "domain": "portfolio",
+                    "entity_key": label,
+                    "title": title,
+                    "text": (
+                        f"Replay {summary.get('experiment_id', '')} tested rule label {label}: "
+                        f"support={support}, contradiction={contradiction}, edge_delta={impact.get('total_edge_delta', 0.0)}."
+                    ),
+                    "status": "strategic",
+                    "confidence": min(0.9, 0.55 + support * 0.04 - contradiction * 0.03),
+                    "support_count": support,
+                    "contradiction_count": contradiction,
+                    "last_supported_at": str(summary.get("generated_at", "") or "")[:10],
+                    "source": "replay_experiment",
+                    "metadata": {
+                        "experiment_id": summary.get("experiment_id", ""),
+                        "mode": summary.get("mode", ""),
+                        "fund_codes": impact.get("fund_codes", []),
+                        "tags": [label, "replay"],
+                    },
+                    "evidence_refs": [{"kind": "replay_summary", "path": str(target_dir / "summary.json"), "date": str(summary.get("generated_at", "") or "")[:10]}],
+                },
+            )
+        sync_legacy_review_memory(agent_home)
         summary["learning_update"] = {
             "applied": True,
             "ledger_summary": ledger.get("summary", {}),
