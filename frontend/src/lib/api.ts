@@ -1,4 +1,4 @@
-import type { CopilotRequest, FundDetailPayload, MemoryAction, Snapshot } from "./types";
+import type { CopilotRequest, ExecutionSyncPayload, FundDetailPayload, MemoryAction, Snapshot } from "./types";
 
 const API_BASE = import.meta.env.VITE_OKRA_API_BASE ?? "http://127.0.0.1:8765";
 
@@ -32,6 +32,34 @@ export function getFundDetail(fundCode: string, date?: string, range = "成立�
 
 export function runTask(kind: "daily" | "realtime", options: { force?: boolean } = {}): Promise<{ ok: boolean; pid: number; task: string; runDate: string; force?: boolean }> {
   return request(`/api/run/${kind}`, { method: "POST", body: JSON.stringify(options) });
+}
+
+export function getExecutionSync(): Promise<ExecutionSyncPayload> {
+  return request("/api/execution-sync");
+}
+
+export function recordExecutionTrade(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/trade", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function recordExecutionConversion(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/conversion", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function parseAlipayScreenshots(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/alipay-screenshot/parse", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function previewExecutionReconcile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/reconcile/preview", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function applyExecutionReconcile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/reconcile/apply", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateExecutionConfirmations(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  return request("/api/execution-sync/confirmation/update", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export function runLongMemoryAction(

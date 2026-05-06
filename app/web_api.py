@@ -18,6 +18,15 @@ for path in (SCRIPTS_DIR, APP_DIR):
 
 from common import timestamp_now
 from copilot_service import call_copilot_llm, local_copilot_answer
+from execution_sync import (
+    apply_reconciliation,
+    build_execution_sync_payload,
+    parse_alipay_screenshot_upload,
+    preview_reconciliation,
+    record_actual_trade,
+    record_conversion,
+    update_pending_confirmations,
+)
 from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_records
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
 from web_api_format import action_text as _action_text
@@ -66,6 +75,7 @@ class OkraWebApi:
             "realtime": _to_jsonable(realtime),
             "review": _to_jsonable(review),
             "longMemory": self._long_memory_payload(),
+            "executionSync": _to_jsonable(build_execution_sync_payload(self.home)),
             "dailyFirstOpen": {
                 "decision": state.get("daily_first_open", {}) or {},
                 "analysis": state.get("daily_first_open_analysis", {}) or {},
@@ -156,6 +166,33 @@ class OkraWebApi:
             raise ValueError("memoryId is required")
         result = approve_memory(self.home, memory_id, action=action, note=note)
         return {"ok": True, "record": _to_jsonable(result)}
+
+    def execution_sync_payload(self) -> dict:
+        return _to_jsonable(build_execution_sync_payload(self.home))
+
+    def execution_trade(self, payload: dict) -> dict:
+        return _to_jsonable(record_actual_trade(self.home, payload))
+
+    def execution_conversion(self, payload: dict) -> dict:
+        return _to_jsonable(record_conversion(self.home, payload))
+
+    def execution_screenshot_parse(self, payload: dict) -> dict:
+        return _to_jsonable(parse_alipay_screenshot_upload(self.home, payload))
+
+    def execution_reconcile_preview(self, payload: dict) -> dict:
+        items = payload.get("items", []) or payload.get("positions", []) or []
+        snapshot_date = str(payload.get("snapshotDate") or payload.get("snapshot_date") or today_str())
+        source = str(payload.get("source") or "manual_position_snapshot")
+        return _to_jsonable(preview_reconciliation(self.home, items, snapshot_date=snapshot_date, source=source))
+
+    def execution_reconcile_apply(self, payload: dict) -> dict:
+        preview = payload.get("preview") or payload
+        drop_missing = bool(payload.get("dropMissing") or payload.get("drop_missing"))
+        return _to_jsonable(apply_reconciliation(self.home, preview, drop_missing=drop_missing))
+
+    def execution_confirmation_update(self, payload: dict) -> dict:
+        as_of = str(payload.get("date") or payload.get("asOf") or "") or None
+        return _to_jsonable(update_pending_confirmations(self.home, as_of))
 
     def explain(self, payload: dict) -> dict:
         context = str(payload.get("context", "当前页面") or "当前页面")
@@ -411,6 +448,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 selected = (query.get("date") or [""])[0] or None
                 range_label = (query.get("range") or ["成立以来"])[0] or "成立以来"
                 self._send_json(self.api.fund_detail(fund_code, selected, range_label))
+            elif parsed.path == "/api/execution-sync":
+                self._send_json(self.api.execution_sync_payload())
             else:
                 self._send_json({"error": "未找到"}, 404)
         except Exception as exc:
@@ -431,6 +470,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.api.explain(payload))
             elif parsed.path == "/api/long-memory/action":
                 self._send_json(self.api.long_memory_action(payload))
+            elif parsed.path == "/api/execution-sync/trade":
+                self._send_json(self.api.execution_trade(payload))
+            elif parsed.path == "/api/execution-sync/conversion":
+                self._send_json(self.api.execution_conversion(payload))
+            elif parsed.path == "/api/execution-sync/alipay-screenshot/parse":
+                self._send_json(self.api.execution_screenshot_parse(payload))
+            elif parsed.path == "/api/execution-sync/reconcile/preview":
+                self._send_json(self.api.execution_reconcile_preview(payload))
+            elif parsed.path == "/api/execution-sync/reconcile/apply":
+                self._send_json(self.api.execution_reconcile_apply(payload))
+            elif parsed.path == "/api/execution-sync/confirmation/update":
+                self._send_json(self.api.execution_confirmation_update(payload))
             else:
                 self._send_json({"error": "未找到"}, 404)
         except Exception as exc:

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from common import daily_workspace_dir, dump_json, ensure_layout, load_json, resolve_agent_home, resolve_date, timestamp_now
+from execution_sync import build_execution_sync_payload, update_pending_confirmations
 from long_memory_store import list_memory_records, update_all_long_memory
 from preflight_check import perform_preflight
 from run_daily_pipeline import due_review_jobs
@@ -163,6 +164,11 @@ def main() -> None:
     print(f">>> FIRST_OPEN_START date={report_date}", flush=True)
     preflight = perform_preflight(agent_home, scope="desktop", probe_llm=not args.demo)
     dump_json(workspace / "preflight.json", preflight)
+
+    print(">>> FIRST_OPEN execution_sync_check", flush=True)
+    confirmation_updates = update_pending_confirmations(agent_home, report_date)
+    execution_sync = build_execution_sync_payload(agent_home)
+    dump_json(workspace / "execution_sync.json", {"confirmation_updates": confirmation_updates, "execution_sync": execution_sync})
 
     print(">>> FIRST_OPEN sync_state", flush=True)
     sync_state = _run_script(agent_home, "run_daily_pipeline.py", "--date", report_date, "--mode", "intraday", *(["--demo", "--llm-mock"] if args.demo else []), allow_fail=args.demo)

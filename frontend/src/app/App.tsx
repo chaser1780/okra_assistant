@@ -5,6 +5,7 @@ import type { MemoryAction, Snapshot } from "../lib/types";
 import { WorkbenchLayout, type PageKey } from "../components/okra/WorkbenchLayout";
 import { Button, EmptyState } from "../components/ui";
 
+const ExecutionPage = lazy(() => import("./pages/ExecutionPage").then((module) => ({ default: module.ExecutionPage })));
 const FundDetailPage = lazy(() => import("./pages/FundDetailPage").then((module) => ({ default: module.FundDetailPage })));
 const PortfolioPage = lazy(() => import("./pages/PortfolioPage").then((module) => ({ default: module.PortfolioPage })));
 const RealtimePage = lazy(() => import("./pages/RealtimePage").then((module) => ({ default: module.RealtimePage })));
@@ -110,6 +111,7 @@ export function App() {
     <>
       {page === "today" && <TodayPage snapshot={snapshot} />}
       {page === "portfolio" && <PortfolioPage portfolio={snapshot.portfolio} onOpenFundDetail={(code) => openFundDetail(code, "portfolio")} />}
+      {page === "execution" && <ExecutionPage executionSync={snapshot.executionSync} portfolio={snapshot.portfolio} onRefresh={() => void load(selectedDate)} />}
       {page === "research" && <ResearchPage research={snapshot.research} />}
       {page === "realtime" && <RealtimePage realtime={snapshot.realtime} onOpenFundDetail={(code) => openFundDetail(code, "realtime")} />}
       {page === "review" && <ReviewPage review={snapshot.review} longMemory={snapshot.longMemory} onMemoryAction={handleMemoryAction} />}

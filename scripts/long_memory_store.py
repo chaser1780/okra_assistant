@@ -769,6 +769,7 @@ def build_market_memory(agent_home: Path, *, write: bool = True) -> dict[str, An
 def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str, Any]:
     init_long_memory(agent_home)
     trade_dir = agent_home / "db" / "trade_journal"
+    actual_trade_dir = agent_home / "db" / "execution_sync" / "actual_trades"
     review_dir = agent_home / "db" / "execution_reviews"
     definition_path = agent_home / "config" / "portfolio_definition.json"
     constraints_meta = load_json(definition_path) if definition_path.exists() else {}
@@ -791,6 +792,39 @@ def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str,
                     "source_path": str(path),
                 }
                 cases.append(case)
+    if actual_trade_dir.exists():
+        for path in sorted(actual_trade_dir.glob("*.json")):
+            payload = load_json(path)
+            if not isinstance(payload, dict):
+                continue
+            for item in payload.get("items", []) or []:
+                if item.get("operation_type") == "convert":
+                    case = {
+                        "trade_date": path.stem,
+                        "fund_code": item.get("out_fund_code", ""),
+                        "fund_name": item.get("out_fund_name", ""),
+                        "action": "convert",
+                        "amount": item.get("out_amount", 0.0),
+                        "suggestion_id": item.get("linked_suggestion_id", ""),
+                        "note": item.get("user_note", ""),
+                        "source_path": str(path),
+                        "conversion_id": item.get("conversion_id", ""),
+                        "execution_deviation": item.get("execution_deviation", {}),
+                    }
+                else:
+                    case = {
+                        "trade_date": path.stem,
+                        "fund_code": item.get("fund_code", ""),
+                        "fund_name": item.get("fund_name", ""),
+                        "action": item.get("operation_type", ""),
+                        "amount": item.get("amount", 0.0),
+                        "suggestion_id": item.get("linked_suggestion_id", ""),
+                        "note": item.get("user_note", ""),
+                        "source_path": str(path),
+                        "trade_id": item.get("trade_id", ""),
+                        "execution_deviation": item.get("execution_deviation", {}),
+                    }
+                cases.append(case)
     if review_dir.exists():
         for path in sorted(review_dir.glob("*.json")):
             payload = load_json(path)
@@ -812,11 +846,20 @@ def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str,
                     rules[key]["codes"].add(str(item.get("fund_code", "")))
     if not rules and cases:
         rules["manual_trade_deviation_tracking"] = {"support": len(cases), "contra": 0, "refs": [{"kind": "trade_journal", "path": item["source_path"], "date": item["trade_date"]} for item in cases[-8:]], "codes": {str(item.get("fund_code", "")) for item in cases}}
+    if any(item.get("action") == "convert" for item in cases):
+        convert_cases = [item for item in cases if item.get("action") == "convert"]
+        rules["conversion_requires_grouped_tracking"] = {
+            "support": len(convert_cases),
+            "contra": 0,
+            "refs": [{"kind": "actual_conversion", "path": item["source_path"], "date": item["trade_date"]} for item in convert_cases[-8:]],
+            "codes": {str(item.get("fund_code", "")) for item in convert_cases},
+        }
     items = []
     templates = {
         "qdii_confirmation_lag_check": "Check confirmation lag before QDII or delayed-confirmation buys; split or defer weak-window scheduled entries.",
         "redeem_fee_requires_edge_check": "Do not reduce positions unless expected edge survives redemption fee and settlement friction.",
         "manual_trade_deviation_tracking": "Track actual trades separately from system advice so execution drift does not contaminate advice accuracy.",
+        "conversion_requires_grouped_tracking": "Track fund conversions as one grouped execution record so switch timing, fees, and confirmation dates stay linked.",
     }
     for key, stat in rules.items():
         title = key.replace("_", " ").title()

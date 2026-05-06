@@ -158,6 +158,20 @@ export type DailyFirstOpenPayload = {
   brief: string;
 };
 
+export type ExecutionSyncPayload = {
+  updatedAt: string;
+  pending: Record<string, unknown>[];
+  trades: Record<string, unknown>[];
+  deviations: Record<string, unknown>[];
+  reconciliationReports: Record<string, unknown>[];
+  counts: {
+    pending?: number;
+    trades?: number;
+    deviations?: number;
+    reports?: number;
+  };
+};
+
 export type Snapshot = {
   selectedDate: string;
   dates: string[];
@@ -168,6 +182,7 @@ export type Snapshot = {
   realtime: RealtimePayload;
   review: ReviewPayload;
   longMemory: LongMemoryPayload;
+  executionSync: ExecutionSyncPayload;
   dailyFirstOpen: DailyFirstOpenPayload;
   system: Record<string, unknown>;
 };

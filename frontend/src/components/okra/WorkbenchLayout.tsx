@@ -1,13 +1,14 @@
-import { Activity, BarChart3, BrainCircuit, Gauge, Settings, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, Gauge, ReceiptText, Settings, WalletCards } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../ui";
 import { CopilotPanel } from "./CopilotPanel";
 
-export type PageKey = "today" | "portfolio" | "research" | "realtime" | "review" | "system" | "fundDetail";
+export type PageKey = "today" | "portfolio" | "execution" | "research" | "realtime" | "review" | "system" | "fundDetail";
 
 const nav = [
   { key: "today", label: "今日", icon: Gauge },
   { key: "portfolio", label: "持仓", icon: WalletCards },
+  { key: "execution", label: "实际操作", icon: ReceiptText },
   { key: "research", label: "研究", icon: BarChart3 },
   { key: "realtime", label: "实时", icon: Activity },
   { key: "review", label: "记忆", icon: BrainCircuit },
