@@ -1,8 +1,9 @@
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { LongMemoryRecord, Snapshot } from "../../lib/types";
+import type { LongMemoryRecord, TodayPagePayload } from "../../lib/types";
 import { lines, text } from "../../lib/format";
 import { Badge, Card, MetricCard, SectionTitle } from "../../components/ui";
-import { memoryText, memoryTitle, statusLabel } from "../../lib/display";
+import { memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
+import { getTodayAnalysis, getTodayAnalysisSystem, pickAnalysisValue } from "../../lib/todayAnalysis";
 
 const trend = [
   { day: "周一", value: 98 },
@@ -13,7 +14,7 @@ const trend = [
 ];
 
 const toneLabels: Record<string, string> = {
-  neutral: "待观察",
+  neutral: "观察",
   accent: "重点",
   success: "正常",
   warning: "谨慎",
@@ -24,34 +25,56 @@ const toneLabels: Record<string, string> = {
   amber: "提醒"
 };
 
-export function TodayPage({ snapshot }: { snapshot: Snapshot }) {
+export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
   const metrics = snapshot.dashboard.metrics;
   const main = metrics[0];
-  const firstOpen = snapshot.dailyFirstOpen;
+  const todayAnalysis = getTodayAnalysis(snapshot);
+  const todayAnalysisSystem = getTodayAnalysisSystem(snapshot.system);
   const keyMemories = [
     ...snapshot.longMemory.fund.slice(0, 2),
     ...snapshot.longMemory.market.slice(0, 2),
     ...snapshot.longMemory.execution.slice(0, 2),
     ...snapshot.longMemory.portfolio.slice(0, 2)
   ].slice(0, 6);
-  const decision = firstOpen.decision;
-  const analysis = firstOpen.analysis;
-  const updates = firstOpen.updates;
+  const decision = (todayAnalysis?.decision ?? {}) as Record<string, unknown>;
+  const analysis = (todayAnalysis?.analysis ?? {}) as Record<string, unknown>;
+  const meta = (todayAnalysis?.meta ?? todayAnalysis?.updates ?? {}) as Record<string, unknown>;
   const prohibited = extractStringList(decision, ["prohibited_actions", "forbidden_actions", "avoid_actions"]);
   const allowed = extractStringList(decision, ["allowed_actions", "allowed_conditions", "watchlist"]);
-  const briefLines = lines(firstOpen.brief || snapshot.dashboard.summary_text, "今日首启分析尚未生成，可点击左侧“首启分析”运行。");
+  const briefLines = lines(todayAnalysis?.brief || snapshot.dashboard.summary_text, "今日分析尚未生成，可点击左侧“今日分析”运行。");
+  const runStatus = pickAnalysisValue(todayAnalysis?.runStatus, analysis?.run_status, analysis?.status, meta?.run_status, todayAnalysisSystem?.runStatus);
+  const analysisQuality = pickAnalysisValue(
+    todayAnalysis?.analysisQuality,
+    analysis?.analysis_quality,
+    meta?.analysis_quality,
+    todayAnalysisSystem?.analysisQuality
+  );
+  const memoryEligible = pickAnalysisValue(
+    todayAnalysis?.memoryEligible,
+    analysis?.memory_eligible,
+    meta?.memory_eligible,
+    todayAnalysisSystem?.memoryEligible
+  );
+  const syncState = pickAnalysisValue(analysis?.sync_state, meta?.sync_state, analysis?.context_available);
+  const memoryUpdateState = pickAnalysisValue(
+    meta?.status,
+    meta?.summary,
+    (analysis?.memory_cycle as Record<string, unknown> | undefined)?.status,
+    (analysis?.memory_cycle as Record<string, unknown> | undefined)?.summary,
+    todayAnalysisSystem?.memoryCycleSummary
+  );
 
   return (
     <div className="space-y-4">
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-6 min-h-[246px] p-5">
           <div className="flex items-center justify-between">
-            <div className="text-xs font-black text-cyan-300">每日首启决策</div>
+            <div className="text-xs font-black text-cyan-300">今日分析决策</div>
             <Badge tone={main?.tone ?? "accent"}>{toneLabels[main?.tone ?? "accent"] ?? "就绪"}</Badge>
           </div>
           <div className="mt-8 text-4xl font-black text-slate-50">{main?.value ?? "暂无主动作"}</div>
           <div className="mt-3 text-sm font-semibold text-slate-300">{main?.title ?? "今日判断"}</div>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-400">{main?.body ?? "暂无需要立即执行的动作。"}</p>
+          <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-400">{main?.body ?? "暂无需要立刻执行的动作。"}</p>
         </Card>
         <div className="col-span-6 grid grid-cols-3 gap-4">
           {metrics.slice(1, 4).map((metric) => (
@@ -62,7 +85,7 @@ export function TodayPage({ snapshot }: { snapshot: Snapshot }) {
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-4 p-4">
-          <SectionTitle title="首启链路" meta={snapshot.selectedDate} />
+          <SectionTitle title="今日分析链路" meta={snapshot.selectedDate} />
           <div className="grid grid-cols-2 gap-3">
             <MiniStat label="记忆总数" value={String(snapshot.longMemory.counts.total ?? 0)} />
             <MiniStat label="待确认" value={String(snapshot.longMemory.counts.pending ?? 0)} tone="warning" />
@@ -70,8 +93,11 @@ export function TodayPage({ snapshot }: { snapshot: Snapshot }) {
             <MiniStat label="执行纪律" value={String(snapshot.longMemory.counts.execution ?? 0)} tone="success" />
           </div>
           <div className="mt-4 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs leading-6 text-slate-400">
-            <div>数据同步：{text(analysis.sync_state ?? updates.sync_state, "未记录")}</div>
-            <div>记忆更新：{text(updates.status ?? updates.summary ?? "已接入本地长期记忆")}</div>
+            <div>运行状态：{text(runStatus !== undefined ? valueLabel(runStatus) : undefined, "暂无")}</div>
+            <div>分析质量：{text(analysisQuality !== undefined ? valueLabel(analysisQuality) : undefined, "暂无")}</div>
+            <div>可入记忆：{text(memoryEligible !== undefined ? valueLabel(memoryEligible) : undefined, "暂无")}</div>
+            <div>数据同步：{text(syncState, "未记录")}</div>
+            <div>记忆更新：{text(memoryUpdateState, "已接入本地长期记忆")}</div>
           </div>
         </Card>
 
@@ -117,20 +143,16 @@ export function TodayPage({ snapshot }: { snapshot: Snapshot }) {
         </Card>
 
         <Card className="col-span-4 p-4">
-          <SectionTitle title="关键长期记忆" meta={`${keyMemories.length} 条注入候选`} />
+          <SectionTitle title="关键长期记忆" meta={`${keyMemories.length} 条候选`} />
           <div className="space-y-2">
-            {keyMemories.length ? (
-              keyMemories.map((item) => <MemoryLine key={item.memory_id} item={item} />)
-            ) : (
-              <p className="text-sm text-slate-500">暂无可展示的长期记忆。</p>
-            )}
+            {keyMemories.length ? keyMemories.map((item) => <MemoryLine key={item.memory_id} item={item} />) : <p className="text-sm text-slate-500">暂无可展示的长期记忆。</p>}
           </div>
         </Card>
       </section>
 
       <section className="grid grid-cols-2 gap-4">
         <Card className="p-4">
-          <SectionTitle title="首启摘要" meta="daily_brief.md" />
+          <SectionTitle title="今日摘要" meta="today_analysis_brief" />
           <ul className="space-y-2 text-sm leading-6 text-slate-400">
             {briefLines.slice(0, 10).map((item) => (
               <li key={item}>{item}</li>

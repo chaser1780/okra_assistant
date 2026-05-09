@@ -170,10 +170,13 @@ class MemoryRecord(TypedDict, total=False):
     memory_id: str
     memory_type: str
     scope: str
+    horizon_bucket: str
     entity_keys: list[str]
     text: str
     provenance: dict[str, Any]
     base_date: str
+    valid_from: str
+    valid_until: str
     expires_on: str
     promotion_level: str
     approved_by: str
@@ -182,6 +185,9 @@ class MemoryRecord(TypedDict, total=False):
     applies_to: str
     reason: str
     source: str
+    source_analysis_run_id: str
+    source_analysis_quality: str
+    source_agent: str
 
 
 class PortfolioFund(TypedDict, total=False):
@@ -446,6 +452,43 @@ class FinalAdvice(TypedDict, total=False):
     cross_fund_observations: list[str]
 
 
+class CommitteeBundleFundDecision(TypedDict, total=False):
+    fund_code: str
+    fund_name: str
+    role: str
+    proposed_action: str
+    size_bucket: str
+    suggest_amount: float
+    confidence: float
+    thesis: str
+    supporting_signal_ids: list[str]
+    opposing_signal_ids: list[str]
+    decision_card_ids: list[str]
+    risk_veto: bool
+    risk_decision: str
+    constraint_notes: list[str]
+    execution_eligible: bool
+
+
+class CommitteeDecisionBundle(TypedDict, total=False):
+    schema_version: int
+    report_date: str
+    generated_at: str
+    decision_mode: str
+    decision_source: str
+    degradation_mode: str
+    execution_eligible: bool
+    committee_confidence: str
+    manager_order: list[str]
+    fund_decisions: list[CommitteeBundleFundDecision]
+    market_view: dict[str, Any]
+    cross_fund_observations: list[str]
+    risk_vetoes: list[dict[str, Any]]
+    failed_agent_names: list[str]
+    degraded_agent_names: list[str]
+    notes: list[str]
+
+
 class RecommendationDelta(TypedDict, total=False):
     fund_code: str
     fund_name: str
@@ -503,6 +546,8 @@ class ValidatedAdvice(TypedDict, total=False):
     remaining_gross_trade_budget_after_validation: float
     remaining_net_buy_budget_after_validation: float
     cash_hub_available: float
+    immediately_available_cash: float
+    delayed_sell_proceeds: float
     market_view: dict[str, Any]
     cross_fund_observations: list[str]
     allocation_plan: dict[str, Any]
@@ -511,9 +556,13 @@ class ValidatedAdvice(TypedDict, total=False):
     advice_is_fallback: bool
     advice_is_mock: bool
     decision_source: str
+    decision_mode: str
+    degradation_mode: str
+    execution_eligible: bool
     narrative_mode: str
     transport_name: str
     failed_agents: list[dict[str, Any]]
+    committee_decision_bundle: CommitteeDecisionBundle
     optimization_summary: OptimizationSummary
     optimizer_candidates: list[dict[str, Any]]
     optimizer_best_combo_metrics: dict[str, Any]
@@ -587,4 +636,5 @@ class ReviewMemory(TypedDict, total=False):
     records: list[MemoryRecord]
     strategic_memory: list[MemoryRecord]
     permanent_memory: list[MemoryRecord]
+    core_permanent_memory: list[MemoryRecord]
     user_confirmed_memory: list[MemoryRecord]

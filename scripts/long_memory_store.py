@@ -8,16 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from common import (
+    actual_trade_dir,
     dump_json,
     ensure_layout,
+    has_portfolio_source,
+    long_memory_cycle_path,
     long_memory_db_path,
     long_memory_dir,
     long_memory_index_path,
     load_json,
+    load_long_memory_compat_view,
     load_portfolio,
-    load_review_memory,
-    review_memory_ledger_path,
-    review_memory_path,
+    legacy_review_memory_ledger_path,
     timestamp_now,
 )
 
@@ -53,6 +55,7 @@ def init_long_memory(agent_home: Path) -> None:
                 memory_id TEXT PRIMARY KEY,
                 memory_type TEXT NOT NULL,
                 domain TEXT NOT NULL,
+                horizon_bucket TEXT NOT NULL DEFAULT 'long_term',
                 entity_key TEXT NOT NULL,
                 title TEXT NOT NULL,
                 text TEXT NOT NULL,
@@ -66,6 +69,11 @@ def init_long_memory(agent_home: Path) -> None:
                 approved_by TEXT NOT NULL DEFAULT '',
                 approved_at TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL DEFAULT '',
+                valid_from TEXT NOT NULL DEFAULT '',
+                valid_until TEXT NOT NULL DEFAULT '',
+                source_analysis_run_id TEXT NOT NULL DEFAULT '',
+                source_analysis_quality TEXT NOT NULL DEFAULT '',
+                source_agent TEXT NOT NULL DEFAULT '',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 evidence_refs_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
@@ -101,7 +109,23 @@ def init_long_memory(agent_home: Path) -> None:
             "CREATE INDEX IF NOT EXISTS idx_memory_domain_entity ON memory_records(domain, entity_key)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_status ON memory_records(status)")
+        _ensure_memory_record_columns(conn)
     init_search_index(agent_home)
+
+
+def _ensure_memory_record_columns(conn: sqlite3.Connection) -> None:
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(memory_records)").fetchall()}
+    additions = {
+        "horizon_bucket": "ALTER TABLE memory_records ADD COLUMN horizon_bucket TEXT NOT NULL DEFAULT 'long_term'",
+        "valid_from": "ALTER TABLE memory_records ADD COLUMN valid_from TEXT NOT NULL DEFAULT ''",
+        "valid_until": "ALTER TABLE memory_records ADD COLUMN valid_until TEXT NOT NULL DEFAULT ''",
+        "source_analysis_run_id": "ALTER TABLE memory_records ADD COLUMN source_analysis_run_id TEXT NOT NULL DEFAULT ''",
+        "source_analysis_quality": "ALTER TABLE memory_records ADD COLUMN source_analysis_quality TEXT NOT NULL DEFAULT ''",
+        "source_agent": "ALTER TABLE memory_records ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''",
+    }
+    for name, ddl in additions.items():
+        if name not in existing:
+            conn.execute(ddl)
 
 
 def init_search_index(agent_home: Path) -> None:
@@ -205,6 +229,7 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
         "memory_id": memory_id,
         "memory_type": str(record.get("memory_type", "semantic") or "semantic"),
         "domain": str(record.get("domain", "") or ""),
+        "horizon_bucket": str(record.get("horizon_bucket", "long_term") or "long_term"),
         "entity_key": str(record.get("entity_key", "") or ""),
         "title": str(record.get("title", "") or ""),
         "text": str(record.get("text", "") or ""),
@@ -218,6 +243,11 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
         "approved_by": approved_by if status == "permanent" else "",
         "approved_at": approved_at if status == "permanent" else "",
         "source": str(record.get("source", "") or ""),
+        "valid_from": str(record.get("valid_from", "") or ""),
+        "valid_until": str(record.get("valid_until", "") or ""),
+        "source_analysis_run_id": str(record.get("source_analysis_run_id", "") or ""),
+        "source_analysis_quality": str(record.get("source_analysis_quality", "") or ""),
+        "source_agent": str(record.get("source_agent", "") or ""),
         "metadata": dict(record.get("metadata", {}) or {}),
         "evidence_refs": list(record.get("evidence_refs", []) or []),
         "created_at": str(record.get("created_at", "") or now),
@@ -235,13 +265,15 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
         conn.execute(
             """
             INSERT INTO memory_records (
-                memory_id, memory_type, domain, entity_key, title, text, status, priority,
+                memory_id, memory_type, domain, horizon_bucket, entity_key, title, text, status, priority,
                 confidence, support_count, contradiction_count, last_supported_at, last_contradicted_at,
-                approved_by, approved_at, source, metadata_json, evidence_refs_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                approved_by, approved_at, source, valid_from, valid_until, source_analysis_run_id,
+                source_analysis_quality, source_agent, metadata_json, evidence_refs_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(memory_id) DO UPDATE SET
                 memory_type=excluded.memory_type,
                 domain=excluded.domain,
+                horizon_bucket=excluded.horizon_bucket,
                 entity_key=excluded.entity_key,
                 title=excluded.title,
                 text=excluded.text,
@@ -255,6 +287,11 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
                 approved_by=excluded.approved_by,
                 approved_at=excluded.approved_at,
                 source=excluded.source,
+                valid_from=excluded.valid_from,
+                valid_until=excluded.valid_until,
+                source_analysis_run_id=excluded.source_analysis_run_id,
+                source_analysis_quality=excluded.source_analysis_quality,
+                source_agent=excluded.source_agent,
                 metadata_json=excluded.metadata_json,
                 evidence_refs_json=excluded.evidence_refs_json,
                 updated_at=excluded.updated_at
@@ -263,6 +300,7 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
                 normalized["memory_id"],
                 normalized["memory_type"],
                 normalized["domain"],
+                normalized["horizon_bucket"],
                 normalized["entity_key"],
                 normalized["title"],
                 normalized["text"],
@@ -276,6 +314,11 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
                 normalized["approved_by"],
                 normalized["approved_at"],
                 normalized["source"],
+                normalized["valid_from"],
+                normalized["valid_until"],
+                normalized["source_analysis_run_id"],
+                normalized["source_analysis_quality"],
+                normalized["source_agent"],
                 _json_dumps(normalized["metadata"]),
                 _json_dumps(normalized["evidence_refs"]),
                 normalized["created_at"],
@@ -457,7 +500,6 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
         sync_search_index(agent_home, previous)
     append_approval_mirror(agent_home, {"approval_id": approval_id, "memory_id": memory_id, "action": action, "note": note, "actor": actor, "created_at": now})
     write_domain_mirrors(agent_home)
-    sync_legacy_review_memory(agent_home)
     return updated
 
 
@@ -488,46 +530,9 @@ def write_domain_mirrors(agent_home: Path) -> None:
     dump_json(base / "candidates" / "pending_permanent.json", {"updated_at": timestamp_now(), "items": candidates})
 
 
-def sync_legacy_review_memory(agent_home: Path) -> dict[str, Any]:
-    memory = load_review_memory(agent_home)
-    records = list_memory_records(agent_home, limit=5000)
-    permanent = []
-    strategic = []
-    for item in records:
-        legacy = {
-            "memory_id": item["memory_id"],
-            "memory_type": item.get("memory_type", "policy"),
-            "scope": "permanent_memory" if item.get("status") == "permanent" else "strategic_memory",
-            "entity_keys": [item.get("entity_key", ""), item.get("domain", "")],
-            "text": item.get("text", ""),
-            "provenance": {"source": "long_memory", "kind": item.get("memory_type", "")},
-            "base_date": item.get("last_supported_at", "") or item.get("created_at", "")[:10],
-            "expires_on": "",
-            "promotion_level": "promoted" if item.get("status") == "permanent" else "candidate",
-            "approved_by": item.get("approved_by", ""),
-            "confidence": item.get("confidence", 0.0),
-            "status": "active" if item.get("status") in ACTIVE_STATUSES else "inactive",
-            "applies_to": item.get("entity_key", ""),
-            "reason": item.get("title", ""),
-            "source": "long_memory",
-        }
-        if item.get("status") == "permanent":
-            permanent.append(legacy)
-        elif item.get("status") == "strategic":
-            strategic.append(legacy)
-    memory["permanent_memory"] = _dedupe_memory((memory.get("permanent_memory", []) or []) + permanent)
-    memory["strategic_memory"] = _dedupe_memory((memory.get("strategic_memory", []) or []) + strategic)[-240:]
-    memory["updated_at"] = timestamp_now()
-    return dump_json(review_memory_path(agent_home), memory)
-
-
-def _dedupe_memory(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: dict[str, dict[str, Any]] = {}
-    for item in items:
-        key = str(item.get("memory_id", "") or item.get("text", ""))
-        if key:
-            seen[key] = item
-    return list(seen.values())
+def write_long_memory_cycle(agent_home: Path, report_date: str, payload: dict[str, Any], *, status: str) -> Path:
+    target = long_memory_cycle_path(agent_home, report_date, status)
+    return dump_json(target, payload)
 
 
 def action_family(action: str) -> str:
@@ -557,7 +562,7 @@ def build_fund_memory(agent_home: Path, *, write: bool = True) -> dict[str, Any]
     init_long_memory(agent_home)
     review_dir = agent_home / "db" / "review_results"
     validated_dir = agent_home / "db" / "validated_advice"
-    portfolio = load_portfolio(agent_home) if (agent_home / "config" / "portfolio.json").exists() or (agent_home / "db" / "portfolio_state" / "current.json").exists() else {"funds": []}
+    portfolio = load_portfolio(agent_home) if has_portfolio_source(agent_home) else {"funds": []}
     names = {str(item.get("fund_code", "")): item.get("fund_name", "") for item in portfolio.get("funds", []) or []}
     stats: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "fund_code": "",
@@ -768,8 +773,7 @@ def build_market_memory(agent_home: Path, *, write: bool = True) -> dict[str, An
 
 def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str, Any]:
     init_long_memory(agent_home)
-    trade_dir = agent_home / "db" / "trade_journal"
-    actual_trade_dir = agent_home / "db" / "execution_sync" / "actual_trades"
+    trade_dir = actual_trade_dir(agent_home)
     review_dir = agent_home / "db" / "execution_reviews"
     definition_path = agent_home / "config" / "portfolio_definition.json"
     constraints_meta = load_json(definition_path) if definition_path.exists() else {}
@@ -777,23 +781,6 @@ def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str,
     rules: dict[str, dict[str, Any]] = {}
     if trade_dir.exists():
         for path in sorted(trade_dir.glob("*.json")):
-            payload = load_json(path)
-            if not isinstance(payload, dict):
-                continue
-            for item in payload.get("items", []) or []:
-                case = {
-                    "trade_date": path.stem,
-                    "fund_code": item.get("fund_code", ""),
-                    "fund_name": item.get("fund_name", ""),
-                    "action": item.get("action", ""),
-                    "amount": item.get("amount", 0.0),
-                    "suggestion_id": item.get("suggestion_id", ""),
-                    "note": item.get("note", ""),
-                    "source_path": str(path),
-                }
-                cases.append(case)
-    if actual_trade_dir.exists():
-        for path in sorted(actual_trade_dir.glob("*.json")):
             payload = load_json(path)
             if not isinstance(payload, dict):
                 continue
@@ -845,7 +832,7 @@ def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str,
                     rules[key]["refs"].append({"kind": "execution_review", "path": str(path), "date": payload.get("review_date", "")})
                     rules[key]["codes"].add(str(item.get("fund_code", "")))
     if not rules and cases:
-        rules["manual_trade_deviation_tracking"] = {"support": len(cases), "contra": 0, "refs": [{"kind": "trade_journal", "path": item["source_path"], "date": item["trade_date"]} for item in cases[-8:]], "codes": {str(item.get("fund_code", "")) for item in cases}}
+        rules["manual_trade_deviation_tracking"] = {"support": len(cases), "contra": 0, "refs": [{"kind": "actual_trade", "path": item["source_path"], "date": item["trade_date"]} for item in cases[-8:]], "codes": {str(item.get("fund_code", "")) for item in cases}}
     if any(item.get("action") == "convert" for item in cases):
         convert_cases = [item for item in cases if item.get("action") == "convert"]
         rules["conversion_requires_grouped_tracking"] = {
@@ -893,7 +880,7 @@ def build_execution_memory(agent_home: Path, *, write: bool = True) -> dict[str,
 def migrate_legacy_review_memory(agent_home: Path) -> dict[str, Any]:
     init_long_memory(agent_home)
     migrated = 0
-    ledger_path = review_memory_ledger_path(agent_home)
+    ledger_path = legacy_review_memory_ledger_path(agent_home)
     if ledger_path.exists():
         ledger = load_json(ledger_path)
         for rule in (ledger.get("rules", []) if isinstance(ledger, dict) else []):
@@ -931,7 +918,6 @@ def update_all_long_memory(agent_home: Path) -> dict[str, Any]:
     fund = build_fund_memory(agent_home)
     market = build_market_memory(agent_home)
     execution = build_execution_memory(agent_home)
-    sync_legacy_review_memory(agent_home)
     return {
         "updated_at": timestamp_now(),
         "migration": migration,

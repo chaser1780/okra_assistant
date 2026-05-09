@@ -21,6 +21,16 @@ def _bucket_pct_map(values: dict[str, float], total_value: float) -> dict[str, f
     return {key: round(max(0.0, value) / total_value * 100.0, 2) for key, value in values.items()}
 
 
+def _named_value_map(items: list[dict[str, Any]] | None = None, *, key_name: str = "name") -> dict[str, float]:
+    mapping: dict[str, float] = {}
+    for item in items or []:
+        name = str(item.get(key_name, "") or "").strip()
+        if not name:
+            continue
+        mapping[name] = float(item.get("value", 0.0) or 0.0)
+    return mapping
+
+
 def _action_direction(action: str) -> str:
     if action == "add":
         return "buy"
@@ -61,29 +71,50 @@ def _combo_metrics(
     selected: tuple[dict[str, Any], ...],
     *,
     current_bucket_values: dict[str, float],
+    current_theme_values: dict[str, float],
+    current_fund_values: dict[str, float],
+    current_company_values: dict[str, float],
     total_value: float,
 ) -> dict[str, Any]:
     gross_trade = 0.0
     net_buy = 0.0
     sell_proceeds = 0.0
     bucket_values = dict(current_bucket_values)
+    theme_values = dict(current_theme_values)
+    fund_values = dict(current_fund_values)
+    company_values = dict(current_company_values)
     for candidate in selected:
         action = str(candidate.get("action", "") or "")
         amount = float(candidate.get("amount", 0.0) or 0.0)
         bucket = str(candidate.get("strategy_bucket", "") or "")
+        theme_family = str(candidate.get("theme_family", "") or "unknown")
+        fund_code = str(candidate.get("fund_code", "") or "unknown")
+        company = str(candidate.get("management_company", "") or "unknown")
         gross_trade += amount
         if action == "add":
             net_buy += amount
             bucket_values[bucket] = bucket_values.get(bucket, 0.0) + amount
+            theme_values[theme_family] = theme_values.get(theme_family, 0.0) + amount
+            fund_values[fund_code] = fund_values.get(fund_code, 0.0) + amount
+            company_values[company] = company_values.get(company, 0.0) + amount
         elif action in {"reduce", "switch_out"}:
             sell_proceeds += amount
             bucket_values[bucket] = bucket_values.get(bucket, 0.0) - amount
+            theme_values[theme_family] = theme_values.get(theme_family, 0.0) - amount
+            fund_values[fund_code] = fund_values.get(fund_code, 0.0) - amount
+            company_values[company] = company_values.get(company, 0.0) - amount
     return {
         "gross_trade": round(gross_trade, 2),
         "net_buy": round(net_buy, 2),
         "sell_proceeds": round(sell_proceeds, 2),
         "bucket_values": bucket_values,
         "bucket_pct": _bucket_pct_map(bucket_values, total_value),
+        "theme_values": theme_values,
+        "theme_pct": _bucket_pct_map(theme_values, total_value),
+        "fund_values": fund_values,
+        "fund_pct": _bucket_pct_map(fund_values, total_value),
+        "company_values": company_values,
+        "company_pct": _bucket_pct_map(company_values, total_value),
     }
 
 
@@ -115,6 +146,51 @@ def _allocation_reasons(
             reasons.append(f"allocation_worsens_overweight:{bucket}")
         if current < lower - 1e-9 and new < current - 1e-9:
             reasons.append(f"allocation_worsens_underweight:{bucket}")
+    return reasons
+
+
+def _concentration_reasons(
+    *,
+    selected: tuple[dict[str, Any], ...],
+    current_theme_pct: dict[str, float],
+    new_theme_pct: dict[str, float],
+    current_fund_pct: dict[str, float],
+    new_fund_pct: dict[str, float],
+    current_company_pct: dict[str, float],
+    new_company_pct: dict[str, float],
+    max_single_theme_family_pct: float,
+    max_high_volatility_theme_pct: float,
+    top3_fund_limit_pct: float,
+    max_single_company_pct: float,
+) -> list[str]:
+    reasons: list[str] = []
+    high_vol_themes = {"growth_cluster", "energy_transition", "cyclical_resources", "global_growth"}
+    for candidate in selected:
+        if str(candidate.get("action", "") or "") != "add":
+            continue
+        theme = str(candidate.get("theme_family", "") or "unknown")
+        if current_theme_pct.get(theme, 0.0) > max_single_theme_family_pct + 1e-9 and new_theme_pct.get(theme, 0.0) > current_theme_pct.get(theme, 0.0) + 1e-9:
+            reasons.append(f"theme_family_worsens_overweight:{theme}")
+        if theme in high_vol_themes:
+            current_high_vol = round(sum(current_theme_pct.get(name, 0.0) for name in high_vol_themes), 2)
+            new_high_vol = round(sum(new_theme_pct.get(name, 0.0) for name in high_vol_themes), 2)
+            if current_high_vol > max_high_volatility_theme_pct + 1e-9 and new_high_vol > current_high_vol + 1e-9:
+                reasons.append("high_volatility_theme_worsens_overweight")
+        fund_code = str(candidate.get("fund_code", "") or "unknown")
+        if new_fund_pct.get(fund_code, 0.0) > current_fund_pct.get(fund_code, 0.0) + 1e-9:
+            new_top3_fund = sum(sorted((max(0.0, value) for value in new_fund_pct.values()), reverse=True)[:3])
+            current_top3_fund = sum(sorted((max(0.0, value) for value in current_fund_pct.values()), reverse=True)[:3])
+            if new_top3_fund > top3_fund_limit_pct + 1e-9:
+                reasons.append("top3_fund_limit")
+            if current_top3_fund > top3_fund_limit_pct + 1e-9 and new_top3_fund > current_top3_fund + 1e-9:
+                reasons.append("top3_fund_worsens_overweight")
+        company = str(candidate.get("management_company", "") or "unknown")
+        if company == "unknown":
+            continue
+        if new_company_pct.get(company, 0.0) > max_single_company_pct + 1e-9:
+            reasons.append(f"single_management_company_limit:{company}")
+        if current_company_pct.get(company, 0.0) > max_single_company_pct + 1e-9 and new_company_pct.get(company, 0.0) > current_company_pct.get(company, 0.0) + 1e-9:
+            reasons.append(f"management_company_worsens_overweight:{company}")
     return reasons
 
 
@@ -173,11 +249,19 @@ def optimize_portfolio_actions(
     candidates: list[dict[str, Any]],
     *,
     strategy_bucket_summary: list[dict[str, Any]],
+    current_theme_family_summary: list[dict[str, Any]],
+    current_fund_summary: list[dict[str, Any]],
+    current_management_company_summary: list[dict[str, Any]],
     current_bucket_pct: dict[str, float],
     target_bucket_pct: dict[str, float],
     rebalance_band_pct: float,
+    max_single_theme_family_pct: float,
+    max_high_volatility_theme_pct: float,
+    top3_fund_limit_pct: float,
+    max_single_management_company_pct: float,
     total_value: float,
     available_funding: float,
+    delayed_sell_proceeds: float,
     gross_trade_budget: float,
     net_buy_budget: float,
     max_actions: int,
@@ -189,6 +273,12 @@ def optimize_portfolio_actions(
         normalized_candidates.append(prepared)
 
     current_bucket_values = _bucket_value_map(strategy_bucket_summary)
+    current_theme_values = _named_value_map(current_theme_family_summary)
+    current_fund_values = _named_value_map(current_fund_summary)
+    current_company_values = _named_value_map(current_management_company_summary)
+    current_theme_pct = _bucket_pct_map(current_theme_values, total_value)
+    current_fund_pct = _bucket_pct_map(current_fund_values, total_value)
+    current_company_pct = _bucket_pct_map(current_company_values, total_value)
     search_space = 1
     for size in range(1, min(len(normalized_candidates), max_actions) + 1):
         search_space += len(list(combinations(normalized_candidates, size)))
@@ -203,20 +293,44 @@ def optimize_portfolio_actions(
 
     for size in range(1, min(len(normalized_candidates), max_actions) + 1):
         for selected in combinations(normalized_candidates, size):
-            metrics = _combo_metrics(selected, current_bucket_values=current_bucket_values, total_value=total_value)
+            metrics = _combo_metrics(
+                selected,
+                current_bucket_values=current_bucket_values,
+                current_theme_values=current_theme_values,
+                current_fund_values=current_fund_values,
+                current_company_values=current_company_values,
+                total_value=total_value,
+            )
             reasons: list[str] = []
             if metrics["gross_trade"] > gross_trade_budget + 1e-9:
                 reasons.append("gross_trade_budget")
             if metrics["net_buy"] > net_buy_budget + 1e-9:
                 reasons.append("net_buy_budget")
-            if metrics["net_buy"] > available_funding + metrics["sell_proceeds"] + 1e-9:
+            if metrics["net_buy"] > available_funding + 1e-9:
                 reasons.append("cash_funding")
+            if metrics["sell_proceeds"] > 0 and delayed_sell_proceeds > 0:
+                reasons.append("delayed_sell_proceeds")
             reasons.extend(
                 _allocation_reasons(
                     current_pct=current_bucket_pct,
                     new_pct=metrics["bucket_pct"],
                     target_pct=target_bucket_pct,
                     rebalance_band_pct=rebalance_band_pct,
+                )
+            )
+            reasons.extend(
+                _concentration_reasons(
+                    selected=selected,
+                    current_theme_pct=current_theme_pct,
+                    new_theme_pct=metrics["theme_pct"],
+                    current_fund_pct=current_fund_pct,
+                    new_fund_pct=metrics["fund_pct"],
+                    current_company_pct=current_company_pct,
+                    new_company_pct=metrics["company_pct"],
+                    max_single_theme_family_pct=max_single_theme_family_pct,
+                    max_high_volatility_theme_pct=max_high_volatility_theme_pct,
+                    top3_fund_limit_pct=top3_fund_limit_pct,
+                    max_single_company_pct=max_single_management_company_pct,
                 )
             )
             for candidate in selected:
@@ -251,10 +365,17 @@ def optimize_portfolio_actions(
         else:
             rejection_reasons[candidate_id] = ["dominated_by_higher_portfolio_objective"]
 
-    best_metrics = _combo_metrics(best_combo, current_bucket_values=current_bucket_values, total_value=total_value)
+    best_metrics = _combo_metrics(
+        best_combo,
+        current_bucket_values=current_bucket_values,
+        current_theme_values=current_theme_values,
+        current_fund_values=current_fund_values,
+        current_company_values=current_company_values,
+        total_value=total_value,
+    )
     remaining_gross = round(max(0.0, gross_trade_budget - best_metrics["gross_trade"]), 2)
     remaining_net_buy = round(max(0.0, net_buy_budget - best_metrics["net_buy"]), 2)
-    remaining_funding = round(max(0.0, available_funding + best_metrics["sell_proceeds"] - best_metrics["net_buy"]), 2)
+    remaining_funding = round(max(0.0, available_funding - best_metrics["net_buy"]), 2)
     diagnostic_items = [
         _candidate_diagnostic(
             candidate,

@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from common import agent_output_dir, committee_advice_path, dump_json, ensure_layout, llm_advice_path, llm_context_path, llm_raw_path, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now
-from models import FinalAdvice, LlmContext
+from common import agent_output_dir, committee_advice_path, committee_decision_bundle_path, dump_json, ensure_layout, llm_advice_path, llm_context_path, llm_raw_path, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now
+from models import CommitteeDecisionBundle, FinalAdvice, LlmContext
 from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text
 
 NARRATIVE_SCHEMA = {
@@ -167,7 +167,7 @@ def committee_core_agents_available(agent_bundle: dict | None) -> bool:
     if not agent_bundle:
         return False
     agents = agent_bundle.get("agents", {})
-    return all(str(agents.get(name, {}).get("status", "")).lower() in {"ok", "degraded"} for name in ("research_manager", "risk_manager", "portfolio_trader"))
+    return all(str(agents.get(name, {}).get("status", "")).lower() == "ok" for name in ("research_manager", "risk_manager", "portfolio_trader"))
 
 
 def build_user_prompt(context: LlmContext, agent_bundle: dict, committee_advice: FinalAdvice) -> str:
@@ -538,6 +538,57 @@ def build_committee_advice_from_agents(context: LlmContext, agent_bundle: dict) 
     }
 
 
+def build_final_advice_from_committee_bundle(context: LlmContext, bundle: CommitteeDecisionBundle) -> FinalAdvice:
+    fund_lookup = {str(item.get("fund_code", "") or ""): item for item in (context.get("funds", []) or []) if item.get("fund_code")}
+    decisions = []
+    for priority, item in enumerate(bundle.get("fund_decisions", []) or [], start=1):
+        fund_code = str(item.get("fund_code", "") or "")
+        fund = fund_lookup.get(fund_code, {})
+        action = str(item.get("proposed_action", "hold") or "hold")
+        if item.get("risk_veto") or item.get("execution_eligible") is False:
+            action = "hold"
+        role = str(item.get("role", fund.get("role", "")) or "")
+        suggest_amount = 0.0
+        if action == "scheduled_dca":
+            suggest_amount = float(fund.get("fixed_daily_buy_amount", 0.0) or 0.0)
+        elif action != "hold":
+            suggest_amount = float(item.get("suggest_amount", 0.0) or 0.0)
+        decisions.append(
+            {
+                "fund_code": fund_code,
+                "action": action,
+                "suggest_amount": suggest_amount,
+                "priority": priority,
+                "confidence": round(float(item.get("confidence", 0.0) or 0.0), 4),
+                "thesis": str(item.get("thesis", "") or ""),
+                "evidence": list(item.get("constraint_notes", []) or []),
+                "risks": [str(item.get("risk_decision", "") or "")] if item.get("risk_veto") and item.get("risk_decision") else [],
+                "agent_support": list(bundle.get("manager_order", []) or []),
+                "source_signal_ids": list(item.get("supporting_signal_ids", []) or []),
+                "opposing_signal_ids": list(item.get("opposing_signal_ids", []) or []),
+                "decision_trace": {
+                    "fund_code": fund_code,
+                    "supporting_signal_ids": list(item.get("supporting_signal_ids", []) or []),
+                    "opposing_signal_ids": list(item.get("opposing_signal_ids", []) or []),
+                    "decision_card_ids": list(item.get("decision_card_ids", []) or []),
+                    "constraint_hits": list(item.get("constraint_notes", []) or []),
+                },
+            }
+        )
+        if bundle.get("decision_mode") == "hold_only" and role == "core_dca":
+            decisions[-1]["action"] = "scheduled_dca"
+            decisions[-1]["suggest_amount"] = float(fund.get("fixed_daily_buy_amount", 0.0) or 0.0)
+    market_view = dict(bundle.get("market_view", {}) or {})
+    market_view.setdefault("regime", "mixed")
+    market_view.setdefault("summary", "Committee bundle available but no narrative summary has been generated yet.")
+    market_view.setdefault("key_drivers", list(bundle.get("notes", []) or []))
+    return {
+        "market_view": market_view,
+        "fund_decisions": decisions,
+        "cross_fund_observations": list(bundle.get("cross_fund_observations", []) or []),
+    }
+
+
 def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -> FinalAdvice:
     return build_committee_advice_from_agents(context, agent_bundle)
 
@@ -744,6 +795,8 @@ def main() -> None:
     context = load_json(llm_context_path(agent_home, report_date))
     agent_bundle_path = agent_output_dir(agent_home, report_date) / "aggregate.json"
     agent_bundle = load_json(agent_bundle_path) if agent_bundle_path.exists() else None
+    committee_bundle_file = committee_decision_bundle_path(agent_home, report_date)
+    committee_bundle = load_json(committee_bundle_file) if committee_bundle_file.exists() else {}
     config = load_llm_config(agent_home)
     committee_advice: FinalAdvice | None = None
 
@@ -756,6 +809,10 @@ def main() -> None:
         if agent_bundle.get("failed_agents") and not agent_bundle.get("degraded_ok", False):
             failed = ", ".join(item["agent_name"] for item in agent_bundle.get("failed_agents", []))
             raise SystemExit(f"多智能体存在未允许降级的失败角色。失败智能体：{failed}")
+        if not committee_bundle:
+            raise SystemExit("缺少 committee_decision_bundle，无法生成最终建议。")
+        if str(committee_bundle.get("decision_mode", "") or "") == "blocked":
+            raise SystemExit("Committee decision bundle is blocked and cannot produce executable advice.")
 
     if args.mock:
         advice = build_mock_advice(context, agent_bundle)
@@ -768,12 +825,13 @@ def main() -> None:
             "generated_at": timestamp_now(),
             "advice": advice,
             "committee": committee,
+            "committee_decision_bundle": committee_bundle,
             "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)) if agent_bundle else True,
             "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)) if agent_bundle else False,
             "failed_agents": agent_bundle.get("failed_agents", []) if agent_bundle else [],
         }
     else:
-        committee_advice = build_committee_advice_from_agents(context, agent_bundle)
+        committee_advice = build_final_advice_from_committee_bundle(context, committee_bundle)
         committee = agent_bundle.get("committee", {}) or {}
         try:
             raw_payload = call_responses_api(
@@ -799,6 +857,7 @@ def main() -> None:
                     "generated_at": timestamp_now(),
                     "advice": advice,
                     "committee": committee,
+                    "committee_decision_bundle": committee_bundle,
                     "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                     "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                     "failed_agents": agent_bundle.get("failed_agents", []),
@@ -814,6 +873,7 @@ def main() -> None:
                 "error": str(exc),
                 "advice": advice,
                 "committee": committee,
+                "committee_decision_bundle": committee_bundle,
                 "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                 "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                 "failed_agents": agent_bundle.get("failed_agents", []),

@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from config_mutations import update_fund_cap_value, update_fund_dca_settings, update_strategy_controls, upsert_watchlist_item
+from execution_sync import record_actual_trade
 from portfolio_state import load_execution_status, rebuild_portfolio_state
 from update_portfolio_from_trade import apply_trade
 
@@ -227,6 +228,139 @@ class ValidationAndTradeTests(unittest.TestCase):
         self.assertEqual(rejected["validated_action"], "hold")
         self.assertTrue(any("optimizer" in note.lower() for note in rejected["validation_notes"]))
 
+    def test_validate_llm_advice_hard_blocks_committee_risk_veto(self):
+        self.build_portfolio()
+        self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {
+                "market_view": {"regime": "mixed", "summary": "risk veto test", "key_drivers": []},
+                "cross_fund_observations": [],
+                "fund_decisions": [
+                    {
+                        "fund_code": "TADD",
+                        "action": "add",
+                        "suggest_amount": 200.0,
+                        "priority": 1,
+                        "confidence": 0.9,
+                        "thesis": "model still wants add",
+                        "evidence": [],
+                        "risks": [],
+                        "agent_support": ["portfolio_trader", "risk_manager"],
+                    }
+                ],
+            },
+        )
+        self.agent.write_json(
+            "db/committee_decision_bundle/2026-03-10.json",
+            {
+                "decision_mode": "canonical",
+                "degradation_mode": "none",
+                "execution_eligible": True,
+                "fund_decisions": [
+                    {
+                        "fund_code": "TADD",
+                        "proposed_action": "hold",
+                        "suggest_amount": 0.0,
+                        "risk_veto": True,
+                        "risk_decision": "reject",
+                        "execution_eligible": False,
+                        "constraint_notes": ["risk manager rejected the add"],
+                    }
+                ],
+            },
+        )
+
+        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(any(item["fund_code"] == "TADD" for item in payload["tactical_actions"]))
+        held = next(item for item in payload["hold_actions"] if item["fund_code"] == "TADD")
+        self.assertEqual(held["validated_action"], "hold")
+        self.assertIn("committee_bundle_fund_gate", held["policy_rule_hits"])
+        self.assertIn("risk_veto", held["constraint_hits"])
+
+    def test_validate_llm_advice_does_not_fund_add_with_unsettled_sell_proceeds(self):
+        self.build_portfolio()
+        record_actual_trade(
+            self.agent.root,
+            {
+                "trade_date": "2026-03-10",
+                "trade_time": "10:00",
+                "fund_code": "TRED",
+                "fund_name": "战术减仓基金",
+                "operation_type": "sell",
+                "amount": 200,
+                "confirm_date": "2026-03-11",
+                "settlement_date": "2026-03-13",
+            },
+        )
+        self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {
+                "market_view": {"regime": "mixed", "summary": "cash test", "key_drivers": []},
+                "cross_fund_observations": [],
+                "fund_decisions": [
+                    {
+                        "fund_code": "TADD",
+                        "action": "add",
+                        "suggest_amount": 500.0,
+                        "priority": 1,
+                        "confidence": 0.9,
+                        "thesis": "test unsettled funding",
+                        "evidence": [],
+                        "risks": [],
+                        "agent_support": ["portfolio_trader"],
+                    }
+                ],
+            },
+        )
+        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+        self.assertGreater(payload["delayed_sell_proceeds"], 0.0)
+        tactical = next((item for item in payload["tactical_actions"] if item["fund_code"] == "TADD"), None)
+        if tactical is not None:
+            self.assertLessEqual(tactical["validated_amount"], payload["immediately_available_cash"])
+
+    def test_validate_llm_advice_blocks_add_that_worsens_theme_family_overweight(self):
+        self.build_portfolio()
+        portfolio = json.loads((self.agent.root / "config" / "portfolio.json").read_text(encoding="utf-8"))
+        for fund in portfolio["funds"]:
+            if fund["fund_code"] == "TADD":
+                fund["style_group"] = "ai"
+                fund["current_value"] = 380.0
+                fund["cap_value"] = 600.0
+            if fund["fund_code"] == "TRED":
+                fund["style_group"] = "tech_growth"
+                fund["current_value"] = 420.0
+        self.agent.write_json("config/portfolio.json", portfolio)
+        self.agent.write_json("db/portfolio_state/current.json", portfolio)
+        self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {
+                "market_view": {"regime": "mixed", "summary": "theme family gate", "key_drivers": []},
+                "cross_fund_observations": [],
+                "fund_decisions": [
+                    {
+                        "fund_code": "TADD",
+                        "action": "add",
+                        "suggest_amount": 200.0,
+                        "priority": 1,
+                        "confidence": 0.9,
+                        "thesis": "add crowded growth",
+                        "evidence": [],
+                        "risks": [],
+                        "agent_support": ["portfolio_trader"],
+                    }
+                ],
+            },
+        )
+        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
+        held = next(item for item in payload["hold_actions"] if item["fund_code"] == "TADD")
+        self.assertEqual(held["validated_action"], "hold")
+        notes = " ".join(held["validation_notes"])
+        self.assertIn("theme_family", notes)
+
     def test_apply_trade_buy_uses_cash_hub_and_precise_units(self):
         portfolio = {
             "funds": [
@@ -296,19 +430,22 @@ class ValidationAndTradeTests(unittest.TestCase):
             if fund["fund_code"] == "TRED":
                 fund["min_hold_days"] = 7
         self.agent.write_json("config/portfolio.json", portfolio)
+        self.agent.write_json("db/portfolio_state/current.json", portfolio)
         self.agent.write_json(
-            "db/trade_journal/2026-03-10.json",
+            "db/execution_sync/actual_trades/2026-03-10.json",
             {
                 "trade_date": "2026-03-10",
                 "items": [
                     {
+                        "trade_id": "legacy_tred_buy",
+                        "trade_date": "2026-03-10",
                         "fund_code": "TRED",
                         "fund_name": "战术减仓基金",
-                        "action": "buy",
+                        "operation_type": "buy",
                         "amount": 150.0,
-                        "trade_nav": 2.0,
+                        "nav": 2.0,
                         "units": 75.0,
-                        "note": "recent buy",
+                        "user_note": "recent buy",
                     }
                 ],
             },
@@ -368,23 +505,19 @@ class ValidationAndTradeTests(unittest.TestCase):
         self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
         validated = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         suggestion = validated["tactical_actions"][0]
-        self.agent.run_script(
-            "record_trade.py",
-            "--date",
-            "2026-03-10",
-            "--fund-code",
-            "TADD",
-            "--fund-name",
-            "战术加仓基金",
-            "--action",
-            "buy",
-            "--amount",
-            "100",
-            "--suggestion-id",
-            suggestion["suggestion_id"],
+        result = record_actual_trade(
+            self.agent.root,
+            {
+                "trade_date": "2026-03-10",
+                "fund_code": "TADD",
+                "fund_name": "战术加仓基金",
+                "operation_type": "buy",
+                "amount": 100.0,
+                "linked_suggestion_id": suggestion["suggestion_id"],
+                "linked_advice_date": "2026-03-10",
+            },
         )
-        journal = json.loads((self.agent.root / "db" / "trade_journal" / "2026-03-10.json").read_text(encoding="utf-8"))
-        self.assertEqual(journal["items"][0]["suggestion_id"], suggestion["suggestion_id"])
+        self.assertEqual(result["trade"]["linked_suggestion_id"], suggestion["suggestion_id"])
         execution = load_execution_status(self.agent.root, "2026-03-10")
         self.assertEqual(execution["items"][0]["suggestion_id"], suggestion["suggestion_id"])
         self.assertEqual(execution["items"][0]["trade_amount"], 100.0)
@@ -392,16 +525,18 @@ class ValidationAndTradeTests(unittest.TestCase):
     def test_rebuild_portfolio_state_replays_trades(self):
         self.build_portfolio()
         self.agent.write_json(
-            "db/trade_journal/2026-03-11.json",
+            "db/execution_sync/actual_trades/2026-03-11.json",
             {
                 "trade_date": "2026-03-11",
                 "items": [
                     {
+                        "trade_id": "legacy_tadd_buy",
+                        "trade_date": "2026-03-11",
                         "fund_code": "TADD",
                         "fund_name": "战术加仓基金",
-                        "action": "buy",
+                        "operation_type": "buy",
                         "amount": 100.0,
-                        "trade_nav": 2.0,
+                        "nav": 2.0,
                         "units": 50.0,
                     }
                 ],

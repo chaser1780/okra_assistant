@@ -72,7 +72,7 @@ def build_pipeline_command(home: Path, task_date: str, mode: str) -> list[str]:
 
 def build_daily_first_open_command(home: Path, task_date: str, *, force: bool = False) -> list[str]:
     command = build_python_script_command(
-        home / "scripts" / "run_daily_first_open.py",
+        home / "scripts" / "run_today_analysis.py",
         "--agent-home",
         str(home),
         "--date",
@@ -135,38 +135,6 @@ def build_long_memory_approval_command(home: Path, memory_id: str, action: str, 
     if note.strip():
         command.extend(["--note", note.strip()])
     return command
-
-
-def build_trade_command(
-    home: Path,
-    trade_date: str,
-    fund_code: str,
-    fund_name: str,
-    action: str,
-    amount_text: str,
-    note: str,
-    suggestion_id: str,
-    extra_args: list[str],
-) -> list[str]:
-    return build_python_script_command(
-        home / "scripts" / "record_trade.py",
-        "--agent-home",
-        str(home),
-        "--date",
-        trade_date,
-        "--fund-code",
-        fund_code,
-        "--fund-name",
-        fund_name,
-        "--action",
-        action,
-        "--amount",
-        amount_text,
-        "--note",
-        note,
-        *(["--suggestion-id", suggestion_id] if suggestion_id else []),
-        *extra_args,
-    )
 
 
 def build_portfolio_sync_preview_command(home: Path, sync_date: str, image_paths: list[str], provider: str = "alipay") -> list[str]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 
-from common import ensure_layout, evaluation_snapshot_path, fund_profile_path, load_json, load_portfolio, load_review_memory, load_strategy, portfolio_report_path, recommendation_delta_path, resolve_agent_home, resolve_date, validated_advice_path
+from common import ensure_layout, evaluation_snapshot_path, fund_profile_path, load_json, load_long_memory_compat_view, load_portfolio, load_strategy, long_memory_export_path, portfolio_report_path, recommendation_delta_path, resolve_agent_home, resolve_date, validated_advice_path
 from portfolio_exposure import STRATEGY_BUCKET_LABELS, analyze_portfolio_exposure
 
 
@@ -72,7 +72,8 @@ def build_markdown(agent_home, portfolio: dict, advice: dict, strategy: dict, re
     allocation_plan = exposure.get("allocation_plan", {})
     delta_payload = load_json(recommendation_delta_path(agent_home, report_date)) if recommendation_delta_path(agent_home, report_date).exists() else {"items": []}
     evaluation = load_json(evaluation_snapshot_path(agent_home, report_date)) if evaluation_snapshot_path(agent_home, report_date).exists() else {}
-    memory = load_review_memory(agent_home)
+    memory = load_long_memory_compat_view(agent_home)
+    long_memory_export = load_json(long_memory_export_path(agent_home)) if long_memory_export_path(agent_home).exists() else {"items": []}
     lines = [
         f"# 组合调仓建议 - {report_date}",
         "",
@@ -176,11 +177,13 @@ def build_markdown(agent_home, portfolio: dict, advice: dict, strategy: dict, re
 
     lines.append("")
     lines.append("## 长期记忆影响")
-    for item in (memory.get("permanent_memory", []) or [])[:6]:
+    permanent_items = list(memory.get("permanent_memory", []) or []) or [item for item in long_memory_export.get("items", []) if item.get("status") == "permanent"]
+    strategic_items = list(memory.get("strategic_memory", []) or []) or [item for item in long_memory_export.get("items", []) if item.get("status") == "strategic"]
+    for item in permanent_items[:6]:
         lines.append(f"- permanent | {item.get('text', '')}")
-    for item in (memory.get("strategic_memory", []) or [])[:6]:
+    for item in strategic_items[:6]:
         lines.append(f"- strategic | {item.get('text', '')}")
-    if not (memory.get("permanent_memory", []) or memory.get("strategic_memory", [])):
+    if not (permanent_items or strategic_items):
         lines.append("- 暂无长期记忆命中。")
 
     if evaluation:

@@ -1,63 +1,52 @@
 # 文档索引
 
-## 核心文档
+## 当前有效入口
 
-- 说明
-  - 当前桌面端主路径是 `React + Tauri` 工作台，后端入口是 `app/web_api.py`
-  - 部分历史规划文档仍会提到 `PySide6 / Qt`、`app/desktop_shell.py`、`app/views/`、`app/theme.py`、`app/widgets.py`
-  - 这些引用应视为历史上下文，不代表当前主代码路径
 - `README.md`
-  - 项目概览、目录结构与关键入口
+  - 项目概览、当前主链路、常用命令、API/前端入口。
 - `project.toml`
-  - 项目元信息与运行入口
-- `CHANGELOG.md`
-  - 版本变更记录
+  - 项目元数据、桌面启动入口、today-analysis 与 long-memory 入口。
+- `docs/modern_workbench.md`
+  - 当前 React + Tauri 工作台、API 面、运行时触发方式。
 
-## 设计与规划
+## 当前有效设计文档
 
 - `docs/fund_multiagent_design.md`
-  - 多智能体研究系统设计
-- `docs/desktop_app_prd.md`
-  - 桌面工作台产品草案
-- `docs/desktop_ui_redesign_backlog.md`
-  - 桌面端界面改版 backlog
-- `docs/ui_acceptance_checklist.md`
-  - UI 回归与验收清单
-- `docs/improvement_recommendations.md`
-  - 面向后续演进的整体改进建议
-- `docs/improvement_execution_roadmap.md`
-  - 中长期执行路线图
-- `docs/portfolio_upgrade_roadmap_2026-04-19.md`
-  - 面向 replay、evidence retrieval、portfolio optimization 的落地升级路线图
-- `docs/implementation_batch_2026-03-18.md`
-  - 2026-03-18 本轮直接落地的实施批次、文件级任务与验收标准
-- `docs/fund_assistant_upgrade_plan_2026-03-19.md`
-  - 面向个人基金管理、长短期策略分层、建议统一与界面简化的下一阶段落地方案
-- `docs/agent_input_contracts.md`
-  - 多智能体 prompt 与输入契约对照
+  - 当前基金多智能体研究链路，重点是 canonical committee、validated advice、execution boundary。
 - `docs/development_todo.md`
-  - 当前开发任务拆解
+  - 当前开发任务清单与状态。
+- `docs/improvement_execution_roadmap.md`
+  - 中长期执行链路与执行同步演进路线。
+- `docs/improvement_recommendations.md`
+  - 面向后续迭代的改进建议汇总。
+- `docs/portfolio_upgrade_roadmap_2026-04-19.md`
+  - 组合优化、evidence retrieval、replay 等升级路线。
+- `docs/fund_assistant_upgrade_plan_2026-03-19.md`
+  - 更早期的升级计划，保留背景价值，但不代表当前实现细节。
+- `docs/desktop_app_prd.md`
+  - 桌面工作台产品视角说明，阅读时需以当前 `modern_workbench.md` 为准。
 
-## 交接与历史记录
+## 历史文档
 
 - `docs/handoff_2026-03-09_real_multiagent.md`
-  - 多智能体稳定性排查交接记录
+- `docs/handoff_2026-03-11_todo_completion.md`
 - `docs/standalone_migration_plan.md`
-  - 独立工程迁移说明
 
-## 参考规则
+说明：
+
+- 历史文档保留背景和阶段性决策，但不代表当前运行主源、接口形态、或当前工作台入口。
+- 当前实现以 `README.md`、`project.toml`、`docs/modern_workbench.md` 为准。
+
+## 参考材料
 
 - `references/scoring_rules.md`
-  - 默认评分规则
 - `references/source_priority.md`
-  - 数据源优先级与降级策略
 
 ## 建议阅读顺序
 
 1. `README.md`
-2. `docs/implementation_batch_2026-03-18.md`
-3. `docs/desktop_ui_redesign_backlog.md`
-4. `docs/fund_assistant_upgrade_plan_2026-03-19.md`
+2. `docs/modern_workbench.md`
+3. `docs/fund_multiagent_design.md`
+4. `docs/development_todo.md`
 5. `docs/improvement_execution_roadmap.md`
 6. `docs/improvement_recommendations.md`
-7. `docs/fund_multiagent_design.md`

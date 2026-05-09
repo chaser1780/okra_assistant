@@ -196,7 +196,7 @@
 
 增加交易录入：
 
-- 调 `record_trade.py`
+- 调执行同步接口或 `execution_sync.py` 相关入口
 - 自动回写持仓
 
 ### Step 4

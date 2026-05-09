@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-from common import ensure_layout, load_json, load_review_memory, nightly_review_report_path, portfolio_valuation_path, resolve_agent_home, resolve_date
+from common import ensure_layout, load_json, load_long_memory_compat_view, long_memory_export_path, nightly_review_report_path, portfolio_valuation_path, resolve_agent_home, resolve_date
 
 
 def horizon_label(horizon: int) -> str:
     return "T0" if horizon == 0 else f"T+{horizon}"
 
 
-def collect_reviews(agent_home: Path, review_date: str) -> list[dict]:
+def collect_reviews(agent_home, review_date: str) -> list[dict]:
     items: list[dict] = []
     for review_dir in (agent_home / "db" / "review_results", agent_home / "db" / "execution_reviews"):
         if not review_dir.exists():
@@ -33,7 +32,8 @@ def main() -> None:
     ensure_layout(agent_home)
     review_date = resolve_date(args.review_date)
     reviews = collect_reviews(agent_home, review_date)
-    memory = load_review_memory(agent_home)
+    memory = load_long_memory_compat_view(agent_home)
+    long_memory_export = load_json(long_memory_export_path(agent_home)) if long_memory_export_path(agent_home).exists() else {"items": []}
     valuation_path = portfolio_valuation_path(agent_home, review_date)
     valuation = load_json(valuation_path) if valuation_path.exists() else {}
 
@@ -70,20 +70,16 @@ def main() -> None:
     else:
         lines.append("- 暂无")
 
-    lines.extend(
-        [
-            "",
-        "## 本次复盘批次",
-        ]
-    )
-
+    lines.extend(["", "## 本次复盘批次"])
     if reviews:
         for review in reviews:
             label = horizon_label(int(review.get("horizon", 0)))
             source = "建议层" if review.get("source", "advice") == "advice" else "执行层"
             lines.append(
-                f"- {source} {label}｜建议日期 {review.get('base_date')}｜supportive={review.get('summary', {}).get('supportive', 0)}｜"
-                f"adverse={review.get('summary', {}).get('adverse', 0)}｜missed_upside={review.get('summary', {}).get('missed_upside', 0)}"
+                f"- {source}｜{label}｜建议日期 {review.get('base_date')}｜"
+                f"supportive={review.get('summary', {}).get('supportive', 0)}｜"
+                f"adverse={review.get('summary', {}).get('adverse', 0)}｜"
+                f"missed_upside={review.get('summary', {}).get('missed_upside', 0)}"
             )
     else:
         lines.append("- 当晚没有到期的复盘批次。")
@@ -91,28 +87,17 @@ def main() -> None:
     for review in reviews:
         label = horizon_label(int(review.get("horizon", 0)))
         source = "建议层" if review.get("source", "advice") == "advice" else "执行层"
-        lines.extend(
-            [
-                "",
-                f"## {source} {label} 复盘明细（对应建议日期：{review.get('base_date')}）",
-            ]
-        )
+        lines.extend(["", f"## {source}｜{label}｜对应建议日期 {review.get('base_date')}"])
         for item in review.get("items", []):
             lines.append(
-                f"- {item['fund_name']}：动作 `{item.get('source_action', item.get('validated_action', 'hold'))}`，结果 `{item['outcome']}`，"
-                f"评估口径 {item.get('evaluation_basis', 'review_day_change')}，"
-                f"评估收益 {item.get('evaluation_return_pct')}%，"
-                f"诊断标签 {item.get('diagnostic_label', 'unknown')}，"
-                f"复盘日真实涨跌 {item.get('review_day_change_pct')}%，"
-                f"复盘周涨跌 {item.get('review_week_change_pct')}%，"
-                f"持有期收益 {item.get('review_period_return_pct')}%，"
-                f"参考估值信号 {item.get('signal_estimate_change_pct')}%，"
-                f"参考代理信号 {item.get('signal_proxy_change_pct')}%，"
-                f"相对参考基准 {item.get('excess_return_vs_benchmark_pct')}%，"
-                f"相对不操作：{item.get('no_trade_baseline')}，"
-                f"估算边际收益 {item.get('estimated_edge_vs_no_trade_amount')} 元，"
-                f"估算交易成本 {item.get('estimated_transaction_cost_amount')} 元，"
-                f"成本后边际收益 {item.get('net_edge_after_cost_amount')} 元，"
+                f"- {item['fund_name']}：动作 `{item.get('source_action', item.get('validated_action', 'hold'))}`，"
+                f"结果 `{item['outcome']}`，评估口径 {item.get('evaluation_basis', 'review_day_change')}，"
+                f"评估收益 {item.get('evaluation_return_pct')}%，诊断标签 {item.get('diagnostic_label', 'unknown')}，"
+                f"复盘日真实涨跌 {item.get('review_day_change_pct')}%，复盘周涨跌 {item.get('review_week_change_pct')}%，"
+                f"持有期收益 {item.get('review_period_return_pct')}%，参考估值信号 {item.get('signal_estimate_change_pct')}%，"
+                f"参考代理信号 {item.get('signal_proxy_change_pct')}%，相对参考基准 {item.get('excess_return_vs_benchmark_pct')}%，"
+                f"相对不操作：{item.get('no_trade_baseline')}，估算边际收益 {item.get('estimated_edge_vs_no_trade_amount')} 元，"
+                f"估算交易成本 {item.get('estimated_transaction_cost_amount')} 元，成本后边际收益 {item.get('net_edge_after_cost_amount')} 元，"
                 f"诊断原因：{item.get('diagnostic_reason', '暂无')}。"
             )
         if not review.get("items"):
@@ -120,9 +105,16 @@ def main() -> None:
 
     lines.extend(["", "## 记忆更新"])
     recent_lessons = memory.get("lessons", [])[-8:]
+    if not recent_lessons:
+        recent_lessons = [{"horizon": item.get("horizon_bucket", "long_term"), "text": item.get("text", "")} for item in long_memory_export.get("items", [])[-8:]]
     if recent_lessons:
         for lesson in recent_lessons:
-            lines.append(f"- [{horizon_label(int(lesson.get('horizon', 0)))}] {lesson['text']}")
+            horizon = lesson.get("horizon", 0)
+            if isinstance(horizon, str):
+                label = horizon if not horizon.isdigit() else horizon_label(int(horizon))
+            else:
+                label = horizon_label(int(horizon or 0))
+            lines.append(f"- [{label}] {lesson['text']}")
     else:
         lines.append("- 暂无历史记忆。")
 
@@ -130,17 +122,13 @@ def main() -> None:
     if recent_bias:
         lines.extend(["", "## 偏置调整"])
         for item in recent_bias:
-            lines.append(
-                f"- [{item['scope']}] {item['target']}：{item['adjustment']}（{item['reason']}）"
-            )
+            lines.append(f"- [{item['scope']}] {item['target']}：{item['adjustment']}（{item['reason']}）")
 
     recent_feedback = memory.get("agent_feedback", [])[-8:]
     if recent_feedback:
         lines.extend(["", "## Agent Feedback"])
         for item in recent_feedback:
-            lines.append(
-                f"- [{horizon_label(int(item.get('horizon', 0)))}] {item['agent_name']}：{item['bias']}（{item['reason']}）"
-            )
+            lines.append(f"- [{horizon_label(int(item.get('horizon', 0) or 0))}] {item['agent_name']}：{item['bias']}（{item['reason']}）")
 
     if valuation:
         lines.extend(

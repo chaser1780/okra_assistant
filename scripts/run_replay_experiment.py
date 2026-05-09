@@ -7,6 +7,7 @@ from pathlib import Path
 from common import (
     dump_json,
     ensure_layout,
+    legacy_portfolio_path,
     llm_advice_path,
     llm_raw_path,
     load_json,
@@ -18,7 +19,7 @@ from common import (
     validated_advice_path,
 )
 from learning_memory import apply_replay_summary_to_ledger
-from long_memory_store import stable_memory_id, sync_legacy_review_memory, upsert_memory_record
+from long_memory_store import stable_memory_id, upsert_memory_record
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
 from validate_llm_advice import build_validated_payload
 from decision_ledger import load_decisions
@@ -47,7 +48,7 @@ def load_portfolio_for_replay(agent_home: Path, report_date: str) -> dict | None
         payload = load_json(current)
         if str(payload.get("as_of_date", "") or "") == report_date:
             return payload
-    legacy = agent_home / "config" / "portfolio.json"
+    legacy = legacy_portfolio_path(agent_home)
     if legacy.exists():
         payload = load_json(legacy)
         if str(payload.get("as_of_date", "") or "") == report_date:
@@ -527,14 +528,13 @@ def main() -> None:
                     "evidence_refs": [{"kind": "replay_summary", "path": str(target_dir / "summary.json"), "date": str(summary.get("generated_at", "") or "")[:10]}],
                 },
             )
-        sync_legacy_review_memory(agent_home)
         summary["learning_update"] = {
             "applied": True,
             "ledger_summary": ledger.get("summary", {}),
             "updated_at": ledger.get("updated_at", ""),
         }
-        dump_json(agent_home / "db" / "review_memory" / "ledger.json", ledger)
-        dump_json(agent_home / "db" / "review_memory" / "memory.json", memory)
+        dump_json(agent_home / "db" / "long_memory" / "portfolio" / "learning_ledger.json", ledger)
+        dump_json(agent_home / "db" / "long_memory" / "exports" / "compat_review_memory.json", memory)
     else:
         summary["learning_update"] = {"applied": False}
 

@@ -37,7 +37,7 @@
 - `scripts/validate_llm_advice.py` 已经具备“LLM 建议 -> 规则校验 -> 可执行动作”的硬约束层。
 - `reports/daily/2026-03-19_portfolio.md` 已经能输出组合暴露、风险预算、执行清单。
 - `app/desktop_shell.py` 与 `app/views/` 已具备桌面端工作台形态。
-- `db/review_memory/memory.json` 已形成持续积累的复盘记忆，而不是一次性分析。
+- `db/long_memory/exports/all_memory.json` 已形成持续积累的长期记忆导出，而不是一次性分析。
 
 这说明下一阶段不应再从“多加几个功能”入手，而应从“重新组织现有能力”入手。
 

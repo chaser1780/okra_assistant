@@ -1,5 +1,7 @@
 # okra assistant 续接备忘录（2026-03-11）
 
+> 历史交接文档：本文件反映 2026-03-11 当时的实现状态。当前运行主源与入口以 `README.md`、`project.toml`、`docs/modern_workbench.md` 为准。
+
 ## 1. 今日结论
 
 今天的主目标已经完成：
@@ -64,7 +66,7 @@
 - `F:\okra_assistant\scripts\portfolio_exposure.py`
 - `F:\okra_assistant\scripts\fetch_fund_profiles.py`
 - `F:\okra_assistant\scripts\trade_constraints.py`
-- `F:\okra_assistant\scripts\record_trade.py`
+- `F:\okra_assistant\scripts\execution_sync.py`
 - `F:\okra_assistant\app\desktop_shell.py`
 - `F:\okra_assistant\app\ui_support.py`
 
@@ -208,7 +210,7 @@
 - `F:\okra_assistant\scripts\review_advice.py`
 - `F:\okra_assistant\scripts\build_nightly_review_report.py`
 - `F:\okra_assistant\scripts\validate_llm_advice.py`
-- `F:\okra_assistant\scripts\record_trade.py`
+- `F:\okra_assistant\scripts\execution_sync.py`
 - `F:\okra_assistant\scripts\run_multiagent_research.py`
 - `F:\okra_assistant\app\desktop_shell.py`
 - `F:\okra_assistant\config\settings.toml`

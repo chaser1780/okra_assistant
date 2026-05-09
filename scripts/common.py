@@ -4,11 +4,21 @@ import json
 import os
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 import tomllib
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_AGENT_HOME = Path(r"F:\okra_assistant")
+try:
+    SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    from datetime import timezone
+
+    SHANGHAI_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
+MARKET_CLOSE_HOUR = 15
+MARKET_CLOSE_MINUTE = 0
+TODAY_ANALYSIS_STALE_SECONDS = 20 * 60
 REQUIRED_DIRS = (
     "config",
     "raw/quotes",
@@ -26,6 +36,7 @@ REQUIRED_DIRS = (
     "db/llm_context",
     "db/llm_advice",
     "db/committee_advice",
+    "db/committee_decision_bundle",
     "db/llm_raw",
     "db/validated_advice",
     "db/decisions",
@@ -35,6 +46,7 @@ REQUIRED_DIRS = (
     "db/portfolio_valuation",
     "db/portfolio_state",
     "db/portfolio_state/snapshots",
+    "db/portfolio_state/events",
     "db/portfolio_imports",
     "db/preflight",
     "db/run_manifests",
@@ -48,12 +60,6 @@ REQUIRED_DIRS = (
     "db/execution_sync/imports",
     "db/execution_sync/imports/alipay_screenshots",
     "db/execution_sync/imports/parsed",
-    "db/review_memory",
-    "db/review_memory/candidates",
-    "db/review_memory/cycles",
-    "db/review_memory/promotion_log",
-    "db/review_memory/permanent",
-    "db/review_memory/user_confirmed",
     "db/long_memory",
     "db/long_memory/funds",
     "db/long_memory/market",
@@ -63,8 +69,14 @@ REQUIRED_DIRS = (
     "db/long_memory/candidates",
     "db/long_memory/approvals",
     "db/long_memory/exports",
+    "db/long_memory/cycles",
+    "db/long_memory/cycles/pending",
+    "db/long_memory/cycles/completed",
+    "db/long_memory/cycles/failed",
+    "db/legacy",
+    "db/legacy/review_memory",
+    "db/legacy/trade_journal",
     "db/daily_workspace",
-    "db/trade_journal",
     "db/estimated_nav",
     "db/fund_nav_history",
     "db/benchmark_history",
@@ -79,7 +91,7 @@ REQUIRED_DIRS = (
     "cache",
 )
 
-MOJIBAKE_HINTS = set("鍩閲鏃鏀璇鎴鏅鐜缁閫鍔鐩浠鍗鍙璁鏍妗")
+MOJIBAKE_HINTS = set("?��")
 COMMON_TEXT_HINTS = set("基金收益建议组合持仓实时详情智能体复盘夜间设置数据金额买卖现金回写估值策略研究市场风格主题新闻置信度风险")
 
 
@@ -134,6 +146,83 @@ def resolve_date(date_text: str | None = None) -> str:
     if date_text:
         return datetime.strptime(date_text, "%Y-%m-%d").date().isoformat()
     return date.today().isoformat()
+
+
+def shanghai_now(now: datetime | None = None) -> datetime:
+    current = now.astimezone(SHANGHAI_TZ) if now and now.tzinfo else now
+    return current or datetime.now(SHANGHAI_TZ)
+
+
+def today_shanghai(now: datetime | None = None) -> str:
+    return shanghai_now(now).date().isoformat()
+
+
+def market_close_time() -> datetime_time:
+    return datetime_time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE)
+
+
+def trading_calendar_path(agent_home: Path) -> Path:
+    return agent_home / "config" / "trading_calendar.json"
+
+
+def load_trading_calendar(agent_home: Path) -> dict:
+    path = trading_calendar_path(agent_home)
+    if not path.exists():
+        return {"holidays": [], "makeup_trading_days": []}
+    return repair_data(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _calendar_sets(agent_home: Path) -> tuple[set[str], set[str]]:
+    payload = load_trading_calendar(agent_home)
+    holidays = {str(item).strip() for item in payload.get("holidays", []) or [] if str(item).strip()}
+    makeup_days = {str(item).strip() for item in payload.get("makeup_trading_days", []) or [] if str(item).strip()}
+    return holidays, makeup_days
+
+
+def is_trading_day(agent_home: Path, day: str | date) -> bool:
+    target = parse_date_text(day) if isinstance(day, str) else day
+    if target is None:
+        return False
+    day_text = target.isoformat()
+    holidays, makeup_days = _calendar_sets(agent_home)
+    if day_text in makeup_days:
+        return True
+    if day_text in holidays:
+        return False
+    return target.weekday() < 5
+
+
+def previous_trading_day(agent_home: Path, day: str | date) -> str:
+    target = parse_date_text(day) if isinstance(day, str) else day
+    if target is None:
+        raise ValueError(f"Invalid day: {day}")
+    current = target - timedelta(days=1)
+    while not is_trading_day(agent_home, current):
+        current -= timedelta(days=1)
+    return current.isoformat()
+
+
+def trading_days_between(agent_home: Path, start_exclusive: str | date, end_inclusive: str | date) -> list[str]:
+    start_day = parse_date_text(start_exclusive) if isinstance(start_exclusive, str) else start_exclusive
+    end_day = parse_date_text(end_inclusive) if isinstance(end_inclusive, str) else end_inclusive
+    if start_day is None or end_day is None or start_day >= end_day:
+        return []
+    current = start_day + timedelta(days=1)
+    results: list[str] = []
+    while current <= end_day:
+        if is_trading_day(agent_home, current):
+            results.append(current.isoformat())
+        current += timedelta(days=1)
+    return results
+
+
+def analysis_quality_for_start(agent_home: Path, report_date: str, started_at: datetime) -> str:
+    local = started_at.astimezone(SHANGHAI_TZ)
+    if local.date().isoformat() != report_date:
+        return "after_close" if local.date().isoformat() > report_date else "pre_close"
+    if not is_trading_day(agent_home, report_date):
+        return "after_close"
+    return "after_close" if local.time() >= market_close_time() else "pre_close"
 
 
 def parse_date_text(value: str | None) -> date | None:
@@ -282,7 +371,7 @@ def load_watchlist(agent_home: Path) -> dict:
 
 def load_portfolio(agent_home: Path) -> dict:
     current_path = portfolio_state_current_path(agent_home)
-    legacy_path = agent_home / "config" / "portfolio.json"
+    legacy_path = legacy_portfolio_path(agent_home)
     definition_path = portfolio_definition_path(agent_home)
     if current_path.exists():
         return repair_data(json.loads(current_path.read_text(encoding="utf-8")))
@@ -327,22 +416,13 @@ def load_market_overrides(agent_home: Path) -> dict:
     return repair_data(json.loads(path.read_text(encoding="utf-8")))
 
 
-def load_review_memory(agent_home: Path) -> dict:
-    path = review_memory_path(agent_home)
+def load_long_memory_compat_view(agent_home: Path) -> dict:
+    payload = _review_memory_from_long_memory(agent_home)
+    if payload is not None:
+        return payload
+    path = legacy_review_memory_path(agent_home)
     if not path.exists():
-        return {
-            "updated_at": "",
-            "lessons": [],
-            "review_history": [],
-            "bias_adjustments": [],
-            "agent_feedback": [],
-            "records": [],
-            "strategic_memory": [],
-            "permanent_memory": [],
-            "core_permanent_memory": [],
-            "user_confirmed_memory": [],
-            "memory_ledger_summary": {},
-        }
+        return _empty_review_memory()
     return repair_data(json.loads(path.read_text(encoding="utf-8")))
 
 
@@ -411,6 +491,10 @@ def committee_advice_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "committee_advice" / f"{report_date}.json"
 
 
+def committee_decision_bundle_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "committee_decision_bundle" / f"{report_date}.json"
+
+
 def llm_raw_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "llm_raw" / f"{report_date}.json"
 
@@ -452,12 +536,24 @@ def portfolio_definition_path(agent_home: Path) -> Path:
     return agent_home / "config" / "portfolio_definition.json"
 
 
+def legacy_portfolio_path(agent_home: Path) -> Path:
+    return agent_home / "config" / "portfolio.json"
+
+
 def portfolio_state_current_path(agent_home: Path) -> Path:
     return agent_home / "db" / "portfolio_state" / "current.json"
 
 
+def has_portfolio_source(agent_home: Path) -> bool:
+    return portfolio_state_current_path(agent_home).exists() or legacy_portfolio_path(agent_home).exists()
+
+
 def portfolio_state_snapshot_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "portfolio_state" / "snapshots" / f"{report_date}.json"
+
+
+def portfolio_state_event_dir(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "portfolio_state" / "events" / report_date
 
 
 def portfolio_import_dir(agent_home: Path) -> Path:
@@ -476,44 +572,12 @@ def run_manifest_dir(agent_home: Path) -> Path:
     return agent_home / "db" / "run_manifests"
 
 
-def review_memory_path(agent_home: Path) -> Path:
+def legacy_review_memory_path(agent_home: Path) -> Path:
     return agent_home / "db" / "review_memory" / "memory.json"
 
 
-def review_memory_ledger_path(agent_home: Path) -> Path:
+def legacy_review_memory_ledger_path(agent_home: Path) -> Path:
     return agent_home / "db" / "review_memory" / "ledger.json"
-
-
-def review_memory_candidates_dir(agent_home: Path) -> Path:
-    return agent_home / "db" / "review_memory" / "candidates"
-
-
-def review_memory_cycle_dir(agent_home: Path) -> Path:
-    return agent_home / "db" / "review_memory" / "cycles"
-
-
-def review_memory_candidate_path(agent_home: Path, base_date: str, horizon: int, source: str) -> Path:
-    return review_memory_candidates_dir(agent_home) / f"{base_date}_{source}_T{horizon}.json"
-
-
-def review_memory_cycle_path(agent_home: Path, review_date: str) -> Path:
-    return review_memory_cycle_dir(agent_home) / f"{review_date}.json"
-
-
-def review_memory_promotion_log_dir(agent_home: Path) -> Path:
-    return agent_home / "db" / "review_memory" / "promotion_log"
-
-
-def review_memory_promotion_log_path(agent_home: Path, base_date: str, horizon: int, source: str) -> Path:
-    return review_memory_promotion_log_dir(agent_home) / f"{base_date}_{source}_T{horizon}.json"
-
-
-def review_memory_permanent_path(agent_home: Path) -> Path:
-    return agent_home / "db" / "review_memory" / "permanent" / "memory.json"
-
-
-def review_memory_user_confirmed_path(agent_home: Path) -> Path:
-    return agent_home / "db" / "review_memory" / "user_confirmed" / "memory.json"
 
 
 def long_memory_dir(agent_home: Path) -> Path:
@@ -528,12 +592,171 @@ def long_memory_index_path(agent_home: Path) -> Path:
     return long_memory_dir(agent_home) / "index.sqlite"
 
 
+def long_memory_cycle_dir(agent_home: Path, status: str = "completed") -> Path:
+    normalized = status if status in {"pending", "completed", "failed"} else "completed"
+    return long_memory_dir(agent_home) / "cycles" / normalized
+
+
+def long_memory_cycle_path(agent_home: Path, report_date: str, status: str = "completed") -> Path:
+    return long_memory_cycle_dir(agent_home, status) / f"{report_date}.json"
+
+
+def long_memory_export_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "exports" / "all_memory.json"
+
+
+def long_memory_pending_export_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "candidates" / "pending_permanent.json"
+
+
+def long_memory_learning_ledger_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "portfolio" / "learning_ledger.json"
+
+
+def long_memory_learning_cycle_path(agent_home: Path, review_date: str) -> Path:
+    return long_memory_dir(agent_home) / "cycles" / "completed" / f"{review_date}.learning.json"
+
+
+def long_memory_compat_view_path(agent_home: Path) -> Path:
+    return long_memory_dir(agent_home) / "exports" / "compat_review_memory.json"
+
+
 def daily_workspace_dir(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "daily_workspace" / report_date
 
 
-def trade_journal_path(agent_home: Path, trade_date: str) -> Path:
+def today_analysis_runtime_path(agent_home: Path, report_date: str) -> Path:
+    return daily_workspace_dir(agent_home, report_date) / "today_analysis_runtime.json"
+
+
+def long_memory_runtime_path(agent_home: Path, report_date: str) -> Path:
+    return daily_workspace_dir(agent_home, report_date) / "long_memory_runtime.json"
+
+
+def process_exists(pid: object) -> bool:
+    try:
+        resolved = int(pid)
+    except Exception:
+        return False
+    if resolved <= 0:
+        return False
+    try:
+        os.kill(resolved, 0)
+    except OSError:
+        return False
+    return True
+
+
+def is_runtime_stale(runtime: dict, *, now: datetime | None = None, stale_seconds: int = TODAY_ANALYSIS_STALE_SECONDS) -> bool:
+    if str(runtime.get("status", "") or "").lower() != "running":
+        return False
+    if process_exists(runtime.get("pid")):
+        return False
+    heartbeat_text = str(runtime.get("heartbeatAt", "") or runtime.get("startedAt", "") or "").strip()
+    if not heartbeat_text:
+        return True
+    try:
+        heartbeat = datetime.fromisoformat(heartbeat_text)
+    except ValueError:
+        return True
+    current = now or shanghai_now()
+    return max(0.0, (current - heartbeat).total_seconds()) >= stale_seconds
+
+
+def refresh_runtime_heartbeat(runtime: dict, *, now_text: str | None = None) -> dict:
+    heartbeat_text = now_text or timestamp_now()
+    runtime["heartbeatAt"] = heartbeat_text
+    if not runtime.get("startedAt"):
+        runtime["startedAt"] = heartbeat_text
+    return runtime
+
+
+def legacy_trade_journal_path(agent_home: Path, trade_date: str) -> Path:
     return agent_home / "db" / "trade_journal" / f"{trade_date}.json"
+
+
+def actual_trade_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "execution_sync" / "actual_trades"
+
+
+def actual_trade_path(agent_home: Path, trade_date: str) -> Path:
+    return actual_trade_dir(agent_home) / f"{trade_date}.json"
+
+
+def load_actual_trade_payload(agent_home: Path, trade_date: str) -> dict:
+    path = actual_trade_path(agent_home, trade_date)
+    if not path.exists():
+        return {"trade_date": trade_date, "items": []}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {"trade_date": trade_date, "items": []}
+
+
+def iter_actual_trade_items(agent_home: Path, target_date: str | None = None) -> list[dict]:
+    base = actual_trade_dir(agent_home)
+    target = parse_date_text(target_date) if target_date else None
+    items: list[dict] = []
+    if base.exists():
+        for path in sorted(base.glob("*.json")):
+            trade_date = parse_date_text(path.stem[:10])
+            if target is not None and trade_date is not None and trade_date > target:
+                continue
+            payload = load_json(path)
+            if not isinstance(payload, dict):
+                continue
+            effective_date = str(payload.get("trade_date", "") or path.stem[:10])
+            for item in payload.get("items", []) or []:
+                items.append({"trade_date": effective_date, **item})
+    legacy_dir = legacy_trade_journal_path(agent_home, "1970-01-01").parent
+    if legacy_dir.exists():
+        seen_legacy_ids = {str(item.get("trade_id", item.get("conversion_id", "")) or "") for item in items}
+        for path in sorted(legacy_dir.glob("*.json")):
+            trade_date = parse_date_text(path.stem[:10])
+            if target is not None and trade_date is not None and trade_date > target:
+                continue
+            payload = load_json(path)
+            if not isinstance(payload, dict):
+                continue
+            effective_date = str(payload.get("trade_date", "") or path.stem[:10])
+            for index, item in enumerate(payload.get("items", []) or [], start=1):
+                trade_id = str(item.get("trade_id", "") or f"legacy:{effective_date}:{index}:{item.get('fund_code', '')}:{item.get('action', '')}")
+                if trade_id in seen_legacy_ids:
+                    continue
+                mapped_operation = {
+                    "buy": "buy",
+                    "sell": "sell",
+                    "switch_in": "convert_in",
+                    "switch_out": "convert_out",
+                }.get(str(item.get("action", "") or ""), str(item.get("action", "") or ""))
+                items.append(
+                    {
+                        "trade_date": effective_date,
+                        "trade_id": trade_id,
+                        "operation_type": mapped_operation,
+                        "fund_code": item.get("fund_code", ""),
+                        "fund_name": item.get("fund_name", ""),
+                        "amount": item.get("amount", 0.0),
+                        "units": item.get("units"),
+                        "nav": item.get("trade_nav"),
+                        "linked_suggestion_id": item.get("suggestion_id", ""),
+                        "linked_advice_date": item.get("suggestion_date", effective_date),
+                        "user_note": item.get("note", ""),
+                        "source": item.get("source", "legacy_trade_journal"),
+                    }
+                )
+    items.sort(key=lambda item: (str(item.get("trade_date", "")), str(item.get("trade_id", item.get("conversion_id", "")))))
+    return items
+
+
+def legacy_root(agent_home: Path) -> Path:
+    return agent_home / "db" / "legacy"
+
+
+def legacy_review_memory_dir(agent_home: Path) -> Path:
+    return legacy_root(agent_home) / "review_memory"
+
+
+def legacy_trade_journal_dir(agent_home: Path) -> Path:
+    return legacy_root(agent_home) / "trade_journal"
 
 
 def estimated_nav_path(agent_home: Path, report_date: str) -> Path:
@@ -595,3 +818,110 @@ def evaluation_snapshot_path(agent_home: Path, report_date: str) -> Path:
 
 def replay_experiment_dir(agent_home: Path, experiment_id: str) -> Path:
     return agent_home / "db" / "replay_experiments" / experiment_id
+
+
+def _empty_review_memory() -> dict:
+    return {
+        "updated_at": "",
+        "lessons": [],
+        "review_history": [],
+        "bias_adjustments": [],
+        "agent_feedback": [],
+        "records": [],
+        "strategic_memory": [],
+        "permanent_memory": [],
+        "core_permanent_memory": [],
+        "user_confirmed_memory": [],
+        "memory_ledger_summary": {},
+    }
+
+
+def _review_memory_from_long_memory(agent_home: Path) -> dict | None:
+    export_path = long_memory_export_path(agent_home)
+    if not export_path.exists():
+        return None
+    payload = load_json(export_path)
+    if not isinstance(payload, dict):
+        return None
+    items = list(payload.get("items", []) or [])
+    if not items:
+        return None
+    strategic_memory = [item for item in items if item.get("status") == "strategic"]
+    permanent_memory = [item for item in items if item.get("status") == "permanent" and item.get("priority") != "core"]
+    core_memory = [item for item in items if item.get("status") == "permanent" and item.get("priority") == "core"]
+    lessons = []
+    bias_adjustments = []
+    agent_feedback = []
+    for item in items:
+        if item.get("horizon_bucket") in {"5d", "10d", "30d", "90d"}:
+            lessons.append(
+                {
+                    "base_date": str(item.get("valid_from", "") or item.get("updated_at", ""))[:10],
+                    "horizon": item.get("horizon_bucket", "long_term"),
+                    "source": item.get("source", "long_memory"),
+                    "type": item.get("memory_type", "semantic"),
+                    "text": item.get("text", ""),
+                    "confidence": item.get("confidence", 0.0),
+                    "applies_to": item.get("entity_key", ""),
+                }
+            )
+        if item.get("domain") in {"market", "portfolio"} and item.get("horizon_bucket") in {"5d", "10d", "30d", "90d"}:
+            bias_adjustments.append(
+                {
+                    "base_date": str(item.get("valid_from", "") or item.get("updated_at", ""))[:10],
+                    "scope": item.get("horizon_bucket", "long_term"),
+                    "target": item.get("entity_key", ""),
+                    "adjustment": item.get("title", ""),
+                    "reason": item.get("text", ""),
+                    "expires_on": item.get("valid_until", ""),
+                }
+            )
+        if item.get("source_agent"):
+            agent_feedback.append(
+                {
+                    "base_date": str(item.get("valid_from", "") or item.get("updated_at", ""))[:10],
+                    "agent_name": item.get("source_agent", ""),
+                    "bias": item.get("title", ""),
+                    "reason": item.get("text", ""),
+                }
+            )
+    review_history = []
+    completed_dir = long_memory_cycle_dir(agent_home, "completed")
+    if completed_dir.exists():
+        for path in sorted(completed_dir.glob("*.json"), reverse=True)[:20]:
+            cycle = load_json(path)
+            if not isinstance(cycle, dict):
+                continue
+            review_history.append(
+                {
+                    "base_date": cycle.get("report_date", path.stem[:10]),
+                    "horizon": 0,
+                    "source": "long_memory_cycle",
+                    "summary": {
+                        "written_count": cycle.get("written_count", 0),
+                        "status": cycle.get("status", ""),
+                    },
+                    "diagnostic_summary": {},
+                    "memory_summary": (cycle.get("manager_output", {}) or {}).get("summary", ""),
+                    "watchouts": [],
+                }
+            )
+    ledger_summary = {
+        "candidate": len([item for item in items if item.get("status") == "candidate"]),
+        "strategic": len(strategic_memory),
+        "permanent": len(permanent_memory),
+        "core_permanent": len(core_memory),
+    }
+    return {
+        "updated_at": str(payload.get("updated_at", "") or ""),
+        "lessons": lessons[-80:],
+        "review_history": review_history[:20],
+        "bias_adjustments": bias_adjustments[-40:],
+        "agent_feedback": agent_feedback[-40:],
+        "records": items,
+        "strategic_memory": strategic_memory,
+        "permanent_memory": permanent_memory,
+        "core_permanent_memory": core_memory,
+        "user_confirmed_memory": permanent_memory + core_memory,
+        "memory_ledger_summary": ledger_summary,
+    }

@@ -1,5 +1,8 @@
-import { Activity, BarChart3, BrainCircuit, Gauge, ReceiptText, Settings, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, Gauge, PlayCircle, ReceiptText, Settings, WalletCards } from "lucide-react";
 import type { ReactNode } from "react";
+import { NavLink } from "react-router-dom";
+import type { SystemPayload } from "../../lib/types";
+import { getTodayAnalysisSystem } from "../../lib/todayAnalysis";
 import { Button } from "../ui";
 import { CopilotPanel } from "./CopilotPanel";
 
@@ -8,7 +11,7 @@ export type PageKey = "today" | "portfolio" | "execution" | "research" | "realti
 const nav = [
   { key: "today", label: "今日", icon: Gauge },
   { key: "portfolio", label: "持仓", icon: WalletCards },
-  { key: "execution", label: "实际操作", icon: ReceiptText },
+  { key: "execution", label: "执行", icon: ReceiptText },
   { key: "research", label: "研究", icon: BarChart3 },
   { key: "realtime", label: "实时", icon: Activity },
   { key: "review", label: "记忆", icon: BrainCircuit },
@@ -17,27 +20,36 @@ const nav = [
 
 export function WorkbenchLayout({
   page,
-  onPageChange,
   selectedDate,
   dates,
   onDateChange,
   onRunDaily,
   onRunRealtime,
+  system,
+  systemRunning,
+  dailyRunning,
   fundCode,
   children
 }: {
   page: PageKey;
-  onPageChange: (page: PageKey) => void;
   selectedDate: string;
   dates: string[];
   onDateChange: (date: string) => void;
   onRunDaily: () => void;
   onRunRealtime: () => void;
+  system?: SystemPayload;
+  systemRunning?: boolean;
+  dailyRunning?: boolean;
   fundCode?: string;
   children: ReactNode;
 }) {
   const label = nav.find((item) => item.key === page)?.label ?? "基金详情";
   const context = `当前页面：${label}。查看日期：${selectedDate || "暂无"}`;
+  const todayAnalysis = getTodayAnalysisSystem(system);
+  const hasRunToday = Boolean(todayAnalysis?.hasRunToday ?? todayAnalysis?.todayDecisionExists);
+  const todayRunLabel = dailyRunning ? "运行中" : hasRunToday ? `已运行${todayAnalysis?.runTime ? ` · ${todayAnalysis.runTime}` : ""}` : "今日未跑";
+  const selectedDateQuery = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
+
   return (
     <div className="flex h-full overflow-hidden">
       <aside className="flex w-[236px] shrink-0 flex-col border-r border-slate-800 bg-slate-950/80 p-4">
@@ -49,20 +61,34 @@ export function WorkbenchLayout({
           {nav.map((item) => {
             const Icon = item.icon;
             return (
-              <button
+              <NavLink
                 key={item.key}
-                onClick={() => onPageChange(item.key)}
-                className={`flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm font-semibold transition ${
-                  page === item.key ? "border border-cyan-500/40 bg-cyan-950/40 text-cyan-100" : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"
-                }`}
+                to={`/${item.key}${selectedDateQuery}`}
+                className={({ isActive }) =>
+                  `flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm font-semibold transition ${
+                    isActive ? "border border-cyan-500/40 bg-cyan-950/40 text-cyan-100" : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"
+                  }`
+                }
               >
                 <Icon className="h-4 w-4" />
                 {item.label}
-              </button>
+              </NavLink>
             );
           })}
         </nav>
         <div className="mt-auto space-y-3">
+          <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-bold text-slate-400">系统状态</span>
+              <span className={`text-xs font-bold ${systemRunning ? "text-cyan-300" : "text-emerald-300"}`}>{systemRunning ? "正在运行" : "空闲"}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-xs font-bold text-slate-400">今日分析</span>
+              <span className={`text-right text-xs font-bold ${dailyRunning ? "text-cyan-300" : hasRunToday ? "text-emerald-300" : "text-amber-300"}`}>
+                {todayRunLabel}
+              </span>
+            </div>
+          </div>
           <select
             value={selectedDate}
             onChange={(event) => onDateChange(event.target.value)}
@@ -75,8 +101,9 @@ export function WorkbenchLayout({
             ))}
           </select>
           <div className="grid grid-cols-2 gap-2">
-            <Button variant="secondary" onClick={onRunDaily}>
-              首启分析
+            <Button variant="secondary" className="gap-2" onClick={onRunDaily}>
+              <PlayCircle className="h-4 w-4" />
+              今日分析
             </Button>
             <Button variant="primary" onClick={onRunRealtime}>
               实时刷新

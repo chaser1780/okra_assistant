@@ -92,10 +92,53 @@ class LearningMemoryTests(unittest.TestCase):
         self.assertEqual(digest["core_permanent_memory_hits"][0]["memory_id"], "rule:core")
         self.assertEqual(digest["active_memory_records"][0]["memory_id"], "rule:core")
 
+    def test_build_memory_digest_uses_learning_scope_with_legacy_review_scope_compat(self):
+        base_memory = {
+            "updated_at": "2026-03-12T21:00:00+08:00",
+            "core_permanent_memory": [],
+            "permanent_memory": [],
+            "strategic_memory": [],
+            "lessons": [
+                {
+                    "base_date": "2026-03-12",
+                    "text": "Growth cluster requires confirmation before adding.",
+                    "applies_to": "growth",
+                    "confidence": 0.8,
+                }
+            ],
+            "review_history": [],
+            "bias_adjustments": [],
+            "agent_feedback": [],
+            "records": [
+                {
+                    "memory_id": "legacy-review-scope",
+                    "memory_type": "semantic",
+                    "scope": "review_memory",
+                    "entity_keys": ["growth"],
+                    "text": "Legacy review scope record remains selectable.",
+                    "provenance": {"source": "legacy", "kind": "lesson"},
+                    "base_date": "2026-03-12",
+                    "horizon_bucket": "long_term",
+                    "confidence": 0.7,
+                    "status": "active",
+                }
+            ],
+            "user_confirmed_memory": [],
+            "_analysis_date": "2026-03-12",
+        }
+        portfolio = {"funds": [{"fund_code": "F1", "role": "tactical", "style_group": "growth", "current_value": 100.0}]}
+        exposure_summary = {"by_theme_family": [{"name": "growth_cluster", "weight_pct": 100.0}], "allocation_plan": {}}
+
+        digest = build_memory_digest(base_memory, portfolio, exposure_summary)
+
+        lesson_scopes = {item.get("scope") for item in digest["recent_lessons"]}
+        self.assertIn("learning_memory", lesson_scopes)
+        self.assertIn("review_memory", {item.get("scope") for item in digest["active_memory_records"]})
+
     def test_load_state_exposes_learning_artifacts(self):
-        self.agent.write_json("db/review_memory/ledger.json", {"rules": [], "events": [], "summary": {"strategic": 1, "permanent": 0, "core_permanent": 0}})
+        self.agent.write_json("db/long_memory/portfolio/learning_ledger.json", {"rules": [], "events": [], "summary": {"strategic": 1, "permanent": 0, "core_permanent": 0}})
         self.agent.write_json(
-            "db/review_memory/cycles/2026-03-11.json",
+            "db/long_memory/cycles/completed/2026-03-11.learning.json",
             {"review_date": "2026-03-11", "batch_count": 2, "headline": "learning cycle complete"},
         )
         self.agent.write_text("reports/daily/2026-03-11_learning.md", "# Learning Report\n")

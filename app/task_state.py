@@ -55,21 +55,24 @@ def current_task_result_info(home: Path, task_kind: str) -> dict:
             "manifest_error": ((manifest.get("errors") or [{}])[-1].get("error", "")),
         }
 
-    cycle_path = home / "db" / "review_memory" / "cycles" / f"{run_date}.json"
+    cycle_path = home / "db" / "daily_workspace" / run_date / "memory_cycle.json"
     cycle = read_json(cycle_path, {})
     report_path = home / "reports" / "daily" / f"{run_date}_learning.md"
     valuation_path = home / "db" / "portfolio_valuation" / f"{run_date}.json"
     valuation_payload = read_json(valuation_path, {})
     manifest = latest_manifest(home, "daily_pipeline", run_date, mode="nightly")
-    ledger = read_json(home / "db" / "review_memory" / "ledger.json", {"summary": {}})
+    ledger = read_json(home / "db" / "long_memory" / "exports" / "all_memory.json", {"items": []})
+    strategic_count = len([item for item in ledger.get("items", []) or [] if item.get("status") == "strategic"])
+    permanent_count = len([item for item in ledger.get("items", []) or [] if item.get("status") == "permanent" and item.get("priority") != "core"])
+    core_count = len([item for item in ledger.get("items", []) or [] if item.get("status") == "permanent" and item.get("priority") == "core"])
     return {
         "exists": cycle_path.exists() or report_path.exists(),
-        "result_date": cycle.get("review_date", run_date if report_path.exists() else "--"),
+        "result_date": cycle.get("report_date", run_date if report_path.exists() else "--"),
         "generated_at": cycle.get("generated_at", file_mtime_text(report_path if report_path.exists() else cycle_path)),
         "market_time": "--",
         "extra": (
-            f"batches={cycle.get('batch_count', 0)} / strategic={ledger.get('summary', {}).get('strategic', 0)} / "
-            f"permanent={ledger.get('summary', {}).get('permanent', 0)} / core={ledger.get('summary', {}).get('core_permanent', 0)}"
+            f"batches={cycle.get('batch_count', 0)} / strategic={strategic_count} / "
+            f"permanent={permanent_count} / core={core_count}"
             if cycle
             else ("已完成官方净值重估" if valuation_path.exists() else "--")
         ),

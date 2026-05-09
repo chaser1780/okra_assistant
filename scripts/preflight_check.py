@@ -12,6 +12,8 @@ from common import (
     load_project_toml,
     load_settings,
     load_strategy,
+    legacy_portfolio_path,
+    portfolio_state_current_path,
     preflight_result_path,
     resolve_agent_home,
     timestamp_now,
@@ -53,7 +55,6 @@ def check_basic_layout(agent_home: Path, result: dict, scope: str) -> None:
     required = [
         agent_home / "config" / "settings.toml",
         agent_home / "config" / "strategy.toml",
-        agent_home / "config" / "portfolio.json",
     ]
     if scope == "intraday":
         required.extend(
@@ -67,6 +68,15 @@ def check_basic_layout(agent_home: Path, result: dict, scope: str) -> None:
             _add_check(result, f"exists:{path.name}", "ok", f"已找到 {path}")
         else:
             _add_check(result, f"exists:{path.name}", "error", f"缺少关键文件 {path}")
+
+    current_portfolio = portfolio_state_current_path(agent_home)
+    legacy_portfolio = legacy_portfolio_path(agent_home)
+    if current_portfolio.exists():
+        _add_check(result, "exists:portfolio_state", "ok", f"已找到运行态组合 {current_portfolio}")
+    elif legacy_portfolio.exists():
+        _add_check(result, "exists:portfolio_state", "warning", f"未找到运行态组合，将从 legacy 配置启动：{legacy_portfolio}")
+    else:
+        _add_check(result, "exists:portfolio_state", "error", f"缺少运行态组合 {current_portfolio}，且没有 legacy 配置 {legacy_portfolio}")
 
     configured_python = configured_python_path(agent_home)
     if configured_python:

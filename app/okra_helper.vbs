@@ -1,3 +1,3 @@
 Set shell = CreateObject("WScript.Shell")
 shell.CurrentDirectory = "F:\okra_assistant"
-shell.Run """F:\okra_assistant\frontend\src-tauri\target\release\okra-workbench.exe""", 0, False
+shell.Run "powershell.exe -ExecutionPolicy Bypass -File ""F:\okra_assistant\run_desktop_app.ps1""", 0, False

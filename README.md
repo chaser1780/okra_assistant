@@ -1,31 +1,33 @@
 # OKRA Long-Memory Investment Workbench
 
-OKRA is a local-first personal fund research, review, long-memory, and real-position synchronization system. It is designed around two product loops: continuously learning from system-generated investment decisions, and showing a daily first-open investment workbench when the desktop app starts.
+OKRA is a local-first personal fund research, review, long-memory, and real-position synchronization system. It is organized around two canonical product loops:
 
-> Disclaimer: OKRA is a personal research tool. It does not provide financial advice. Agent output, memory records, reviews, and strategy summaries should be treated as decision-support material only.
+- `today_analysis`: run the full same-day research and advice chain for one trading day.
+- `long_memory`: promote validated observations into durable memory without contaminating unrelated learning domains.
+
+> Disclaimer: OKRA is a personal research tool. It does not provide financial advice. Agent output, memory records, reviews, and strategy summaries are decision-support material only.
 
 ## Current Capabilities
 
-- **Tauri + React + TypeScript desktop workbench** for Today, Portfolio, Actual Operations, Research, Realtime, Long Memory, and System views.
-- **Local Python API backend** in `app/web_api.py`, aggregating local JSON/SQLite data, script status, agent context, and UI-ready payloads.
-- **Daily first-open loop** that checks state, updates pending confirmations, refreshes market/fund data, runs due reviews, updates long memory, and builds the daily brief.
-- **Long-memory loop** for fund profiles, market regimes, execution discipline, portfolio policies, and user-approved strategy rules.
-- **Actual operation and real-position sync** for Alipay manual buy/sell/conversion records and Alipay position screenshot imports.
-- **Strict learning boundary**: fund profiles and advice accuracy are learned from system advice and system reviews only; real trades only affect execution memory, execution deviation, and real portfolio state.
-- **Multi-agent research pipeline** with structured analyst, risk, portfolio, review, and committee-style artifacts.
-- **Local-first storage** under `db/`, `config/`, `reports/`, and related folders for auditability, replay, and backup.
+- **React + Tauri desktop workbench** for Today, Portfolio, Actual Operations, Research, Realtime, Review/Memory, and System views.
+- **Local Python API backend** in `app/web_api.py`, serving snapshot data, page-specific workbench payloads, execution sync APIs, fund detail APIs, and runtime task triggers.
+- **Canonical today-analysis route** in `scripts/run_today_analysis.py`, backed by `scripts/today_orchestrator.py`, with runtime state written into `db/daily_workspace/YYYY-MM-DD/`.
+- **Canonical committee research chain** that aggregates analyst outputs into `db/agent_outputs/<date>/aggregate.json`, then produces committee-oriented advice artifacts and validated advice.
+- **Validated advice flow** under `db/validated_advice/`, used as the trusted downstream source for review, reporting, and long-memory promotion.
+- **Actual operation and real-position sync** for manual buy/sell/conversion records and Alipay position screenshot reconciliation.
+- **Strict execution boundary**: real trades affect execution memory and real portfolio state, but do not relabel fund-profile learning, market-regime learning, or system advice win rate.
+- **Local-first storage** under `db/`, `config/`, `reports/`, `logs/`, and related folders for auditability, replay, and backup.
 
 ## Product Loops
 
 ### 1. Long-Memory Loop
 
-The long-memory loop learns and stores:
+The long-memory loop stores and promotes:
 
-- Long-term behavior patterns for funds in the portfolio.
-- Historical success and failure patterns of system-generated advice.
-- Market and style regimes such as QDII, bonds, cash, growth, dividend, US equities, Hong Kong equities, and sector rotations.
-- Execution rules around QDII confirmation dates, redemption settlement, conversions, fees, and DCA timing.
-- Strategy rules that require user confirmation before becoming permanent.
+- Fund profile patterns learned from system advice and system reviews.
+- Market and style regime observations.
+- Execution discipline such as confirmation timing, conversions, fees, settlement, and manual deviation patterns.
+- Portfolio policies and candidate strategy rules that may require user approval.
 
 Main local storage:
 
@@ -42,23 +44,34 @@ db/long_memory/
   exports/
 ```
 
-### 2. Daily First-Open Loop
+Boundary rules:
+
+- `db/validated_advice/<date>.json` and review outputs can feed fund/profile and market learning.
+- `db/execution_sync/actual_trades/` can feed `execution_memory` only.
+- Real execution does not change whether the system's own advice was correct.
+
+### 2. Today Analysis Loop
 
 Unified entry point:
 
 ```powershell
-python scripts/run_daily_first_open.py --date YYYY-MM-DD
+python scripts/run_today_analysis.py --date YYYY-MM-DD
 ```
 
-The loop performs:
+What the canonical route does:
 
-1. Environment and data-source preflight.
-2. Pending real-trade confirmation updates.
-3. Fund NAV, estimated NAV, proxy index, news, and portfolio state refresh.
-4. Due reviews for previous system advice.
-5. Long-memory updates.
-6. Today analysis with relevant long-memory context.
-7. Daily brief, decision summary, blocked actions, allowed actions, and watch list.
+1. Preflight checks for environment and data sources.
+2. Update pending real-trade confirmations.
+3. Refresh NAV, estimate, proxy, news, and portfolio context.
+4. Process due reviews for earlier system advice.
+5. Refresh long-memory context when eligible.
+6. Run the multi-agent research chain and committee aggregation.
+7. Generate validated advice, decision artifacts, and the daily brief.
+
+Auto backfill policy:
+
+- When `today_analysis` runs for the current trading day, OKRA only backfills missing trading-day runs within the most recent 3 calendar days.
+- Older missing runs require an explicit manual rerun.
 
 Daily workspace output:
 
@@ -69,21 +82,38 @@ db/daily_workspace/YYYY-MM-DD/
   due_reviews.json
   memory_updates.json
   today_analysis.json
+  today_analysis_meta.json
+  today_analysis_runtime.json
   today_decision.json
+  memory_cycle.json
   daily_brief.md
 ```
 
-### 3. Actual Operations and Real-Position Sync
+Runtime behavior:
 
-The Actual Operations page maintains the real portfolio state:
+- `today_analysis_runtime.json` records run status, phase, current step, active agent, and run id.
+- `POST /api/run/daily` returns `409 already_running` when the same-day route is already active, and the workbench uses that runtime state for polling and resume behavior.
 
-- Manual **buy / sell / conversion** records.
-- Buy orders remain pending before confirmation and do not immediately increase confirmed units.
+### 3. Canonical Committee and Validated Advice
+
+The current research/advice chain is:
+
+1. Multi-agent analysis writes raw outputs under `db/agent_outputs/<date>/`.
+2. Committee synthesis builds a canonical committee summary in `aggregate.json`, including fields such as `bull_case`, `bear_case`, `risk_vetoes`, `manager_decision`, `committee_confidence`, and `decision_source`.
+3. Committee-oriented advice is written to `db/committee_advice/<date>.json`.
+4. Final validated advice is written to `db/validated_advice/<date>.json`.
+
+Operationally, downstream review, reporting, memory promotion, and the Today page should treat validated advice as the stable advice artifact, while the committee artifact remains the canonical trace of how the decision was formed.
+
+### 4. Actual Operations and Real-Position Sync
+
+The Actual Operations page maintains real portfolio state:
+
+- Manual `buy`, `sell`, and grouped `conversion` records.
+- Buy orders can remain pending before confirmation and do not immediately increase confirmed units.
 - Sell orders follow confirmation and settlement lifecycle rules.
-- Conversions are recorded as one grouped conversion order instead of unrelated buy/sell rows.
-- Alipay position screenshots can be recognized and then applied in two modes:
-  - **Update**: update funds detected in the screenshot and keep missing current holdings unchanged.
-  - **Replace all**: make the real portfolio match the screenshot; current holdings missing from the screenshot are zeroed.
+- Conversions are modeled as one grouped conversion order via a shared `conversion_id`, not unrelated buy/sell rows.
+- Alipay position screenshots are parsed into a preview first, then applied by user confirmation.
 
 Main local storage:
 
@@ -100,27 +130,32 @@ db/execution_sync/
 Compatibility writes:
 
 ```text
-db/trade_journal/
-db/execution_status/
 db/portfolio_state/current.json
 db/portfolio_state/snapshots/
+```
+
+Legacy archives after cutover:
+
+```text
+db/legacy/review_memory/
+db/legacy/trade_journal/
 ```
 
 ## Repository Layout
 
 ```text
 F:\okra_assistant
-├─ app/                  Local API, state aggregation, desktop backend entry points
-├─ frontend/             Tauri + React + TypeScript workbench
-├─ scripts/              Data sync, daily loop, review, long memory, actual operations
-├─ config/               Portfolio, strategy, model, and agent configuration
-├─ db/                   Local structured data, long memory, real positions, review results
-├─ reports/              Human-readable daily reports, reviews, and learning reports
-├─ docs/                 Design docs, migration notes, development backlog
-├─ assets/               Report templates and static assets
-├─ references/           Rules, source priority, and scoring references
-├─ logs/                 Runtime logs
-└─ README.md             Project overview
++-- app/                  Local API, desktop backend, state aggregation
++-- frontend/             React + TypeScript + Tauri workbench
++-- scripts/              Today-analysis, long-memory, execution sync, reports
++-- config/               Portfolio, strategy, model, and agent configuration
++-- db/                   Local structured data, workspace artifacts, long memory
++-- reports/              Human-readable daily reports and review outputs
++-- docs/                 Active design docs, index, and focused planning notes
++-- assets/               Static assets and templates
++-- references/           Rules, source priority, and scoring references
++-- logs/                 Runtime logs
++-- README.md             Project overview
 ```
 
 ## Common Entrypoints
@@ -131,16 +166,28 @@ Start the desktop workbench:
 powershell -ExecutionPolicy Bypass -File "F:\okra_assistant\run_desktop_app.ps1"
 ```
 
-Run the daily first-open loop:
+Start the API directly:
 
 ```powershell
-python "F:\okra_assistant\scripts\run_daily_first_open.py" --date 2026-05-06
+python -B -X utf8 "F:\okra_assistant\app\web_api.py" --home "F:\okra_assistant"
+```
+
+Run today analysis:
+
+```powershell
+python "F:\okra_assistant\scripts\run_today_analysis.py" --date 2026-05-08
+```
+
+Run long-memory analysis manually:
+
+```powershell
+python "F:\okra_assistant\scripts\run_long_memory_analysis.py" --date 2026-05-08
 ```
 
 Run realtime refresh:
 
 ```powershell
-python "F:\okra_assistant\scripts\run_realtime_pipeline.py"
+python "F:\okra_assistant\scripts\run_realtime_monitor.py"
 ```
 
 Record an actual trade:
@@ -163,23 +210,46 @@ python "F:\okra_assistant\scripts\update_pending_confirmations.py"
 
 ## Desktop Pages
 
-- **Today**: daily first-open result, current view, blocked actions, key long memories.
-- **Portfolio**: real portfolio state, allocation, return metrics, fund detail entry points.
-- **Actual Operations**: buy/sell/conversion records, Alipay screenshot import, pending confirmations.
-- **Research**: research pipeline and multi-agent artifacts.
-- **Realtime**: estimated NAV, daily returns, and applied intraday change.
-- **Memory**: fund profiles, market regimes, execution discipline, pending strategy rules.
-- **System**: data health, task status, logs, and startup-loop state.
+- **Today**: today-analysis result, validated advice, committee trace, key long memories, and runtime status.
+- **Portfolio**: real portfolio state, allocation, return metrics, and fund detail entry points.
+- **Actual Operations**: buy/sell/conversion records, screenshot import, preview reconciliation, and pending confirmations.
+- **Research**: multi-agent and committee artifacts for the selected day.
+- **Realtime**: estimated NAV, daily return change, and intraday proxy views.
+- **Review / Memory**: review outcomes, long-memory candidates, approvals, and execution memory traces.
+- **System**: data health, logs, task status, and current runtime metadata.
 
-## Data Boundary
+## API and Frontend Entrypoints
 
-OKRA intentionally separates three kinds of data:
+Workbench frontend:
 
-- **System advice and system reviews** drive fund profiles, market-regime learning, and advice accuracy.
-- **Real trades and real positions** drive current portfolio state, cash constraints, sellable units, and execution checks.
-- **Execution memory** learns confirmation dates, fees, settlement, conversions, delayed execution, and manual deviations.
+- React routes live under `frontend/src/app/routes.tsx`.
+- The workbench fetch layer lives under `frontend/src/lib/workbenchApi.ts` and `frontend/src/lib/workbenchQuery.ts`.
 
-Real operations can change the app's current portfolio and execution discipline, but they do not change the label for whether the system's own advice was correct.
+Primary page APIs:
+
+- `GET /api/workbench/shell?date=YYYY-MM-DD`
+- `GET /api/workbench/today?date=YYYY-MM-DD`
+- `GET /api/workbench/portfolio?date=YYYY-MM-DD`
+- `GET /api/workbench/execution?date=YYYY-MM-DD`
+- `GET /api/workbench/research?date=YYYY-MM-DD`
+- `GET /api/workbench/realtime?date=YYYY-MM-DD`
+- `GET /api/workbench/review?date=YYYY-MM-DD`
+- `GET /api/workbench/system?date=YYYY-MM-DD`
+- `GET /api/fund/<fund_code>?date=YYYY-MM-DD`
+
+Operational APIs:
+
+- `POST /api/run/daily`
+- `POST /api/run/realtime`
+- `GET /api/execution-sync`
+- `POST /api/execution-sync/trade`
+- `POST /api/execution-sync/conversion`
+- `POST /api/execution-sync/alipay-screenshot/parse`
+- `POST /api/execution-sync/reconcile/preview`
+- `POST /api/execution-sync/reconcile/apply`
+- `POST /api/execution-sync/confirmation/update`
+- `POST /api/long-memory/action`
+- `POST /api/copilot/explain`
 
 ## Development and Verification
 
@@ -190,23 +260,30 @@ cd "F:\okra_assistant\frontend"
 npm run build
 ```
 
-Build the Tauri release executable:
+Check the Tauri project:
+
+```powershell
+cd "F:\okra_assistant\frontend"
+npm run tauri:check
+```
+
+Build the Tauri executable without bundling:
 
 ```powershell
 cd "F:\okra_assistant\frontend"
 npm run tauri -- build --no-bundle
 ```
 
-Run key tests:
+Run targeted backend tests:
 
 ```powershell
 cd "F:\okra_assistant"
-python -B -X utf8 -m unittest tests.test_execution_sync tests.test_portfolio_screenshot_sync tests.test_long_memory tests.test_web_api_long_memory
+python -B -X utf8 -m unittest tests.test_execution_sync tests.test_long_memory tests.test_multiagent_and_review tests.test_web_api_long_memory
 ```
 
 ## Privacy and Local-First Design
 
 - Portfolio state, trades, reviews, and long memory are stored locally by default.
-- Embeddings are off by default. If API embeddings are enabled later, they are only a rebuildable index layer.
-- Alipay screenshots are saved locally and converted into a preview first; they do not overwrite real positions until the user confirms.
-
+- Execution sync, screenshot reconciliation, and memory artifacts are written into repo-local storage.
+- Embeddings are optional and should be treated as a rebuildable index layer, not the source of truth.
+- Screenshot reconciliation remains preview-first and does not overwrite real positions until the user confirms.

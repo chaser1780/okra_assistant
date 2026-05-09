@@ -12,10 +12,11 @@ from common import (
     fund_profile_path,
     intraday_proxy_path,
     llm_context_path,
+    long_memory_cycle_dir,
+    long_memory_export_path,
     load_json,
     load_market_overrides,
     load_portfolio,
-    load_review_memory,
     load_strategy,
     news_path,
     parse_date_text,
@@ -33,6 +34,18 @@ try:
 except Exception:
     list_memory_records = None
     search_long_memory = None
+
+
+LEARNING_MEMORY_SCOPE = "learning_memory"
+LEGACY_REVIEW_MEMORY_SCOPE = "review_memory"
+LEARNING_MEMORY_SCOPES = {LEARNING_MEMORY_SCOPE, LEGACY_REVIEW_MEMORY_SCOPE}
+KNOWN_MEMORY_SCOPES = {
+    "core_permanent_memory",
+    "permanent_memory",
+    "strategic_memory",
+    LEARNING_MEMORY_SCOPE,
+    LEGACY_REVIEW_MEMORY_SCOPE,
+}
 
 
 def summarize_news(items: list[NewsItem], limit: int = 5) -> list[NewsItem]:
@@ -418,96 +431,169 @@ def build_memory_id(prefix: str, base_date: str, text: str, scope: str) -> str:
 
 
 def normalize_memory_records(memory: dict) -> list[MemoryRecord]:
-    records = [dict(item) for item in memory.get("records", []) or []]
-    strategic = [dict(item) for item in memory.get("strategic_memory", []) or []]
-    permanent = [dict(item) for item in memory.get("permanent_memory", []) or []]
-    core_permanent = [dict(item) for item in memory.get("core_permanent_memory", []) or []]
-    confirmed = [dict(item) for item in memory.get("user_confirmed_memory", []) or []]
-
-    for item in memory.get("lessons", []) or []:
-        records.append(
+    combined: list[MemoryRecord] = []
+    for key, scope, promotion in (
+        ("core_permanent_memory", "core_permanent_memory", "promoted"),
+        ("permanent_memory", "permanent_memory", "promoted"),
+        ("strategic_memory", "strategic_memory", "normal"),
+        ("user_confirmed_memory", "permanent_memory", "promoted"),
+    ):
+        for item in memory.get(key, []) or []:
+            combined.append(
+                {
+                    "memory_id": str(item.get("memory_id", "") or build_memory_id("compat", item.get("base_date", ""), item.get("text", ""), scope)),
+                    "memory_type": str(item.get("memory_type", "policy") or "policy"),
+                    "scope": str(item.get("scope", scope) or scope),
+                    "entity_keys": list(item.get("entity_keys", []) or []),
+                    "text": item.get("text", ""),
+                    "provenance": item.get("provenance", {"source": item.get("source", "compat_memory"), "kind": "policy_rule"}),
+                    "base_date": item.get("base_date", ""),
+                    "horizon_bucket": item.get("horizon_bucket", "long_term"),
+                    "valid_from": item.get("valid_from", ""),
+                    "valid_until": item.get("valid_until", ""),
+                    "expires_on": item.get("expires_on", ""),
+                    "promotion_level": item.get("promotion_level", promotion),
+                    "approved_by": item.get("approved_by", ""),
+                    "confidence": float(item.get("confidence", 0.0) or 0.0),
+                    "status": item.get("status", "active"),
+                    "applies_to": item.get("applies_to", ""),
+                    "reason": item.get("reason", ""),
+                    "source": item.get("source", "compat_memory"),
+                }
+            )
+    for item in memory.get("long_memory_records", []) or memory.get("records", []) or []:
+        domain = str(item.get("domain", "") or "")
+        status = str(item.get("status", "") or "candidate")
+        priority = str(item.get("priority", "") or "")
+        horizon_bucket = str(item.get("horizon_bucket", "long_term") or "long_term")
+        explicit_scope = str(item.get("scope", "") or "")
+        scope = explicit_scope if explicit_scope in KNOWN_MEMORY_SCOPES else (
+            "core_permanent_memory"
+            if status == "permanent" and priority == "core"
+            else "permanent_memory"
+            if status == "permanent"
+            else "strategic_memory"
+            if status == "strategic"
+            else LEARNING_MEMORY_SCOPE
+        )
+        provenance_kind = {
+            "fund": "lesson",
+            "market": "bias_adjustment" if horizon_bucket in {"5d", "10d", "30d", "90d"} else "policy_rule",
+            "execution": "policy_rule",
+            "portfolio": "policy_rule",
+        }.get(domain, "long_memory")
+        combined.append(
             {
-                "memory_id": item.get("memory_id") or build_memory_id("lesson", item.get("base_date", ""), item.get("text", ""), "review_memory"),
-                "memory_type": item.get("type", "semantic"),
-                "scope": "review_memory",
+                "memory_id": str(item.get("memory_id", "") or build_memory_id("long_memory", str(item.get("valid_from", "") or item.get("updated_at", ""))[:10], item.get("text", ""), scope)),
+                "memory_type": str(item.get("memory_type", "semantic") or "semantic"),
+                "scope": scope,
+                "entity_keys": [str(item.get("entity_key", "")).strip()] if item.get("entity_key") else [],
+                "text": item.get("text", ""),
+                "provenance": {"source": item.get("source", "long_memory"), "kind": provenance_kind},
+                "base_date": str(item.get("valid_from", "") or item.get("updated_at", ""))[:10],
+                "horizon_bucket": horizon_bucket,
+                "valid_from": item.get("valid_from", ""),
+                "valid_until": item.get("valid_until", ""),
+                "expires_on": item.get("valid_until", ""),
+                "promotion_level": "promoted" if status == "permanent" else "normal",
+                "approved_by": item.get("approved_by", ""),
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "status": "inactive" if status in {"archived", "rejected"} else "active",
+                "applies_to": item.get("entity_key", ""),
+                "reason": item.get("title", ""),
+                "source": item.get("source", "long_memory"),
+            }
+        )
+    for item in memory.get("review_history", []) or []:
+        combined.append(
+            {
+                "memory_id": str(item.get("memory_id", "") or build_memory_id("review_history", item.get("base_date", ""), item.get("memory_summary", ""), LEARNING_MEMORY_SCOPE)),
+                "memory_type": "episodic",
+                "scope": LEARNING_MEMORY_SCOPE,
+                "entity_keys": [str(item.get("source", "")).strip()],
+                "text": item.get("memory_summary", ""),
+                "provenance": {"source": item.get("source", "long_memory_cycle"), "kind": "review_history"},
+                "base_date": item.get("base_date", ""),
+                "horizon_bucket": "long_term",
+                "valid_from": item.get("base_date", ""),
+                "valid_until": "",
+                "expires_on": "",
+                "promotion_level": "normal",
+                "approved_by": "",
+                "confidence": 0.5,
+                "status": "active",
+                "source": item.get("source", "long_memory_cycle"),
+            }
+        )
+    for item in memory.get("lessons", []) or []:
+        combined.append(
+            {
+                "memory_id": str(item.get("memory_id", "") or build_memory_id("lesson", item.get("base_date", ""), item.get("text", ""), LEARNING_MEMORY_SCOPE)),
+                "memory_type": str(item.get("type", "semantic") or "semantic"),
+                "scope": LEARNING_MEMORY_SCOPE,
                 "entity_keys": [str(item.get("applies_to", "")).strip()] if item.get("applies_to") else [],
                 "text": item.get("text", ""),
-                "provenance": {"source": item.get("source", "advice"), "kind": "lesson"},
+                "provenance": {"source": item.get("source", "long_memory"), "kind": "lesson"},
                 "base_date": item.get("base_date", ""),
+                "horizon_bucket": item.get("horizon_bucket", "long_term"),
+                "valid_from": item.get("valid_from", ""),
+                "valid_until": item.get("valid_until", ""),
                 "expires_on": item.get("expires_on", ""),
                 "promotion_level": "normal",
                 "approved_by": "",
                 "confidence": float(item.get("confidence", 0.0) or 0.0),
                 "status": "active",
                 "applies_to": item.get("applies_to", ""),
-                "source": item.get("source", "advice"),
+                "source": item.get("source", "long_memory"),
             }
         )
     for item in memory.get("bias_adjustments", []) or []:
-        strategic.append(
+        combined.append(
             {
-                "memory_id": item.get("memory_id") or build_memory_id("bias", item.get("base_date", ""), item.get("adjustment", ""), "strategic_memory"),
+                "memory_id": str(item.get("memory_id", "") or build_memory_id("bias", item.get("base_date", ""), item.get("adjustment", ""), "strategic_memory")),
                 "memory_type": "caveat",
                 "scope": "strategic_memory",
                 "entity_keys": [str(item.get("scope", "")).strip(), str(item.get("target", "")).strip()],
                 "text": item.get("adjustment", ""),
-                "provenance": {"source": item.get("source", "advice"), "kind": "bias_adjustment"},
+                "provenance": {"source": item.get("source", "long_memory"), "kind": "bias_adjustment"},
                 "base_date": item.get("base_date", ""),
+                "horizon_bucket": item.get("horizon_bucket", "long_term"),
+                "valid_from": item.get("valid_from", ""),
+                "valid_until": item.get("valid_until", ""),
                 "expires_on": item.get("expires_on", ""),
                 "promotion_level": "normal",
                 "approved_by": "",
                 "confidence": float(item.get("confidence", 0.0) or 0.7),
                 "status": "active",
                 "reason": item.get("reason", ""),
-                "source": item.get("source", "advice"),
+                "source": item.get("source", "long_memory"),
             }
         )
     for item in memory.get("agent_feedback", []) or []:
-        records.append(
+        combined.append(
             {
-                "memory_id": item.get("memory_id") or build_memory_id("agent_feedback", item.get("base_date", ""), item.get("reason", ""), "review_memory"),
+                "memory_id": str(item.get("memory_id", "") or build_memory_id("agent_feedback", item.get("base_date", ""), item.get("reason", ""), LEARNING_MEMORY_SCOPE)),
                 "memory_type": "procedural",
-                "scope": "review_memory",
+                "scope": LEARNING_MEMORY_SCOPE,
                 "entity_keys": [str(item.get("agent_name", "")).strip()],
                 "text": f"{item.get('agent_name', '')}: {item.get('bias', '')}",
-                "provenance": {"source": item.get("source", "advice"), "kind": "agent_feedback"},
+                "provenance": {"source": item.get("source", "long_memory"), "kind": "agent_feedback"},
                 "base_date": item.get("base_date", ""),
+                "horizon_bucket": item.get("horizon_bucket", "long_term"),
+                "valid_from": item.get("valid_from", ""),
+                "valid_until": item.get("valid_until", ""),
                 "expires_on": item.get("expires_on", ""),
                 "promotion_level": "normal",
                 "approved_by": "",
                 "confidence": float(item.get("confidence", 0.0) or 0.0),
                 "status": "active",
                 "reason": item.get("reason", ""),
-                "source": item.get("source", "advice"),
+                "source": item.get("source", "long_memory"),
             }
         )
-    for item in memory.get("review_history", []) or []:
-        records.append(
-            {
-                "memory_id": item.get("memory_id") or build_memory_id("review_history", item.get("base_date", ""), item.get("memory_summary", ""), "review_memory"),
-                "memory_type": "episodic",
-                "scope": "review_memory",
-                "entity_keys": [str(item.get("source", "")).strip()],
-                "text": item.get("memory_summary", ""),
-                "provenance": {"source": item.get("source", "advice"), "kind": "review_history"},
-                "base_date": item.get("base_date", ""),
-                "expires_on": item.get("expires_on", ""),
-                "promotion_level": "normal",
-                "approved_by": "",
-                "confidence": 0.5,
-                "status": "active",
-                "source": item.get("source", "advice"),
-            }
-        )
-
-    for item in core_permanent:
-        item.setdefault("scope", "core_permanent_memory")
-        item.setdefault("promotion_level", "promoted")
-        item.setdefault("memory_type", "policy")
-    combined = records + strategic + permanent + core_permanent + confirmed
     deduped: dict[str, MemoryRecord] = {}
     for item in combined:
-        memory_id = str(item.get("memory_id", "")).strip() or build_memory_id("memory", item.get("base_date", ""), item.get("text", ""), item.get("scope", "review_memory"))
+        memory_id = str(item.get("memory_id", "")).strip() or build_memory_id("memory", item.get("base_date", ""), item.get("text", ""), item.get("scope", LEARNING_MEMORY_SCOPE))
         deduped[memory_id] = {**item, "memory_id": memory_id}
     return list(deduped.values())
 
@@ -516,7 +602,13 @@ def memory_score(item: MemoryRecord, context_tags: set[str], analysis_day) -> fl
     if str(item.get("status", "active") or "active") == "inactive":
         return -1.0
     expires_on = parse_date_text(item.get("expires_on"))
+    valid_from = parse_date_text(item.get("valid_from"))
+    valid_until = parse_date_text(item.get("valid_until"))
     if analysis_day is not None and expires_on is not None and expires_on < analysis_day:
+        return -1.0
+    if analysis_day is not None and valid_from is not None and valid_from > analysis_day:
+        return -1.0
+    if analysis_day is not None and valid_until is not None and valid_until < analysis_day:
         return -1.0
     keys = tokenize_memory_text(*(item.get("entity_keys", []) or []), item.get("applies_to", ""), item.get("text", ""), item.get("reason", ""))
     overlap = len(keys & context_tags)
@@ -531,7 +623,7 @@ def memory_score(item: MemoryRecord, context_tags: set[str], analysis_day) -> fl
         base_score += 18.0
     elif scope == "strategic_memory":
         base_score += 10.0
-    elif scope == "review_memory":
+    elif scope in LEARNING_MEMORY_SCOPES:
         base_score += 5.0
     if promotion_level == "promoted":
         base_score += 5.0
@@ -568,15 +660,18 @@ def build_memory_digest(memory: dict, portfolio: dict, exposure_summary: dict) -
     analysis_day = parse_date_text(analysis_date)
     context_tags = build_memory_context_tags(portfolio, exposure_summary)
     records = normalize_memory_records(memory)
-    recent_review_memory = select_memory_records(records, context_tags, analysis_day, limit=10, scopes={"review_memory"})
+    recent_learning_memory = select_memory_records(records, context_tags, analysis_day, limit=10, scopes=LEARNING_MEMORY_SCOPES)
     strategic_memory_hits = select_memory_records(records, context_tags, analysis_day, limit=8, scopes={"strategic_memory"})
     core_permanent_memory_hits = select_memory_records(records, context_tags, analysis_day, limit=6, scopes={"core_permanent_memory"})
     permanent_memory_hits = select_memory_records(records, context_tags, analysis_day, limit=8, scopes={"permanent_memory"})
     historical_event_hits = select_memory_records(records, context_tags, analysis_day, limit=6, memory_types={"historical_event"})
     expired_bias_count = sum(
         1
-        for item in memory.get("bias_adjustments", [])
-        if analysis_day is not None and parse_date_text(item.get("expires_on")) is not None and parse_date_text(item.get("expires_on")) < analysis_day
+        for item in records
+        if item.get("provenance", {}).get("kind") == "bias_adjustment"
+        and analysis_day is not None
+        and parse_date_text(item.get("expires_on")) is not None
+        and parse_date_text(item.get("expires_on")) < analysis_day
     )
     long_memory_hits: list[dict] = []
     if list_memory_records is not None:
@@ -591,25 +686,31 @@ def build_memory_digest(memory: dict, portfolio: dict, exposure_summary: dict) -
     market_long_memory = [item for item in long_memory_hits if item.get("domain") == "market"][:6]
     execution_long_memory = [item for item in long_memory_hits if item.get("domain") == "execution"][:6]
     policy_long_memory = [item for item in long_memory_hits if item.get("domain") == "portfolio"][:6]
+    short_term_memory_hits = [item for item in long_memory_hits if item.get("horizon_bucket") in {"5d", "10d"}][:8]
+    mid_term_memory_hits = [item for item in long_memory_hits if item.get("horizon_bucket") in {"30d", "90d"}][:8]
+    long_term_memory_hits = [item for item in long_memory_hits if item.get("horizon_bucket", "long_term") == "long_term"][:10]
     return {
         "updated_at": memory.get("updated_at", ""),
         "memory_ledger_summary": memory.get("memory_ledger_summary", {}),
         "retrieval_context_tags": sorted(context_tags)[:20],
         "long_memory_hits": long_memory_hits[:18],
+        "short_term_memory_hits": short_term_memory_hits,
+        "mid_term_memory_hits": mid_term_memory_hits,
+        "long_term_memory_hits": long_term_memory_hits,
         "fund_profile_memory_hits": fund_long_memory,
         "market_regime_memory_hits": market_long_memory,
         "execution_memory_hits": execution_long_memory,
         "portfolio_policy_memory_hits": policy_long_memory,
-        "recent_lessons": [item for item in recent_review_memory if item.get("provenance", {}).get("kind") == "lesson"][:8],
-        "recent_review_history": [item for item in recent_review_memory if item.get("provenance", {}).get("kind") == "review_history"][:5],
+        "recent_lessons": [item for item in recent_learning_memory if item.get("provenance", {}).get("kind") == "lesson"][:8],
+        "recent_review_history": [item for item in recent_learning_memory if item.get("provenance", {}).get("kind") == "review_history"][:5],
         "recent_bias_adjustments": strategic_memory_hits[:8],
         "expired_bias_adjustment_count": expired_bias_count,
-        "recent_agent_feedback": [item for item in recent_review_memory if item.get("provenance", {}).get("kind") == "agent_feedback"][:8],
+        "recent_agent_feedback": [item for item in recent_learning_memory if item.get("provenance", {}).get("kind") == "agent_feedback"][:8],
         "strategic_memory_hits": strategic_memory_hits,
         "core_permanent_memory_hits": core_permanent_memory_hits,
         "permanent_memory_hits": permanent_memory_hits,
         "historical_event_hits": historical_event_hits,
-        "active_memory_records": (long_memory_hits[:10] + core_permanent_memory_hits + permanent_memory_hits + strategic_memory_hits + recent_review_memory)[:24],
+        "active_memory_records": (long_memory_hits[:10] + core_permanent_memory_hits + permanent_memory_hits + strategic_memory_hits + recent_learning_memory)[:24],
     }
 
 
@@ -678,9 +779,21 @@ def main() -> None:
     portfolio = load_portfolio(agent_home)
     strategy = load_strategy(agent_home)
     overrides = load_market_overrides(agent_home)
-    memory = load_review_memory(agent_home)
-    memory["_analysis_date"] = report_date
-    memory["_agent_home"] = agent_home
+    memory = {"_analysis_date": report_date, "_agent_home": agent_home}
+    export_path = long_memory_export_path(agent_home)
+    if export_path.exists():
+        export_payload = load_json(export_path)
+        if isinstance(export_payload, dict):
+            memory["updated_at"] = export_payload.get("updated_at", "")
+            memory["long_memory_records"] = export_payload.get("items", []) or []
+    completed_dir = long_memory_cycle_dir(agent_home, "completed")
+    if completed_dir.exists():
+        history = []
+        for path in sorted(completed_dir.glob("*.json"), reverse=True)[:20]:
+            payload = load_json(path)
+            if isinstance(payload, dict):
+                history.append(payload)
+        memory["review_history"] = history
     quotes_payload = load_json(quote_path(agent_home, report_date))
     news_payload = load_json(news_path(agent_home, report_date))
     proxies_payload = load_json(intraday_proxy_path(agent_home, report_date))

@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
 from build_llm_context import build_memory_digest
 from generate_llm_advice import build_committee_advice_from_agents, merge_committee_narrative
+from learning_memory import run_learning_sync, write_learning_artifacts
+from long_memory_store import upsert_memory_record
 from portfolio_exposure import analyze_portfolio_exposure
 from run_multiagent_research import compact_agent_output, degradation_summary, sanitize_agent_output
 from decision_support import build_agent_stage_snapshot, summarize_fund_stage_signals
@@ -140,13 +142,23 @@ class MultiagentAndReviewTests(unittest.TestCase):
             },
         )
         self.agent.write_json(
-            "db/review_memory/memory.json",
+            "db/long_memory/exports/all_memory.json",
             {
                 "updated_at": "2026-03-11T21:00:00+08:00",
-                "lessons": [{"base_date": "2026-03-10", "horizon": 0, "text": "测试 lesson"}],
-                "review_history": [],
-                "bias_adjustments": [],
-                "agent_feedback": [],
+                "items": [
+                    {
+                        "memory_id": "lesson:test",
+                        "memory_type": "semantic",
+                        "domain": "fund",
+                        "entity_key": "F1",
+                        "title": "测试 lesson",
+                        "text": "测试 lesson",
+                        "status": "strategic",
+                        "confidence": 0.68,
+                        "valid_from": "2026-03-10",
+                        "updated_at": "2026-03-11T21:00:00+08:00",
+                    }
+                ],
             },
         )
         self.agent.write_json(
@@ -289,29 +301,28 @@ class MultiagentAndReviewTests(unittest.TestCase):
                 "items": [],
             },
         )
-        self.agent.write_json(
-            "db/review_memory/memory.json",
+        upsert_memory_record(
+            self.agent.root,
             {
-                "updated_at": "2026-03-11T21:00:00+08:00",
-                "lessons": [
-                    {
-                        "base_date": "2026-03-10",
-                        "horizon": 1,
-                        "type": "edge",
-                        "text": "近期部分调仓建议被市场验证，可保留多智能体+规则校验框架。",
-                        "confidence": 0.68,
-                        "applies_to": "committee_process",
-                    }
-                ],
-                "review_history": [],
-                "bias_adjustments": [],
-                "agent_feedback": [],
+                "memory_type": "semantic",
+                "domain": "fund",
+                "entity_key": "committee_process",
+                "title": "近期部分调仓建议被市场验证，可保留多智能体+规则校验框架。",
+                "text": "近期部分调仓建议被市场验证，可保留多智能体+规则校验框架。",
+                "status": "strategic",
+                "confidence": 0.68,
+                "valid_from": "2026-03-10",
             },
         )
-        self.agent.run_script("update_review_memory.py", "--base-date", "2026-03-10", "--horizon", "1")
-        memory = json.loads((self.agent.root / "db" / "review_memory" / "memory.json").read_text(encoding="utf-8"))
-        matching = [item for item in memory["lessons"] if item.get("text") == "近期部分调仓建议被市场验证，可保留多智能体+规则校验框架。"]
-        self.assertEqual(len(matching), 1)
+        review_batches = [
+            json.loads((self.agent.root / "db" / "review_results" / "2026-03-10_T1.json").read_text(encoding="utf-8"))
+        ]
+        cycle_summary, ledger, memory = run_learning_sync(self.agent.root, "2026-03-11", review_batches)
+        write_learning_artifacts(self.agent.root, "2026-03-11", cycle_summary, ledger, memory, review_batches)
+        export_payload = json.loads((self.agent.root / "db" / "long_memory" / "exports" / "compat_review_memory.json").read_text(encoding="utf-8"))
+        self.assertTrue(export_payload.get("updated_at"))
+        self.assertTrue((self.agent.root / "db" / "long_memory" / "portfolio" / "learning_ledger.json").exists())
+        self.assertTrue(any(item.get("title") == "近期部分调仓建议被市场验证，可保留多智能体+规则校验框架。" for item in json.loads((self.agent.root / "db" / "long_memory" / "exports" / "all_memory.json").read_text(encoding="utf-8")).get("items", [])))
 
     def test_review_advice_execution_source_writes_execution_review(self):
         self.agent.write_json(
@@ -347,10 +358,10 @@ class MultiagentAndReviewTests(unittest.TestCase):
             },
         )
         self.agent.write_json(
-            "db/trade_journal/2026-03-10.json",
+            "db/execution_sync/actual_trades/2026-03-10.json",
             {
                 "trade_date": "2026-03-10",
-                "items": [{"fund_code": "F1", "fund_name": "基金一", "action": "buy", "amount": 100.0, "note": "执行"}],
+                "items": [{"trade_id": "legacy_f1_buy", "trade_date": "2026-03-10", "fund_code": "F1", "fund_name": "基金一", "operation_type": "buy", "amount": 100.0, "user_note": "执行"}],
             },
         )
         self.agent.write_json(
@@ -437,8 +448,8 @@ class MultiagentAndReviewTests(unittest.TestCase):
             {"funds": [{"code": "F1", "name": "基金一", "category": "active_equity", "benchmark": "成长代理", "risk_level": "high"}]},
         )
         self.agent.write_json(
-            "db/trade_journal/2026-03-10.json",
-            {"trade_date": "2026-03-10", "items": [{"fund_code": "F1", "fund_name": "基金一", "action": "buy", "amount": 100.0, "note": "执行"}]},
+            "db/execution_sync/actual_trades/2026-03-10.json",
+            {"trade_date": "2026-03-10", "items": [{"trade_id": "legacy_f1_buy", "trade_date": "2026-03-10", "fund_code": "F1", "fund_name": "基金一", "operation_type": "buy", "amount": 100.0, "user_note": "执行"}]},
         )
         self.agent.write_json(
             "raw/quotes/2026-03-11.json",

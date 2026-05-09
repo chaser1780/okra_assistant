@@ -357,6 +357,27 @@ def parse_json_text(value: str):
         raise
 
 
+def validate_required_paths(value, schema: dict, *, path: tuple[str, ...] = ()) -> list[str]:
+    missing: list[str] = []
+    schema_type = schema.get("type", "")
+    if schema_type == "object":
+        source = value if isinstance(value, dict) else {}
+        properties = schema.get("properties", {}) or {}
+        for key in schema.get("required", []) or []:
+            child_path = path + (key,)
+            if key not in source:
+                missing.append(".".join(child_path))
+                continue
+            missing.extend(validate_required_paths(source[key], properties.get(key, {"type": "string"}), path=child_path))
+        return missing
+    if schema_type == "array":
+        items = value if isinstance(value, list) else []
+        item_schema = schema.get("items", {"type": "string"})
+        for index, item in enumerate(items):
+            missing.extend(validate_required_paths(item, item_schema, path=path + (str(index),)))
+    return missing
+
+
 def _schema_default(schema: dict, path: tuple[str, ...] = ()):
     explicit_defaults = {
         ("evidence_strength",): "medium",
@@ -511,7 +532,14 @@ def call_json_agent(
             {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
             {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
         ],
-        "text": {},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": request_name,
+                "schema": effective_schema,
+                "strict": True,
+            }
+        },
     }
     payload["text"]["verbosity"] = text_verbosity or "low"
     if max_output_tokens is not None:
@@ -580,6 +608,9 @@ def call_json_agent(
                     parsed_json = parse_json_text(text)
                 except json.JSONDecodeError:
                     raise
+                missing_paths = validate_required_paths(parsed_json, effective_schema)
+                if missing_paths:
+                    raise RuntimeError(f"Agent JSON missing required fields: {', '.join(missing_paths[:12])}")
                 normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                 if parsed.get("stream_error"):
                     write_agent_debug_log(
@@ -608,6 +639,9 @@ def call_json_agent(
                 if joined:
                     try:
                         parsed_json = parse_json_text(joined)
+                        missing_paths = validate_required_paths(parsed_json, effective_schema)
+                        if missing_paths:
+                            raise RuntimeError(f"Agent JSON missing required fields: {', '.join(missing_paths[:12])}")
                         normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                         return {
                             "request_payload": payload,
@@ -623,6 +657,9 @@ def call_json_agent(
                         if start >= 0 and end > start:
                             try:
                                 parsed_json = parse_json_text(joined[start : end + 1])
+                                missing_paths = validate_required_paths(parsed_json, effective_schema)
+                                if missing_paths:
+                                    raise RuntimeError(f"Agent JSON missing required fields: {', '.join(missing_paths[:12])}")
                                 normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
                                 write_agent_debug_log(
                                     agent_home,

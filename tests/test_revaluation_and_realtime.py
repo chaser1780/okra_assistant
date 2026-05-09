@@ -123,7 +123,7 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
         self.agent.run_script("revalue_portfolio_official_nav.py", "--date", "2026-03-11")
 
         valuation = json.loads((self.agent.root / "db" / "portfolio_valuation" / "2026-03-11.json").read_text(encoding="utf-8"))
-        portfolio = json.loads((self.agent.root / "config" / "portfolio.json").read_text(encoding="utf-8"))
+        portfolio = json.loads((self.agent.root / "db" / "portfolio_state" / "current.json").read_text(encoding="utf-8"))
 
         self.assertEqual(portfolio["as_of_date"], "2026-03-11")
         eq1 = next(item for item in valuation["items"] if item["fund_code"] == "EQ1")

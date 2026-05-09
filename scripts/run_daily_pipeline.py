@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from common import load_review_config, resolve_agent_home, resolve_date
+from common import actual_trade_dir, load_review_config, resolve_agent_home, resolve_date
 from common import (
     agent_output_dir,
     committee_advice_path,
@@ -264,7 +264,7 @@ def due_review_jobs(agent_home: Path, review_date: str) -> list[dict]:
     horizons = [0] + [value for value in configured if value > 0]
     candidate_dates: set[str] = set()
     validated_dir = agent_home / "db" / "validated_advice"
-    trade_dir = agent_home / "db" / "trade_journal"
+    trade_dir = actual_trade_dir(agent_home)
     if validated_dir.exists():
         for path in sorted(validated_dir.glob("*.json")):
             base_date = path.stem
@@ -345,6 +345,7 @@ def main() -> None:
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
     parser.add_argument("--date", help="Report date in YYYY-MM-DD format.")
     parser.add_argument("--mode", default="intraday", choices=["intraday", "nightly"])
+    parser.add_argument("--phase", choices=["intraday", "nightly", "realtime", "memory"], help="Compatibility phase alias.")
     parser.add_argument("--demo", action="store_true", help="Run the pipeline with deterministic mock data.")
     parser.add_argument("--llm-mock", action="store_true", help="Run the LLM stage in mock mode without calling the remote API.")
     parser.add_argument("--resume-existing", action="store_true", help="Resume from existing step outputs where safe.")
@@ -352,8 +353,11 @@ def main() -> None:
 
     agent_home = resolve_agent_home(args.agent_home)
     report_date = resolve_date(args.date)
+    selected_mode = args.phase or args.mode
+    if selected_mode in {"realtime", "memory"}:
+        raise RuntimeError(f"Phase '{selected_mode}' is not handled by run_daily_pipeline.py. Use run_realtime_monitor.py or run_long_memory_analysis.py.")
     pipeline_started = time.perf_counter()
-    manifest = new_run_manifest(agent_home, "daily_pipeline", args.mode, report_date)
+    manifest = new_run_manifest(agent_home, "daily_pipeline", selected_mode, report_date)
     manifest_lock = threading.Lock()
 
     def record_step(event: str, step_name: str, display_name: str, seconds: float = 0.0, status: str = "ok", error: str = "") -> None:
@@ -372,20 +376,20 @@ def main() -> None:
             write_manifest(agent_home, manifest)
 
     write_manifest(agent_home, manifest)
-    print(f">>> PIPELINE_START mode={args.mode} date={report_date}", flush=True)
+    print(f">>> PIPELINE_START mode={selected_mode} date={report_date}", flush=True)
 
     try:
         preflight = perform_preflight(
             agent_home,
-            args.mode,
-            probe_llm=bool(args.mode == "intraday" and not args.demo and not args.llm_mock),
+            selected_mode,
+            probe_llm=bool(selected_mode == "intraday" and not args.demo and not args.llm_mock),
         )
         manifest["preflight_status"] = preflight["status"]
         manifest["preflight_output_path"] = preflight["output_path"]
         write_manifest(agent_home, manifest)
         if preflight["status"] == "failed":
             raise RuntimeError("Preflight failed. See db/preflight/latest.json for details.")
-        if args.mode == "intraday":
+        if selected_mode == "intraday":
             timings = run_intraday(agent_home, report_date, args.demo, args.llm_mock, args.resume_existing, record_step=record_step)
         else:
             timings = run_nightly(agent_home, report_date, args.demo, args.resume_existing, record_step=record_step)
@@ -417,8 +421,8 @@ def main() -> None:
         write_manifest(agent_home, manifest)
         raise
 
-    print_timing_summary(args.mode, timings)
-    print(f">>> PIPELINE_DONE mode={args.mode} total={(time.perf_counter() - pipeline_started):.1f}s", flush=True)
+    print_timing_summary(selected_mode, timings)
+    print(f">>> PIPELINE_DONE mode={selected_mode} total={(time.perf_counter() - pipeline_started):.1f}s", flush=True)
 
 
 if __name__ == "__main__":

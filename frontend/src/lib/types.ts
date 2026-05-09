@@ -84,6 +84,29 @@ export type ResearchPayload = {
   rows: Record<string, unknown>[];
 };
 
+export type FundAnalysisAgentCard = {
+  agent_name: string;
+  stage: string;
+  stageLabel: string;
+  stageDescription: string;
+  status: string;
+  summary: string;
+  confidence: number;
+  dependsOn: string[];
+  consumers: string[];
+  isCommitteeCore: boolean;
+  portfolioView: Record<string, unknown>;
+  fundViews: Record<string, unknown>[];
+  signalCards: Record<string, unknown>[];
+  decisionCards: Record<string, unknown>[];
+};
+
+export type FundAnalysisDetailPayload = {
+  agentSummary: Record<string, unknown>;
+  stageSummary: Record<string, unknown>;
+  agentCards: FundAnalysisAgentCard[];
+};
+
 export type RealtimePayload = {
   meta: string;
   metrics: Metric[];
@@ -154,8 +177,58 @@ export type LongMemoryPayload = {
 export type DailyFirstOpenPayload = {
   decision: Record<string, unknown>;
   analysis: Record<string, unknown>;
-  updates: Record<string, unknown>;
+  updates?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
   brief: string;
+  runStatus?: string | number | boolean;
+  analysisQuality?: string | number | boolean;
+  memoryEligible?: boolean | string | number;
+};
+
+export type TodayAnalysisPayload = DailyFirstOpenPayload;
+
+export type TodayAnalysisSystemPayload = {
+  selectedDate?: string;
+  today?: string;
+  autoRunNeeded?: boolean;
+  todayWorkspace?: string;
+  todayDecisionPath?: string;
+  todayDecisionExists?: boolean;
+  hasRunToday?: boolean;
+  runAt?: string;
+  runTime?: string;
+  runStatus?: string;
+  analysisQuality?: string | number | boolean;
+  memoryEligible?: boolean | string;
+  memoryCycleSummary?: Record<string, unknown>;
+};
+
+export type TodayAnalysisRuntimePayload = {
+  runId?: string;
+  pid?: number;
+  status?: string;
+  startedAt?: string;
+  endedAt?: string;
+  heartbeatAt?: string;
+  elapsedSeconds?: number;
+  currentStep?: string;
+  currentAgent?: string;
+  currentAgentStage?: string;
+  resultReady?: boolean;
+  resultRunId?: string;
+  lastError?: string;
+};
+
+export type SystemPayload = {
+  sourceHealth?: Record<string, unknown>;
+  preflightStatus?: string;
+  settings?: Record<string, unknown>;
+  llmRuntime?: Record<string, unknown>;
+  todayAnalysisRuntime?: TodayAnalysisRuntimePayload;
+  longMemoryRuntime?: Record<string, unknown>;
+  agentRuntime?: Record<string, unknown>;
+  todayAnalysis?: TodayAnalysisSystemPayload;
+  dailyFirstOpen?: TodayAnalysisSystemPayload;
 };
 
 export type ExecutionSyncPayload = {
@@ -183,9 +256,40 @@ export type Snapshot = {
   review: ReviewPayload;
   longMemory: LongMemoryPayload;
   executionSync: ExecutionSyncPayload;
+  todayAnalysis?: TodayAnalysisPayload;
   dailyFirstOpen: DailyFirstOpenPayload;
-  system: Record<string, unknown>;
+  system: SystemPayload;
 };
+
+export type ApiEnvelopeMeta = {
+  page?: string | null;
+  selected_date?: string | null;
+  generated_at?: string | null;
+  version?: string;
+};
+
+export type ApiEnvelopeError = {
+  error_code: string;
+  error_message: string;
+  retryable?: boolean;
+  details?: Record<string, unknown>;
+};
+
+export type ApiEnvelope<T> = {
+  ok: boolean;
+  data: T | null;
+  error?: ApiEnvelopeError | null;
+  meta?: ApiEnvelopeMeta;
+};
+
+export type ShellPayload = Pick<Snapshot, "selectedDate" | "dates" | "summary" | "system">;
+export type TodayPagePayload = Pick<Snapshot, "selectedDate" | "dashboard" | "portfolio" | "longMemory" | "todayAnalysis" | "dailyFirstOpen" | "system">;
+export type PortfolioPagePayload = Pick<Snapshot, "selectedDate" | "portfolio">;
+export type ExecutionPagePayload = Pick<Snapshot, "selectedDate" | "executionSync" | "portfolio">;
+export type ResearchPagePayload = Pick<Snapshot, "selectedDate" | "research">;
+export type RealtimePagePayload = Pick<Snapshot, "selectedDate" | "realtime">;
+export type ReviewPagePayload = Pick<Snapshot, "selectedDate" | "review" | "longMemory">;
+export type SystemPagePayload = Pick<Snapshot, "selectedDate" | "summary" | "system">;
 
 export type CopilotRequest = {
   context: string;
@@ -219,6 +323,7 @@ export type FundDetailPayload = {
   portfolio: Partial<PortfolioItem>;
   realtime: Record<string, unknown>;
   research: Record<string, unknown>;
+  analysisDetail: FundAnalysisDetailPayload;
   history: {
     nav: ChartPoint[];
     navNormalized: ChartPoint[];

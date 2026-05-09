@@ -85,7 +85,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
         portfolio = {
             "portfolio_name": "Replay Test",
             "as_of_date": "2026-03-10",
-            "total_value": 1000.0,
+            "total_value": 600.0,
             "holding_pnl": 0.0,
             "funds": [
                 {
@@ -93,7 +93,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                     "fund_name": "Cash",
                     "role": "cash_hub",
                     "style_group": "cash",
-                    "current_value": 400.0,
+                    "current_value": 450.0,
                     "allow_trade": True,
                     "holding_units": 400.0,
                     "last_valuation_nav": 1.0,
@@ -104,7 +104,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                     "fund_name": "Replay Fund",
                     "role": "tactical",
                     "style_group": "growth",
-                    "current_value": 200.0,
+                    "current_value": 150.0,
                     "cap_value": 500.0,
                     "allow_trade": True,
                     "holding_units": 100.0,
@@ -158,7 +158,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
         portfolio = {
             "portfolio_name": "Replay Test",
             "as_of_date": "2026-03-10",
-            "total_value": 1000.0,
+            "total_value": 600.0,
             "holding_pnl": 0.0,
             "funds": [
                 {
@@ -166,7 +166,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                     "fund_name": "Cash",
                     "role": "cash_hub",
                     "style_group": "cash",
-                    "current_value": 400.0,
+                    "current_value": 450.0,
                     "allow_trade": True,
                     "holding_units": 400.0,
                     "last_valuation_nav": 1.0,
@@ -177,7 +177,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                     "fund_name": "Replay Fund",
                     "role": "tactical",
                     "style_group": "growth",
-                    "current_value": 200.0,
+                    "current_value": 150.0,
                     "cap_value": 500.0,
                     "allow_trade": True,
                     "holding_units": 100.0,
@@ -277,7 +277,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
         summary_path = Path(result.stdout.strip().splitlines()[-1])
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         self.assertTrue(summary["learning_update"]["applied"])
-        ledger = json.loads((self.agent.root / "db" / "review_memory" / "ledger.json").read_text(encoding="utf-8"))
+        ledger = json.loads((self.agent.root / "db" / "long_memory" / "portfolio" / "learning_ledger.json").read_text(encoding="utf-8"))
         signal_rule = next(item for item in ledger["rules"] if item["rule_key"] == "require_signal_confirmation_before_add")
         self.assertGreaterEqual(signal_rule["replay_support_count"], 1)
         self.assertIn("unit_test_learning_replay", ledger["applied_replay_experiments"])

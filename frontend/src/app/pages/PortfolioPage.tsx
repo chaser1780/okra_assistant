@@ -194,7 +194,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
             </table>
           </div>
         ) : (
-          <EmptyState title="暂无持仓数据" body="当前 API 没有读取到 portfolio_state 中的基金持仓，请检查组合快照或重新运行首启分析。" />
+          <EmptyState title="暂无持仓数据" body="当前 API 没有读取到 portfolio_state 中的基金持仓，请检查组合快照或重新运行今日分析。" />
         )}
       </Card>
 

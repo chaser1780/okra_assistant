@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from common import (
+    actual_trade_dir,
     dump_json,
     ensure_layout,
+    actual_trade_path,
     load_json,
     load_portfolio,
     resolve_date,
     timestamp_now,
-    trade_journal_path,
     validated_advice_path,
 )
 from portfolio_state import save_portfolio_state, upsert_execution_status
@@ -24,10 +25,6 @@ from update_portfolio_from_trade import apply_trade
 
 def execution_sync_dir(agent_home: Path) -> Path:
     return agent_home / "db" / "execution_sync"
-
-
-def actual_trade_path(agent_home: Path, trade_date: str) -> Path:
-    return execution_sync_dir(agent_home) / "actual_trades" / f"{trade_date}.json"
 
 
 def position_snapshot_path(agent_home: Path, snapshot_date: str) -> Path:
@@ -71,7 +68,7 @@ def _new_id(prefix: str) -> str:
 
 
 def load_actual_trades(agent_home: Path, limit: int = 200) -> list[dict[str, Any]]:
-    base = execution_sync_dir(agent_home) / "actual_trades"
+    base = actual_trade_dir(agent_home)
     items: list[dict[str, Any]] = []
     if base.exists():
         for path in sorted(base.glob("*.json"), reverse=True):
@@ -130,36 +127,6 @@ def _update_actual_trade_record(agent_home: Path, item: dict[str, Any]) -> Path 
         return None
     payload["items"] = updated_items
     payload["updated_at"] = timestamp_now()
-    return dump_json(path, payload)
-
-
-def _append_legacy_trade_journal(agent_home: Path, trade_date: str, item: dict[str, Any]) -> Path:
-    path = trade_journal_path(agent_home, trade_date)
-    payload = load_json(path) if path.exists() else {"trade_date": trade_date, "items": []}
-    legacy_action = {
-        "buy": "buy",
-        "dca": "buy",
-        "sell": "sell",
-        "convert_out": "switch_out",
-        "convert_in": "switch_in",
-    }.get(str(item.get("operation_type", "")), str(item.get("operation_type", "")))
-    legacy = {
-        "fund_code": item.get("fund_code", ""),
-        "fund_name": item.get("fund_name", ""),
-        "action": legacy_action,
-        "amount": item.get("amount", 0.0),
-        "trade_nav": item.get("nav"),
-        "units": item.get("units"),
-        "note": item.get("user_note", ""),
-        "trade_id": item.get("trade_id", ""),
-        "source": item.get("source", "manual"),
-        "execution_deviation": item.get("execution_deviation", {}),
-    }
-    if item.get("linked_suggestion_id"):
-        legacy["suggestion_id"] = item.get("linked_suggestion_id")
-        legacy["suggestion_date"] = item.get("linked_advice_date", trade_date)
-    payload["items"] = [entry for entry in payload.get("items", []) or [] if entry.get("trade_id") != item.get("trade_id")]
-    payload["items"].append(legacy)
     return dump_json(path, payload)
 
 
@@ -265,7 +232,6 @@ def record_actual_trade(agent_home: Path, payload: dict[str, Any]) -> dict[str, 
     }
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
     path = _append_actual_trade(agent_home, trade_date, item)
-    legacy_path = _append_legacy_trade_journal(agent_home, trade_date, item)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("trade_id") != item["trade_id"]]
     if item["status"] not in {"settled", "canceled", "failed"}:
@@ -287,7 +253,7 @@ def record_actual_trade(agent_home: Path, payload: dict[str, Any]) -> dict[str, 
                 "execution_deviation": item.get("execution_deviation", {}),
             },
         )
-    return {"ok": True, "trade": item, "path": str(path), "legacyTradeJournalPath": str(legacy_path)}
+    return {"ok": True, "trade": item, "path": str(path)}
 
 
 def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -342,38 +308,6 @@ def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, An
         "execution_deviation": {"type": "conversion_substitute", "label": "转换替代执行", "affects_advice_accuracy": False},
     }
     path = _append_actual_trade(agent_home, trade_date, item)
-    _append_legacy_trade_journal(
-        agent_home,
-        trade_date,
-        {
-            "trade_id": conversion_id + "_out",
-            "operation_type": "convert_out",
-            "fund_code": item["out_fund_code"],
-            "fund_name": item["out_fund_name"],
-            "amount": item["out_amount"],
-            "units": item["out_units"],
-            "nav": item["out_nav"],
-            "source": item["source"],
-            "user_note": item["user_note"],
-            "execution_deviation": item["execution_deviation"],
-        },
-    )
-    _append_legacy_trade_journal(
-        agent_home,
-        trade_date,
-        {
-            "trade_id": conversion_id + "_in",
-            "operation_type": "convert_in",
-            "fund_code": item["in_fund_code"],
-            "fund_name": item["in_fund_name"],
-            "amount": item["in_amount"],
-            "units": item["in_units"],
-            "nav": item["in_nav"],
-            "source": item["source"],
-            "user_note": item["user_note"],
-            "execution_deviation": item["execution_deviation"],
-        },
-    )
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("conversion_id") != conversion_id]
     if item["status"] not in {"settled", "canceled", "failed"}:

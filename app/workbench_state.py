@@ -6,6 +6,17 @@ from typing import Any
 import sys
 
 try:
+    from api_contracts import (
+        ExecutionPageDto,
+        PortfolioPageDto,
+        RealtimePageDto,
+        ResearchPageDto,
+        ReviewPageDto,
+        ShellPageDto,
+        SystemPageDto,
+        TodayPageDto,
+        coerce_model,
+    )
     from decision_support import summarize_fund_agent_signals
     from portfolio_exposure import analyze_portfolio_exposure
     from ui_support import (
@@ -23,6 +34,17 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from api_contracts import (
+        ExecutionPageDto,
+        PortfolioPageDto,
+        RealtimePageDto,
+        ResearchPageDto,
+        ReviewPageDto,
+        ShellPageDto,
+        SystemPageDto,
+        TodayPageDto,
+        coerce_model,
+    )
     from decision_support import summarize_fund_agent_signals
     from portfolio_exposure import analyze_portfolio_exposure
     from ui_support import (
@@ -261,7 +283,7 @@ class WorkbenchStateService:
                 f"- {item.get('source_key', '')}: 状态 {item.get('status', '未知')} | "
                 f"过期 {item.get('stale_count', 0)} | 错误 {item.get('error_count', 0)}"
             )
-        return "\n".join(rows or ["- 暂无结构化数据源健康信息，请先运行今日首启分析。"])
+        return "\n".join(rows or ["- 暂无结构化数据源健康信息，请先运行今日分析。"])
 
     def _committee_text(self, committee: dict[str, Any]) -> str:
         if not committee:
@@ -419,6 +441,139 @@ class WorkbenchStateService:
         )
 
 
+def _build_shell_page_dto(self, snapshot: DesktopSnapshot, *, running: bool = False, chain_status: str = "idle") -> dict[str, Any]:
+    shell = self.build_shell_view_model(snapshot, running=running, chain_status=chain_status)
+    return coerce_model(
+        ShellPageDto,
+        {
+            "dates": shell.dates,
+            "selectedDate": shell.selected_date,
+            "chainStatus": shell.chain_status,
+            "statusBadgeState": shell.status_badge_state,
+            "statusBarText": shell.status_bar_text,
+            "summary": snapshot.summary,
+        },
+    )
+
+
+def _build_today_page_dto(
+    self,
+    snapshot: DesktopSnapshot,
+    *,
+    dashboard: dict[str, Any],
+    today_analysis: dict[str, Any],
+    daily_first_open: dict[str, Any],
+) -> dict[str, Any]:
+    return coerce_model(
+        TodayPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "todayAnalysis": today_analysis,
+            "dashboard": dashboard,
+            "dailyFirstOpen": daily_first_open,
+        },
+    )
+
+
+def _build_portfolio_page_dto(self, snapshot: DesktopSnapshot, *, portfolio: dict[str, Any]) -> dict[str, Any]:
+    return coerce_model(
+        PortfolioPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "portfolio": portfolio,
+        },
+    )
+
+
+def _build_execution_page_dto(
+    self,
+    snapshot: DesktopSnapshot,
+    *,
+    execution_sync: dict[str, Any],
+    portfolio: dict[str, Any],
+    system: dict[str, Any],
+) -> dict[str, Any]:
+    return coerce_model(
+        ExecutionPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "executionSync": execution_sync,
+            "portfolio": portfolio,
+            "system": system,
+        },
+    )
+
+
+def _build_research_page_dto(self, snapshot: DesktopSnapshot, *, research: dict[str, Any]) -> dict[str, Any]:
+    return coerce_model(
+        ResearchPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "research": research,
+        },
+    )
+
+
+def _build_realtime_page_dto(self, snapshot: DesktopSnapshot, *, realtime: dict[str, Any]) -> dict[str, Any]:
+    return coerce_model(
+        RealtimePageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "realtime": realtime,
+        },
+    )
+
+
+def _build_review_page_dto(
+    self,
+    snapshot: DesktopSnapshot,
+    *,
+    review: dict[str, Any],
+    long_memory: dict[str, Any],
+) -> dict[str, Any]:
+    return coerce_model(
+        ReviewPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "review": review,
+            "longMemory": long_memory,
+        },
+    )
+
+
+def _build_system_page_dto(
+    self,
+    snapshot: DesktopSnapshot,
+    *,
+    system: dict[str, Any],
+    shell: dict[str, Any],
+) -> dict[str, Any]:
+    return coerce_model(
+        SystemPageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "summary": snapshot.summary,
+            "system": system,
+            "shell": shell,
+        },
+    )
+
+
+WorkbenchStateService.build_shell_page_dto = _build_shell_page_dto
+WorkbenchStateService.build_today_page_dto = _build_today_page_dto
+WorkbenchStateService.build_portfolio_page_dto = _build_portfolio_page_dto
+WorkbenchStateService.build_execution_page_dto = _build_execution_page_dto
+WorkbenchStateService.build_research_page_dto = _build_research_page_dto
+WorkbenchStateService.build_realtime_page_dto = _build_realtime_page_dto
+WorkbenchStateService.build_review_page_dto = _build_review_page_dto
+WorkbenchStateService.build_system_page_dto = _build_system_page_dto
+
+
 DesktopStateService = WorkbenchStateService
 
 
@@ -426,6 +581,8 @@ def _summarize_state_clean(state: dict[str, Any]) -> dict[str, Any]:
     validated = state.get("validated", {}) or {}
     aggregate = state.get("aggregate", {}) or {}
     failed = aggregate.get("failed_agents", []) or aggregate.get("failed_agent_names", []) or []
+    today_meta = state.get("today_analysis_meta", {}) or {}
+    today_decision = state.get("today_analysis_decision", {}) or state.get("daily_first_open", {}) or {}
     return {
         "selected_date": state.get("selected_date", "") or "",
         "advice_mode": validated.get("advice_mode") or state.get("advice_mode") or "research",
@@ -434,6 +591,10 @@ def _summarize_state_clean(state: dict[str, Any]) -> dict[str, Any]:
         "advice_is_fallback": bool(validated.get("is_fallback") or aggregate.get("is_fallback")),
         "failed_agent_names": failed,
         "preflight_status": (state.get("preflight", {}) or {}).get("status", "unknown"),
+        "today_analysis_quality": today_meta.get("analysis_quality"),
+        "today_analysis_memory_eligible": today_meta.get("memory_eligible"),
+        "today_analysis_run_at": today_meta.get("runAt") or today_meta.get("run_at") or today_decision.get("generated_at") or "",
+        "today_analysis_task": today_meta.get("task") or today_decision.get("task") or "",
     }
 
 

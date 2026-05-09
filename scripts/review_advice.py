@@ -10,6 +10,7 @@ from common import (
     execution_review_result_path,
     fund_nav_history_path,
     intraday_proxy_path,
+    iter_actual_trade_items,
     load_json,
     load_portfolio,
     load_watchlist,
@@ -18,7 +19,6 @@ from common import (
     resolve_agent_home,
     resolve_date,
     review_result_path,
-    trade_journal_path,
     validated_advice_path,
 )
 from trade_constraints import build_trade_constraints
@@ -205,23 +205,45 @@ def advice_source_items(advice: dict) -> list[dict]:
 
 
 def execution_source_items(agent_home, base_date: str) -> list[dict]:
-    path = trade_journal_path(agent_home, base_date)
-    if not path.exists():
-        return []
-    payload = load_json(path)
     items = []
-    for index, item in enumerate(payload.get("items", []) or [], start=1):
+    raw_items = [item for item in iter_actual_trade_items(agent_home, base_date) if str(item.get("trade_date", "")) == base_date]
+    for index, item in enumerate(raw_items, start=1):
+        operation = str(item.get("operation_type", "") or "")
+        if operation == "convert":
+            items.append(
+                {
+                    "fund_code": item.get("out_fund_code", ""),
+                    "fund_name": item.get("out_fund_name", ""),
+                    "action": "switch_out",
+                    "amount": float(item.get("out_amount", 0.0) or 0.0),
+                    "suggestion_id": item.get("linked_suggestion_id", ""),
+                    "agent_support": [],
+                    "thesis": item.get("user_note", ""),
+                    "source_section": "executed_trade",
+                    "trade_nav": item.get("out_nav"),
+                    "trade_units": item.get("out_units"),
+                    "trade_index": index,
+                }
+            )
+            continue
+        mapped_action = {
+            "buy": "buy",
+            "dca": "buy",
+            "sell": "sell",
+            "convert_in": "switch_in",
+            "convert_out": "switch_out",
+        }.get(operation, operation or "hold")
         items.append(
             {
                 "fund_code": item.get("fund_code", ""),
                 "fund_name": item.get("fund_name", ""),
-                "action": item.get("action", "hold"),
+                "action": mapped_action,
                 "amount": float(item.get("amount", 0.0) or 0.0),
-                "suggestion_id": item.get("suggestion_id", ""),
+                "suggestion_id": item.get("linked_suggestion_id", ""),
                 "agent_support": [],
-                "thesis": item.get("note", ""),
+                "thesis": item.get("user_note", ""),
                 "source_section": "executed_trade",
-                "trade_nav": item.get("trade_nav"),
+                "trade_nav": item.get("nav"),
                 "trade_units": item.get("units"),
                 "trade_index": index,
             }

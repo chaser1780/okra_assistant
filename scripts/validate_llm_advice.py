@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from common import dump_json, ensure_layout, llm_advice_path, llm_raw_path, load_json, load_portfolio, load_strategy, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
+from common import committee_decision_bundle_path, dump_json, ensure_layout, llm_advice_path, llm_raw_path, load_json, load_portfolio, load_strategy, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from decision_ledger import build_and_write_decisions
 from models import FinalAdvice, PortfolioFund, PortfolioState, ValidatedAction, ValidatedAdvice
 from portfolio_exposure import analyze_portfolio_exposure, infer_strategy_bucket, infer_theme_family
@@ -206,6 +206,7 @@ def build_candidate(
         "requested_amount": requested_amount,
         "strategy_bucket": infer_strategy_bucket(fund),
         "theme_family": infer_theme_family(fund),
+        "management_company": str((fund.get("fund_profile", {}) or {}).get("management_company") or fund.get("management_company") or "unknown"),
         "priority": int(model.get("priority", 999) or 999),
         "confidence": clamp(float(model.get("confidence", 0.0) or 0.0), 0.0, 1.0),
         "thesis": str(model.get("thesis", "") or ""),
@@ -283,17 +284,32 @@ def build_validated_payload(
     strategy = strategy or load_strategy(agent_home)
     advice = advice or load_json(llm_advice_path(agent_home, report_date))
     llm_raw = llm_raw or (load_json(llm_raw_path(agent_home, report_date)) if llm_raw_path(agent_home, report_date).exists() else {})
+    committee_bundle = load_json(committee_decision_bundle_path(agent_home, report_date)) if committee_decision_bundle_path(agent_home, report_date).exists() else {}
     constraint_map = build_trade_constraints(agent_home, portfolio, report_date)
     previous_actions = previous_actions if previous_actions is not None else previous_validated_by_code(agent_home, report_date)
+    decision_mode = str(committee_bundle.get("decision_mode", "") or "canonical")
+    degradation_mode = str(committee_bundle.get("degradation_mode", "") or "none")
+    execution_eligible = bool(committee_bundle.get("execution_eligible", True))
+    delayed_sell_proceeds_total = round(
+        sum(float((item or {}).get("delayed_sell_proceeds", 0.0) or 0.0) for item in (constraint_map or {}).values()),
+        2,
+    )
 
     exposure = analyze_portfolio_exposure(portfolio, strategy)
     allocation_plan = exposure.get("allocation_plan", {})
     current_bucket_pct = allocation_plan.get("current_pct", {})
     target_bucket_pct = allocation_plan.get("targets_pct", {})
     rebalance_band_pct = float(allocation_plan.get("rebalance_band_pct", 5.0) or 5.0)
+    max_single_theme_family_pct = float(allocation_plan.get("max_single_theme_family_pct", 30.0) or 30.0)
+    max_high_volatility_theme_pct = float(allocation_plan.get("max_high_volatility_theme_pct", 45.0) or 45.0)
     total_value = float(exposure.get("total_value", 0.0) or 0.0)
 
     decisions = {item["fund_code"]: item for item in advice.get("fund_decisions", []) if item.get("fund_code")}
+    bundle_decisions = {
+        str(item.get("fund_code", "") or ""): item
+        for item in (committee_bundle.get("fund_decisions", []) or [])
+        if item.get("fund_code")
+    }
     gross_trade_limit = float(strategy["portfolio"].get("daily_max_gross_trade_amount", strategy["portfolio"]["daily_max_trade_amount"]))
     net_buy_limit = float(strategy["portfolio"].get("daily_max_net_buy_amount", strategy["portfolio"]["daily_max_trade_amount"]))
 
@@ -345,6 +361,50 @@ def build_validated_payload(
             hold_actions.append(default_hold(fund, "Fixed-hold position is not part of daily tactical validation."))
             continue
 
+        bundle_decision = bundle_decisions.get(fund["fund_code"], {})
+        bundle_blocks_execution = bool(bundle_decision.get("risk_veto")) or bundle_decision.get("execution_eligible") is False
+        if bundle_blocks_execution:
+            notes = ["Committee bundle marked this fund as not executable; forced hold before optimizer."]
+            if bundle_decision.get("risk_veto"):
+                notes.append(f"risk_veto={bundle_decision.get('risk_decision') or 'true'}")
+            notes.extend(str(item) for item in (bundle_decision.get("constraint_notes", []) or []) if str(item).strip())
+            hold_actions.append(
+                build_record(
+                    report_date,
+                    fund,
+                    model,
+                    validated_action="hold",
+                    validated_amount=0.0,
+                    previous=previous_actions.get(fund["fund_code"]),
+                    allocation_plan=allocation_plan,
+                    execution_friction=execution_friction_notes(constraint),
+                    policy_rule_hits=["committee_bundle_fund_gate"],
+                    constraint_hits=["risk_veto" if bundle_decision.get("risk_veto") else "execution_not_eligible"],
+                    validation_notes=notes,
+                    cash_note="committee_bundle_fund_gate",
+                )
+            )
+            continue
+
+        if decision_mode in {"blocked", "hold_only"} and fund["role"] == "tactical":
+            hold_actions.append(
+                build_record(
+                    report_date,
+                    fund,
+                    model,
+                    validated_action="hold",
+                    validated_amount=0.0,
+                    previous=previous_actions.get(fund["fund_code"]),
+                    allocation_plan=allocation_plan,
+                    execution_friction=execution_friction_notes(constraint),
+                    policy_rule_hits=["committee_bundle_gate"],
+                    constraint_hits=[],
+                    validation_notes=[f"Committee bundle decision_mode={decision_mode}; tactical execution disabled."],
+                    cash_note="committee_bundle_gate",
+                )
+            )
+            continue
+
         candidate = build_candidate(fund, model, strategy=strategy, constraint=constraint)
         if candidate is None:
             notes = ["Model action resolves to hold after fund-local validation."]
@@ -379,11 +439,19 @@ def build_validated_payload(
     optimization = optimize_portfolio_actions(
         [candidate for _, _, candidate in candidate_pairs],
         strategy_bucket_summary=exposure.get("by_strategy_bucket", []),
+        current_theme_family_summary=exposure.get("by_theme_family", []),
+        current_fund_summary=exposure.get("fund_summary", []),
+        current_management_company_summary=exposure.get("by_management_company", []),
         current_bucket_pct=current_bucket_pct,
         target_bucket_pct=target_bucket_pct,
         rebalance_band_pct=rebalance_band_pct,
+        max_single_theme_family_pct=max_single_theme_family_pct,
+        max_high_volatility_theme_pct=max_high_volatility_theme_pct,
+        top3_fund_limit_pct=45.0,
+        max_single_management_company_pct=25.0,
         total_value=total_value,
         available_funding=available_cash_hub,
+        delayed_sell_proceeds=delayed_sell_proceeds_total,
         gross_trade_budget=remaining_gross_trade_budget,
         net_buy_budget=remaining_net_buy_budget,
         max_actions=max_actions,
@@ -450,6 +518,8 @@ def build_validated_payload(
         "remaining_gross_trade_budget_after_validation": round(float(optimization.get("remaining_gross_trade_budget", remaining_gross_trade_budget) or remaining_gross_trade_budget), 2),
         "remaining_net_buy_budget_after_validation": round(float(optimization.get("remaining_net_buy_budget", remaining_net_buy_budget) or remaining_net_buy_budget), 2),
         "cash_hub_available": round(available_cash_hub, 2),
+        "immediately_available_cash": round(available_cash_hub, 2),
+        "delayed_sell_proceeds": round(delayed_sell_proceeds_total, 2),
         "market_view": advice.get("market_view", {}),
         "cross_fund_observations": advice.get("cross_fund_observations", []),
         "allocation_plan": allocation_plan,
@@ -458,7 +528,11 @@ def build_validated_payload(
         "advice_is_fallback": llm_raw.get("mode") == "committee_fallback",
         "advice_is_mock": llm_raw.get("mode") == "mock",
         "decision_source": llm_raw.get("decision_source", ""),
+        "decision_mode": decision_mode,
+        "degradation_mode": degradation_mode,
+        "execution_eligible": execution_eligible,
         "committee": llm_raw.get("committee", {}),
+        "committee_decision_bundle": committee_bundle,
         "risk_vetoes": (llm_raw.get("committee", {}) or {}).get("risk_vetoes", []),
         "committee_confidence": (llm_raw.get("committee", {}) or {}).get("committee_confidence", ""),
         "narrative_mode": llm_raw.get("narrative_mode", ""),

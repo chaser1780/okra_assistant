@@ -14,7 +14,7 @@ from run_daily_pipeline import add_business_days, due_review_jobs
 from run_realtime_monitor import should_sync_units
 from run_report_window import intraday_report_target
 from helpers import TempAgentHome
-from ui_support import latest_nightly_target_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
+from ui_support import latest_nightly_target_date, load_portfolio_for_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
 
 
 class PipelineLogicTests(unittest.TestCase):
@@ -41,6 +41,27 @@ class PipelineLogicTests(unittest.TestCase):
             labels = {(item["base_date"], item["horizon"]) for item in jobs}
             self.assertIn(("2026-03-10", 1), labels)
             self.assertNotIn(("2026-03-06", 5), labels)
+
+    def test_due_review_jobs_uses_execution_sync_actual_trades(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "config").mkdir(parents=True, exist_ok=True)
+            (root / "db" / "execution_sync" / "actual_trades").mkdir(parents=True, exist_ok=True)
+            (root / "config" / "review.toml").write_text(
+                "[review]\nenabled = true\nhorizons = [1]\ncompare_against = 'validated_advice'\n",
+                encoding="utf-8",
+            )
+            (root / "db" / "execution_sync" / "actual_trades" / "2026-03-10.json").write_text(
+                json.dumps({"trade_date": "2026-03-10", "items": [{"trade_id": "t1"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            jobs = due_review_jobs(root, "2026-03-11")
+
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0]["base_date"], "2026-03-10")
+            self.assertTrue(jobs[0]["has_execution"])
+            self.assertFalse(jobs[0]["has_advice"])
 
     def test_intraday_report_target_follows_report_mode(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,6 +103,20 @@ class PipelineLogicTests(unittest.TestCase):
 
             agent.write_json("db/estimated_nav/2026-03-11.json", {"items": [{"fund_code": "EQ1", "official_nav": 2.1, "official_nav_date": "2026-03-11"}]})
             self.assertTrue(should_sync_units(agent.root, "2026-03-11"))
+        finally:
+            agent.cleanup()
+
+    def test_load_portfolio_for_date_prefers_runtime_state_over_legacy_bootstrap(self):
+        agent = TempAgentHome()
+        try:
+            agent.write_json("config/portfolio.json", {"portfolio_name": "legacy", "as_of_date": "2026-03-09", "funds": []})
+            agent.write_json("db/portfolio_state/current.json", {"portfolio_name": "runtime", "as_of_date": "2026-03-10", "funds": []})
+
+            source_date, payload = load_portfolio_for_date(agent.root, "2026-03-10", "2026-03-10")
+
+            self.assertEqual(source_date, "2026-03-10")
+            self.assertEqual(payload["portfolio_name"], "runtime")
+            self.assertEqual(payload["_source_kind"], "current")
         finally:
             agent.cleanup()
 

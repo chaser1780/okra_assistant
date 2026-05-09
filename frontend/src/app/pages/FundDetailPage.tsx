@@ -1,5 +1,5 @@
 import { ArrowLeft, Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -13,8 +13,8 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { getFundDetail } from "../../lib/api";
-import type { FundDetailPayload, LongMemoryRecord } from "../../lib/types";
+import type { FundAnalysisAgentCard, LongMemoryRecord } from "../../lib/types";
+import { useFundDetailQuery } from "../../lib/workbenchQuery";
 import { asNumber, compactMoney, lines, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, evidencePathLabel, memoryText, memoryTitle, roleLabel, statusLabel, styleLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, SectionTitle } from "../../components/ui";
@@ -31,28 +31,9 @@ export function FundDetailPage({
   onBack: () => void;
 }) {
   const [range, setRange] = useState("成立以来");
-  const [detail, setDetail] = useState<FundDetailPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError("");
-    getFundDetail(fundCode, selectedDate, range)
-      .then((payload) => {
-        if (alive) setDetail(payload);
-      })
-      .catch((err) => {
-        if (alive) setError(err instanceof Error ? err.message : "基金详情加载失败。");
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [fundCode, selectedDate, range]);
+  const { data: detail, error, isFetching, isLoading } = useFundDetailQuery(fundCode, selectedDate, range);
+  const loading = isLoading || (isFetching && !detail);
+  const errorMessage = error instanceof Error ? error.message : "";
 
   const trendData = useMemo(() => {
     const proxyMap = new Map((detail?.history.proxyNormalized ?? []).map((point) => [point.date, point.value]));
@@ -83,14 +64,14 @@ export function FundDetailPage({
     );
   }
 
-  if (error || !detail) {
+  if (errorMessage || !detail) {
     return (
       <div className="space-y-4">
         <Button variant="ghost" className="gap-2" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
           返回
         </Button>
-        <EmptyState title="基金详情加载失败" body={error || "没有拿到基金详情数据。"} />
+        <EmptyState title="基金详情加载失败" body={errorMessage || "没有拿到基金详情数据。"} />
       </div>
     );
   }
@@ -98,6 +79,7 @@ export function FundDetailPage({
   const portfolio = detail.portfolio ?? {};
   const realtime = detail.realtime ?? {};
   const research = detail.research ?? {};
+  const analysisDetail = detail.analysisDetail ?? { agentCards: [], agentSummary: {}, stageSummary: {} };
 
   return (
     <div className="space-y-4">
@@ -143,7 +125,7 @@ export function FundDetailPage({
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-8 p-4">
           <SectionTitle title="长期画像" meta="建议成败基于系统每日复盘，不基于真实交易" />
-          <MemoryList records={detail.longMemory.fund} empty="这只基金还没有形成长期画像，运行首启分析后会逐步积累。" />
+          <MemoryList records={detail.longMemory.fund} empty="这只基金还没有形成长期画像，运行今日分析后会逐步积累。" />
         </Card>
         <Card className="col-span-4 p-4">
           <SectionTitle title="适用规则与执行纪律" meta="下单前检查" />
@@ -261,6 +243,21 @@ export function FundDetailPage({
           </div>
         </Card>
       </section>
+
+      <section className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 p-4">
+          <SectionTitle title="AI 今日分析明细" meta="按 agent 阶段展开这只基金的具体判断" />
+          {analysisDetail.agentCards.length ? (
+            <div className="space-y-3">
+              {analysisDetail.agentCards.map((card) => (
+                <AgentCard key={card.agent_name} card={card} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="暂无单基金分析明细" body="运行今日分析后，这里会显示 analyst、researcher 和 manager 对这只基金的具体判断。" />
+          )}
+        </Card>
+      </section>
     </div>
   );
 }
@@ -311,6 +308,36 @@ function MemoryList({ records, empty, compact = false }: { records: LongMemoryRe
           <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">{memoryText(item.text)}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function AgentCard({ card }: { card: FundAnalysisAgentCard }) {
+  const fundView = card.fundViews?.[0] ?? {};
+  const signalCard = card.signalCards?.[0] ?? {};
+  const decisionCard = card.decisionCards?.[0] ?? {};
+  const thesis = text(fundView.thesis || signalCard.thesis || decisionCard.why_now || card.summary, "暂无分析");
+  const comment = text(fundView.comment || signalCard.comment || decisionCard.manager_notes, "");
+  const risks = lines((fundView.risks as string[] | string | undefined) ?? (signalCard.risks as string[] | string | undefined), "暂无风险");
+  const catalysts = lines((fundView.catalysts as string[] | string | undefined) ?? (signalCard.catalysts as string[] | string | undefined), "");
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold text-slate-100">{card.agent_name}</div>
+          <div className="mt-1 text-xs text-slate-500">{text(card.stageLabel, card.stage)} | 置信度 {asNumber(card.confidence).toFixed(2)}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge tone={card.stage === "manager" ? "success" : card.stage === "researcher" ? "warning" : "info"}>{text(card.stageLabel, card.stage)}</Badge>
+          {card.isCommitteeCore ? <Badge tone="accent">committee</Badge> : null}
+        </div>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-slate-300">{thesis}</p>
+      {comment ? <p className="mt-2 text-sm leading-6 text-slate-500">{comment}</p> : null}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <EvidenceList title="催化" items={catalysts.length ? catalysts : ["暂无催化"]} />
+        <EvidenceList title="风险" items={risks.length ? risks : ["暂无风险"]} />
+      </div>
     </div>
   );
 }

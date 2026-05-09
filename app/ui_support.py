@@ -16,7 +16,6 @@ from ui_tasks import (
     build_realtime_command,
     build_replay_command,
     build_runtime_env,
-    build_trade_command,
     desktop_log_path,
     latest_nightly_target_date,
     pending_nightly_catchup_dates,
@@ -26,8 +25,16 @@ from ui_tasks import (
     should_resume_nightly,
 )
 
+try:
+    from common import actual_trade_dir, legacy_portfolio_path, load_actual_trade_payload, long_memory_export_path, long_memory_pending_export_path, portfolio_state_current_path
+except ModuleNotFoundError:
+    import sys
 
-MOJIBAKE = set("鍩閱鏃鏀璇鎴鏅鐜缁閫鍔鐩浠鍗鍙璁鏍妗")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from common import actual_trade_dir, legacy_portfolio_path, load_actual_trade_payload, long_memory_export_path, long_memory_pending_export_path, portfolio_state_current_path
+
+
+MOJIBAKE = set("?��")
 COMMON = set("基金收益建议组合持仓实时详情智能体复盘夜间设置数据金额买卖现金回写估值策略研究市场风格主题新闻置信度风险")
 
 
@@ -191,10 +198,10 @@ def latest_available_payload_on_or_before(home: Path, relative_dir: str, report_
 
 def load_portfolio_for_date(home: Path, report_date: str, today: str) -> tuple[str, dict]:
     if report_date == today:
-        current = read_json(home / "db" / "portfolio_state" / "current.json", read_json(home / "config" / "portfolio.json", {}))
+        current = read_json(portfolio_state_current_path(home), read_json(legacy_portfolio_path(home), {}))
         if current:
             payload = dict(current)
-            payload["_source_kind"] = "current"
+            payload["_source_kind"] = "current" if portfolio_state_current_path(home).exists() else "legacy_bootstrap"
             payload["_source_date"] = fix_text(str(payload.get("as_of_date", "") or today))
             return payload["_source_date"], payload
 
@@ -205,10 +212,10 @@ def load_portfolio_for_date(home: Path, report_date: str, today: str) -> tuple[s
         payload["_source_date"] = snapshot_date
         return snapshot_date, payload
 
-    current = read_json(home / "db" / "portfolio_state" / "current.json", read_json(home / "config" / "portfolio.json", {}))
+    current = read_json(portfolio_state_current_path(home), read_json(legacy_portfolio_path(home), {}))
     if current:
         payload = dict(current)
-        payload["_source_kind"] = "current"
+        payload["_source_kind"] = "current" if portfolio_state_current_path(home).exists() else "legacy_bootstrap"
         payload["_source_date"] = fix_text(str(payload.get("as_of_date", "") or today))
         return payload["_source_date"], payload
 
@@ -217,8 +224,14 @@ def load_portfolio_for_date(home: Path, report_date: str, today: str) -> tuple[s
 
 def collect_dates(home: Path) -> list[str]:
     values = set()
-    for pattern in ("db/validated_advice/*.json", "db/realtime_monitor/*.json", "db/trade_journal/*.json", "db/review_results/*.json", "db/review_memory/cycles/*.json"):
+    for pattern in ("db/validated_advice/*.json", "db/realtime_monitor/*.json", "db/review_results/*.json", "db/daily_workspace/*/memory_cycle.json"):
         for item in home.glob(pattern):
+            stem = item.stem if item.is_file() else item.name
+            if len(stem) >= 10 and stem[:10].count("-") == 2:
+                values.add(stem[:10])
+    trade_base = actual_trade_dir(home)
+    if trade_base.exists():
+        for item in trade_base.glob("*.json"):
             stem = item.stem
             if len(stem) >= 10 and stem[:10].count("-") == 2:
                 values.add(stem[:10])
@@ -332,6 +345,8 @@ def load_state(home: Path, selected: str | None = None) -> dict:
     selected_intraday_manifest = latest_manifest(home, "daily_pipeline", selected, mode="intraday")
     selected_nightly_manifest = latest_manifest(home, "daily_pipeline", selected, mode="nightly")
     selected_realtime_manifest = latest_manifest(home, "realtime_monitor", selected, mode="realtime")
+    long_memory_export = read_json(long_memory_export_path(home), {"items": []}) if long_memory_export_path(home).exists() else {"items": []}
+    long_memory_pending = read_json(long_memory_pending_export_path(home), {"items": []}) if long_memory_pending_export_path(home).exists() else {"items": []}
     return {
         "selected_date": selected,
         "dates": dates,
@@ -351,24 +366,31 @@ def load_state(home: Path, selected: str | None = None) -> dict:
         "llm_raw": read_json(home / "db" / "llm_raw" / f"{selected}.json", {}),
         "review_result": read_json(home / "db" / "review_results" / f"{selected}_T0.json", {}),
         "review_results_for_date": load_review_results_for_date(home, selected),
-        "review_memory": read_json(home / "db" / "review_memory" / "memory.json", {}),
-        "memory_ledger": read_json(home / "db" / "review_memory" / "ledger.json", {"rules": [], "events": [], "summary": {}}),
-        "long_memory": read_json(home / "db" / "long_memory" / "exports" / "all_memory.json", {"items": []}),
-        "long_memory_pending": read_json(home / "db" / "long_memory" / "candidates" / "pending_permanent.json", {"items": []}),
+        "review_memory": read_json(long_memory_export_path(home), {"items": []}) if long_memory_export_path(home).exists() else {},
+        "memory_ledger": read_json(home / "db" / "long_memory" / "portfolio" / "learning_ledger.json", {"rules": [], "events": [], "summary": {}}),
+        "long_memory": long_memory_export,
+        "long_memory_pending": long_memory_pending,
         "long_memory_market": read_json(home / "db" / "long_memory" / "market" / "regime_memory.json", {"items": []}),
         "long_memory_execution": read_json(home / "db" / "long_memory" / "execution" / "rules.json", {"items": []}),
+        "today_analysis_decision": read_json(home / "db" / "daily_workspace" / selected / "today_decision.json", {}),
+        "today_analysis": read_json(home / "db" / "daily_workspace" / selected / "today_analysis.json", {}),
+        "today_analysis_meta": read_json(home / "db" / "daily_workspace" / selected / "today_analysis_meta.json", {}),
+        "today_analysis_memory_cycle": read_json(home / "db" / "daily_workspace" / selected / "memory_cycle.json", {}),
         "daily_first_open": read_json(home / "db" / "daily_workspace" / selected / "today_decision.json", {}),
         "daily_first_open_analysis": read_json(home / "db" / "daily_workspace" / selected / "today_analysis.json", {}),
-        "daily_first_open_updates": read_json(home / "db" / "daily_workspace" / selected / "memory_updates.json", {}),
+        "daily_first_open_updates": read_json(home / "db" / "daily_workspace" / selected / "today_analysis_meta.json", {}),
         "daily_first_open_brief": read_text(home / "db" / "daily_workspace" / selected / "daily_brief.md"),
-        "learning_cycle": read_json(home / "db" / "review_memory" / "cycles" / f"{selected}.json", {}),
+        "learning_cycle": read_json(
+            home / "db" / "daily_workspace" / selected / "memory_cycle.json",
+            read_json(home / "db" / "long_memory" / "cycles" / "completed" / f"{selected}.learning.json", {}),
+        ),
         "review_report": read_text(home / "reports" / "daily" / f"{selected}_review.md"),
         "learning_report": read_text(home / "reports" / "daily" / f"{selected}_learning.md"),
         "portfolio_report": read_text(home / "reports" / "daily" / f"{selected}_portfolio.md"),
         "recommendation_delta": read_json(home / "db" / "recommendation_delta" / f"{selected}.json", {"items": []}),
         "source_health": read_json(home / "db" / "source_health" / f"{selected}.json", {"items": []}),
         "evaluation_snapshot": read_json(home / "db" / "evaluation_snapshots" / f"{selected}.json", {}),
-        "trade_journal": read_json(home / "db" / "trade_journal" / f"{selected}.json", {"items": []}),
+        "execution_sync_trade_log": load_actual_trade_payload(home, selected),
         "replay_experiments": collect_replay_experiment_summaries(home),
         "execution_status": execution_status,
         "llm_config": read_toml(home / "config" / "llm.toml"),
@@ -466,7 +488,7 @@ def build_dashboard_alerts(state: dict) -> list[str]:
     selected_date = state.get("selected_date", today_str())
     today = today_str()
     if selected_date == today and not state.get("validated"):
-        alerts.append("今日日内建议尚未生成。")
+        alerts.append("今日分析尚未生成。")
     failed_agents = normalize_failed_agents(state.get("aggregate", {}).get("failed_agents", []))
     if failed_agents:
         names = ", ".join(item.get("agent_name", "") for item in failed_agents if item.get("agent_name"))
@@ -493,7 +515,7 @@ def build_dashboard_alerts(state: dict) -> list[str]:
     intraday_manifest = state.get("intraday_manifest", {}) or {}
     if selected_date == today and intraday_manifest.get("status") == "failed":
         latest_error = (intraday_manifest.get("errors") or [{}])[-1].get("error", "未知错误")
-        alerts.append(f"最近一次日内链路失败：{fix_text(str(latest_error))[:120]}")
+        alerts.append(f"最近一次今日分析链路失败：{fix_text(str(latest_error))[:120]}")
     return alerts
 
 
@@ -881,7 +903,7 @@ def build_settings_text(
         f"portfolio_valuation = {home / 'db' / 'portfolio_valuation' / (selected_date + '.json')}\n"
         f"aggregate = {home / 'db' / 'agent_outputs' / selected_date / 'aggregate.json'}\n"
         f"review_result = {home / 'db' / 'review_results' / (selected_date + '_T0.json')}\n"
-        f"trade_journal = {home / 'db' / 'trade_journal' / (selected_date + '.json')}\n"
+        f"execution_sync_actual_trades = {home / 'db' / 'execution_sync' / 'actual_trades' / (selected_date + '.json')}\n"
         f"portfolio_report = {home / 'reports' / 'daily' / (selected_date + '_portfolio.md')}\n"
         f"review_report = {home / 'reports' / 'daily' / (selected_date + '_review.md')}\n\n"
         f"realtime_policy = {realtime.get('realtime_policy', {})}\n\n"
@@ -923,7 +945,7 @@ def build_dashboard_text(
     text = (
         f"当前查看日期：{summary['selected_date']}\n"
         f"今天：{today}\n"
-        f"实时刷新/日内链路/夜间复盘默认运行日期：{today}\n"
+        f"实时刷新/今日分析/长期记忆默认运行日期：{today}\n"
         f"组合估值日期：{portfolio.get('as_of_date', '暂无')}\n"
         f"当前界面持仓快照：{summary.get('portfolio_date', '暂无')}\n"
         f"组合重估生成时间：{portfolio.get('last_valuation_generated_at', '暂无')}\n"

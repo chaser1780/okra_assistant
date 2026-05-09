@@ -12,6 +12,14 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from ui_support import read_json
 
+try:
+    from common import iter_actual_trade_items
+except ModuleNotFoundError:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from common import iter_actual_trade_items
+
 
 RANGE_LABELS = ["近1月", "近3月", "近6月", "近1年", "成立以来"]
 RANGE_DAYS = {"近1月": 31, "近3月": 93, "近6月": 186, "近1年": 366, "成立以来": None}
@@ -232,21 +240,55 @@ def collect_holding_history(home: Path, fund_code: str, range_label: str = "成�
 
 def collect_trade_markers(home: Path, fund_code: str | None = None, range_label: str = "成立以来") -> list[TradeMarker]:
     markers: list[TradeMarker] = []
-    for path in sorted((home / "db" / "trade_journal").glob("*.json")):
-        payload = read_json(path, {})
-        trade_date = payload.get("trade_date") or path.stem[:10]
-        for item in payload.get("items", []) or []:
-            if fund_code and item.get("fund_code") != fund_code:
-                continue
-            markers.append(
-                TradeMarker(
-                    date=trade_date,
-                    action=str(item.get("action", "") or ""),
-                    amount=float(item.get("amount", 0) or 0),
-                    fund_code=str(item.get("fund_code", "") or ""),
-                    fund_name=str(item.get("fund_name", "") or ""),
-                )
+    for item in iter_actual_trade_items(home):
+        trade_date = str(item.get("trade_date", "") or "")
+        operation = str(item.get("operation_type", "") or "")
+        if operation == "convert":
+            rows = (
+                {
+                    "fund_code": item.get("out_fund_code", ""),
+                    "fund_name": item.get("out_fund_name", ""),
+                    "action": "switch_out",
+                    "amount": float(item.get("out_amount", 0) or 0),
+                },
+                {
+                    "fund_code": item.get("in_fund_code", ""),
+                    "fund_name": item.get("in_fund_name", ""),
+                    "action": "switch_in",
+                    "amount": float(item.get("in_amount", 0) or 0),
+                },
             )
+            for row in rows:
+                if fund_code and row["fund_code"] != fund_code:
+                    continue
+                markers.append(
+                    TradeMarker(
+                        date=trade_date,
+                        action=str(row["action"] or ""),
+                        amount=row["amount"],
+                        fund_code=str(row["fund_code"] or ""),
+                        fund_name=str(row["fund_name"] or ""),
+                    )
+                )
+            continue
+        mapped_action = {
+            "buy": "buy",
+            "dca": "buy",
+            "sell": "sell",
+            "convert_in": "switch_in",
+            "convert_out": "switch_out",
+        }.get(operation, operation)
+        if fund_code and item.get("fund_code") != fund_code:
+            continue
+        markers.append(
+            TradeMarker(
+                date=trade_date,
+                action=str(mapped_action or ""),
+                amount=float(item.get("amount", 0) or 0),
+                fund_code=str(item.get("fund_code", "") or ""),
+                fund_name=str(item.get("fund_name", "") or ""),
+            )
+        )
     if not markers:
         return []
     filtered = _filter_points([SeriesPoint(marker.date, 0.0) for marker in markers], range_label)

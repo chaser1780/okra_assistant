@@ -5,13 +5,16 @@ from copy import deepcopy
 from pathlib import Path
 
 from common import (
+    iter_actual_trade_items,
     dump_json,
     execution_status_path,
+    legacy_portfolio_path,
     load_json,
     load_portfolio,
     parse_date_text,
     portfolio_definition_path,
     portfolio_state_current_path,
+    portfolio_state_event_dir,
     portfolio_state_snapshot_path,
     timestamp_now,
 )
@@ -29,6 +32,19 @@ RUNTIME_FIELDS = {
     "last_official_nav_date",
     "units_source",
 }
+
+
+def _safe_event_token(value: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value or "").strip())
+    return token.strip("_") or "event"
+
+
+def portfolio_state_event_path(agent_home: Path, event_date: str, event_type: str, event_id: str | None = None) -> Path:
+    event_dir = portfolio_state_event_dir(agent_home, event_date)
+    if not event_id:
+        event_id = timestamp_now().replace(":", "").replace("+", "_").replace(".", "_")
+    filename = f"{_safe_event_token(event_type)}_{_safe_event_token(event_id)}.json"
+    return event_dir / filename
 
 
 def ensure_portfolio_definition(agent_home: Path) -> dict:
@@ -66,17 +82,19 @@ def save_portfolio_state(
     source: str,
     event_date: str,
     event_type: str,
+    event_id: str | None = None,
     extra_meta: dict | None = None,
-    persist_legacy: bool = True,
+    persist_legacy: bool = False,
 ) -> tuple[Path, Path]:
     current_payload = deepcopy(portfolio)
     current_payload.setdefault("state_metadata", {})
+    updated_at = timestamp_now()
     current_payload["state_metadata"].update(
         {
             "source": source,
             "event_type": event_type,
             "event_date": event_date,
-            "updated_at": timestamp_now(),
+            "updated_at": updated_at,
         }
     )
     if extra_meta:
@@ -85,26 +103,63 @@ def save_portfolio_state(
     current_path = dump_json(portfolio_state_current_path(agent_home), current_payload)
     snapshot_payload = deepcopy(current_payload)
     snapshot_path = dump_json(portfolio_state_snapshot_path(agent_home, event_date), snapshot_payload)
+    event_path = portfolio_state_event_path(agent_home, event_date, event_type, event_id)
+    event_payload = deepcopy(current_payload)
+    event_payload["state_metadata"].update({"event_journal_path": str(event_path), "latest_snapshot_path": str(snapshot_path)})
+    dump_json(event_path, event_payload)
+    current_payload["state_metadata"]["event_journal_path"] = str(event_path)
+    current_path = dump_json(portfolio_state_current_path(agent_home), current_payload)
     if persist_legacy:
-        dump_json(agent_home / "config" / "portfolio.json", current_payload)
+        dump_json(legacy_portfolio_path(agent_home), current_payload)
     return current_path, snapshot_path
 
 
 def _trade_items_until(agent_home: Path, target_date: str) -> list[dict]:
-    trade_dir = agent_home / "db" / "trade_journal"
-    if not trade_dir.exists():
-        return []
     target = parse_date_text(target_date)
     if target is None:
         return []
     items: list[dict] = []
-    for path in sorted(trade_dir.glob("*.json")):
-        trade_date = parse_date_text(path.stem)
-        if trade_date is None or trade_date > target:
+    for item in iter_actual_trade_items(agent_home, target_date):
+        operation = str(item.get("operation_type", "") or "")
+        if operation == "convert":
+            items.append(
+                {
+                    "trade_date": item.get("trade_date", ""),
+                    "fund_code": item.get("out_fund_code", ""),
+                    "action": "switch_out",
+                    "amount": float(item.get("out_amount", 0.0) or 0.0),
+                    "trade_nav": item.get("out_nav"),
+                    "units": item.get("out_units"),
+                }
+            )
+            items.append(
+                {
+                    "trade_date": item.get("trade_date", ""),
+                    "fund_code": item.get("in_fund_code", ""),
+                    "action": "switch_in",
+                    "amount": float(item.get("in_amount", 0.0) or 0.0),
+                    "trade_nav": item.get("in_nav"),
+                    "units": item.get("in_units"),
+                }
+            )
             continue
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        for item in payload.get("items", []):
-            items.append({"trade_date": path.stem, **item})
+        mapped_action = {
+            "buy": "buy",
+            "dca": "buy",
+            "sell": "sell",
+            "convert_in": "switch_in",
+            "convert_out": "switch_out",
+        }.get(operation, operation)
+        items.append(
+            {
+                "trade_date": item.get("trade_date", ""),
+                "fund_code": item.get("fund_code", ""),
+                "action": mapped_action,
+                "amount": float(item.get("amount", 0.0) or 0.0),
+                "trade_nav": item.get("nav"),
+                "units": item.get("units"),
+            }
+        )
     items.sort(key=lambda item: (item.get("trade_date", ""), item.get("fund_code", "")))
     return items
 

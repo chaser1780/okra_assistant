@@ -8,5 +8,19 @@ export default defineConfig({
     port: 5173,
     strictPort: true
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("recharts")) return "charts";
+          if (id.includes("react-router-dom")) return "router";
+          if (id.includes("@tanstack/react-query")) return "query";
+          if (id.includes("react") || id.includes("react-dom")) return "react-vendor";
+          return "vendor";
+        }
+      }
+    }
+  },
   clearScreen: false
 });

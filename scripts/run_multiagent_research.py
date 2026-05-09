@@ -7,8 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from common import agent_output_dir, agent_snapshot_root, dump_json, ensure_layout, evidence_index_path, llm_context_path, load_agents_config, load_json, resolve_agent_home, resolve_date, timestamp_now
+from common import agent_output_dir, agent_snapshot_root, committee_decision_bundle_path, daily_workspace_dir, dump_json, ensure_layout, evidence_index_path, llm_context_path, load_agents_config, load_json, resolve_agent_home, resolve_date, timestamp_now, today_analysis_runtime_path
 from evidence_index import build_evidence_index_payload, retrieve_agent_evidence
+from models import CommitteeDecisionBundle
 from multiagent_utils import call_json_agent
 
 DEFAULT_ANALYST_ORDER = [
@@ -21,6 +22,17 @@ DEFAULT_ANALYST_ORDER = [
 ]
 DEFAULT_RESEARCHER_ORDER = ["bull_researcher", "bear_researcher"]
 DEFAULT_MANAGER_ORDER = ["research_manager", "risk_manager", "portfolio_trader"]
+
+
+def _update_today_runtime(agent_home: Path, report_date: str, mutate) -> None:
+    path = today_analysis_runtime_path(agent_home, report_date)
+    if not path.exists():
+        return
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        return
+    mutate(payload)
+    dump_json(path, payload)
 
 
 def compose_prompt(role: str, mission: list[str], input_focus: list[str], method: list[str], output_rules: list[str], do_not: list[str]) -> str:
@@ -1193,11 +1205,6 @@ def degraded_mock_record(agent_name: str, context: dict, error: str) -> dict:
     output["watchouts"] = sanitize_string_list((output.get("watchouts") or []) + [f"transport degraded: {error}"], limit=6)
     output["fallback_mode"] = "transport_degraded_mock"
     output["fallback_reason"] = error
-    if output.get("fund_views"):
-        if not output.get("signal_cards"):
-            output["signal_cards"] = signal_cards_from_views(agent_name, output.get("fund_views", []), {"_context_evidence_map": context.get("fund_evidence_map", {})})
-        if agent_name in {"research_manager", "risk_manager", "portfolio_trader"} and not output.get("decision_cards"):
-            output["decision_cards"] = decision_cards_from_views(agent_name, output.get("fund_views", []), output.get("signal_cards", []))
     return {"status": "degraded", "output": output}
 
 
@@ -1233,14 +1240,26 @@ def degradation_summary(aggregate: dict, manager_order: list[str]) -> dict:
     failed_names = [item.get("agent_name", "") for item in aggregate.get("failed_agents", []) if item.get("agent_name")]
     degraded_names = list(aggregate.get("degraded_agent_names", []) or [])
     blocking_failures = [name for name in manager_order if name in failed_names]
-    committee_ready = all(str(aggregate.get("agents", {}).get(name, {}).get("status", "")).lower() in {"ok", "degraded"} for name in manager_order)
+    core_statuses = {name: str(aggregate.get("agents", {}).get(name, {}).get("status", "")).lower() for name in manager_order}
+    committee_ready = all(status == "ok" for status in core_statuses.values())
     degraded_ok = bool(failed_names or degraded_names) and committee_ready and not blocking_failures
+    core_degraded = [name for name, status in core_statuses.items() if status == "degraded"]
+    if blocking_failures:
+        degradation_mode = "failed"
+    elif core_degraded:
+        degradation_mode = "decision_degraded"
+    elif degraded_names:
+        degradation_mode = "display_degraded"
+    else:
+        degradation_mode = "none"
     return {
         "failed_agent_names": failed_names,
         "degraded_agent_names": degraded_names,
         "blocking_failures": blocking_failures,
         "committee_ready": committee_ready,
         "degraded_ok": degraded_ok,
+        "degradation_mode": degradation_mode,
+        "execution_eligible": degradation_mode in {"none", "display_degraded"} and not failed_names,
     }
 
 
@@ -1313,10 +1332,164 @@ def build_committee_summary(aggregate: dict) -> dict:
     }
 
 
-def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_name: str, use_mock: bool, agent_roles: dict[str, str], agent_dependencies: dict[str, list[str]]) -> tuple[str, dict, dict | None, dict]:
+def _bundle_fund_names(context: dict) -> dict[str, dict]:
+    return {str(item.get("fund_code", "") or ""): item for item in (context.get("funds", []) or []) if item.get("fund_code")}
+
+
+def build_committee_decision_bundle(aggregate: dict, context: dict) -> CommitteeDecisionBundle:
+    manager = _agent_output(aggregate, "research_manager")
+    risk = _agent_output(aggregate, "risk_manager")
+    trader = _agent_output(aggregate, "portfolio_trader")
+    manager_cards = {item.get("fund_code", ""): item for item in (manager.get("decision_cards", []) or []) if item.get("fund_code")}
+    risk_cards = {item.get("fund_code", ""): item for item in (risk.get("decision_cards", []) or []) if item.get("fund_code")}
+    trader_cards = {item.get("fund_code", ""): item for item in (trader.get("decision_cards", []) or []) if item.get("fund_code")}
+    fund_meta = _bundle_fund_names(context)
+    failed_agent_names = list(aggregate.get("failed_agent_names", []) or [])
+    degraded_agent_names = list(aggregate.get("degraded_agent_names", []) or [])
+    degradation_mode = str(aggregate.get("degradation_mode", "none") or "none")
+    execution_eligible = bool(aggregate.get("execution_eligible", False))
+    decision_mode = "canonical"
+    notes: list[str] = []
+    if degradation_mode == "decision_degraded":
+        decision_mode = "hold_only"
+        notes.append("Core committee degraded; bundle forces hold-only output.")
+    elif degradation_mode == "failed":
+        decision_mode = "blocked"
+        notes.append("Blocking committee failure; bundle is not executable.")
+
+    def map_amount_from_bucket(size_bucket: str, role: str) -> float:
+        lowered = str(size_bucket or "").strip().lower()
+        if decision_mode == "hold_only":
+            return 0.0
+        if role == "core_dca":
+            return 0.0
+        if lowered in {"0", "hold", "none", ""}:
+            return 0.0
+        if "300" in lowered or "large" in lowered:
+            return 300.0
+        if "200" in lowered or "medium" in lowered:
+            return 200.0
+        if "100" in lowered or "small" in lowered:
+            return 100.0
+        return 200.0
+
+    fund_decisions = []
+    for fund_code, fund in fund_meta.items():
+        manager_card = manager_cards.get(fund_code, {})
+        risk_card = risk_cards.get(fund_code, {})
+        trader_card = trader_cards.get(fund_code, {})
+        proposed_action = str(
+            trader_card.get("proposed_action")
+            or manager_card.get("proposed_action")
+            or risk_card.get("proposed_action")
+            or "hold"
+        )
+        if decision_mode == "hold_only":
+            proposed_action = "hold"
+        size_bucket = str(trader_card.get("size_bucket") or manager_card.get("size_bucket") or risk_card.get("size_bucket") or "0")
+        confidence = max(
+            float(trader_card.get("confidence", 0.0) or 0.0),
+            float(manager_card.get("confidence", 0.0) or 0.0),
+            float(risk_card.get("confidence", 0.0) or 0.0),
+        )
+        supporting_signal_ids = list(
+            dict.fromkeys(
+                list(trader_card.get("supporting_signal_ids", []) or [])
+                + list(manager_card.get("supporting_signal_ids", []) or [])
+                + list(risk_card.get("supporting_signal_ids", []) or [])
+            )
+        )
+        opposing_signal_ids = list(
+            dict.fromkeys(
+                list(trader_card.get("opposing_signal_ids", []) or [])
+                + list(manager_card.get("opposing_signal_ids", []) or [])
+                + list(risk_card.get("opposing_signal_ids", []) or [])
+            )
+        )
+        original_action = proposed_action
+        risk_decision = str(risk_card.get("risk_decision", "") or "")
+        risk_action = str(risk_card.get("action_bias") or risk_card.get("proposed_action") or "").strip().lower()
+        risk_veto = (
+            risk_decision.strip().lower() in {"reject", "veto", "block", "blocked"}
+            or risk_action in {"avoid", "reject"}
+            or bool(risk_card.get("downgrade_reason"))
+            or original_action in {"avoid", "reject"}
+        )
+        constraint_notes = []
+        if risk_veto:
+            constraint_notes.append(str(risk_card.get("manager_notes") or risk_card.get("why_not_more") or risk_card.get("why_now") or "").strip())
+            proposed_action = "hold"
+            size_bucket = "0"
+            constraint_notes.append(f"Risk veto forced hold; original proposed_action={original_action}.")
+        fund_decisions.append(
+            {
+                "fund_code": fund_code,
+                "fund_name": str(fund.get("fund_name", fund_code) or fund_code),
+                "role": str(fund.get("role", "") or ""),
+                "proposed_action": proposed_action,
+                "size_bucket": size_bucket,
+                "suggest_amount": 0.0 if proposed_action == "hold" or risk_veto else map_amount_from_bucket(size_bucket, str(fund.get("role", "") or "")),
+                "confidence": round(confidence, 4),
+                "thesis": str(
+                    trader_card.get("why_now")
+                    or manager_card.get("why_now")
+                    or manager_card.get("manager_notes")
+                    or trader_card.get("manager_notes")
+                    or risk_card.get("manager_notes")
+                    or ""
+                ).strip(),
+                "supporting_signal_ids": supporting_signal_ids,
+                "opposing_signal_ids": opposing_signal_ids,
+                "decision_card_ids": [item for item in [trader_card.get("decision_id"), manager_card.get("decision_id"), risk_card.get("decision_id")] if item],
+                "risk_veto": risk_veto,
+                "risk_decision": risk_decision,
+                "constraint_notes": [item for item in constraint_notes if item],
+                "execution_eligible": execution_eligible and not risk_veto,
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "report_date": str(aggregate.get("report_date", "") or ""),
+        "generated_at": timestamp_now(),
+        "decision_mode": decision_mode,
+        "decision_source": str((aggregate.get("committee", {}) or {}).get("decision_source", "") or "committee_canonical"),
+        "degradation_mode": degradation_mode,
+        "execution_eligible": execution_eligible,
+        "committee_confidence": str((aggregate.get("committee", {}) or {}).get("committee_confidence", "") or "low"),
+        "manager_order": [name for name in DEFAULT_MANAGER_ORDER if name in (aggregate.get("ordered_agents", []) or [])],
+        "fund_decisions": fund_decisions,
+        "market_view": dict(trader.get("portfolio_view") or manager.get("portfolio_view") or risk.get("portfolio_view") or {}),
+        "cross_fund_observations": sanitize_string_list(
+            list(trader.get("watchouts", []) or []) + list(risk.get("watchouts", []) or []) + list(manager.get("watchouts", []) or []),
+            limit=8,
+        ),
+        "risk_vetoes": list((aggregate.get("committee", {}) or {}).get("risk_vetoes", []) or []),
+        "failed_agent_names": failed_agent_names,
+        "degraded_agent_names": degraded_agent_names,
+        "notes": notes,
+    }
+
+
+def execute_agent(agent_home: Path, report_date: str, context: dict, prior_outputs: dict, agent_name: str, use_mock: bool, agent_roles: dict[str, str], agent_dependencies: dict[str, list[str]]) -> tuple[str, dict, dict | None, dict]:
     started_at = time.perf_counter()
     started_at_text = timestamp_now()
     print(f">>> AGENT_START {agent_name}", flush=True)
+    _update_today_runtime(
+        agent_home,
+        report_date,
+        lambda payload: payload.update(
+            {
+                "status": "running",
+                "phase": "agent_research",
+                "currentStep": "multiagent_research",
+                "currentAgent": agent_name,
+                "currentAgentStage": agent_roles.get(agent_name, "unknown"),
+                "runningAgents": sorted(set(list(payload.get("runningAgents", []) or []) + [agent_name])),
+                "elapsedSeconds": payload.get("elapsedSeconds", 0),
+            }
+        ),
+    )
     agent_input = build_agent_input(agent_name, context, prior_outputs)
     user_prompt = build_user_prompt(agent_name, agent_input)
     trace = {
@@ -1370,6 +1543,18 @@ def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_na
                 "output_sha256": stable_digest(output),
             }
         )
+        _update_today_runtime(
+            agent_home,
+            report_date,
+            lambda payload: payload.update(
+                {
+                    "currentAgent": agent_name,
+                    "currentAgentStage": agent_roles.get(agent_name, "unknown"),
+                    "runningAgents": [item for item in (payload.get("runningAgents", []) or []) if item != agent_name],
+                    "lastError": payload.get("lastError", ""),
+                }
+            ),
+        )
         print(f">>> AGENT_DONE {agent_name} ({elapsed:.1f}s)", flush=True)
         return agent_name, {"status": "ok", "output": output}, None, trace
     except Exception as exc:
@@ -1387,6 +1572,19 @@ def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_na
                     "output_sha256": stable_digest(record.get("output", {})),
                 }
             )
+            _update_today_runtime(
+                agent_home,
+                report_date,
+                lambda payload: payload.update(
+                    {
+                        "currentAgent": agent_name,
+                        "currentAgentStage": agent_roles.get(agent_name, "unknown"),
+                        "runningAgents": [item for item in (payload.get("runningAgents", []) or []) if item != agent_name],
+                        "degradedAgents": sorted(set(list(payload.get("degradedAgents", []) or []) + [agent_name])),
+                        "lastError": error_text,
+                    }
+                ),
+            )
             print(f">>> AGENT_DEGRADED {agent_name} ({elapsed:.1f}s) {error_text}", flush=True)
             return agent_name, record, None, trace
         failure = {"agent_name": agent_name, "error": str(exc)}
@@ -1400,6 +1598,20 @@ def execute_agent(agent_home: Path, context: dict, prior_outputs: dict, agent_na
                 "error": error_text,
                 "output_sha256": stable_digest(record.get("output", {})),
             }
+        )
+        _update_today_runtime(
+            agent_home,
+            report_date,
+            lambda payload: payload.update(
+                {
+                    "status": "failed",
+                    "currentAgent": agent_name,
+                    "currentAgentStage": agent_roles.get(agent_name, "unknown"),
+                    "runningAgents": [item for item in (payload.get("runningAgents", []) or []) if item != agent_name],
+                    "failedAgents": list(payload.get("failedAgents", []) or []) + [failure],
+                    "lastError": error_text,
+                }
+            ),
         )
         print(f">>> AGENT_FAIL {agent_name} ({elapsed:.1f}s) {exc}", flush=True)
         return agent_name, record, failure, trace
@@ -1439,7 +1651,7 @@ def run_agent_group(
     prior_outputs = dict(aggregate["agents"])
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(agent_names)))) as executor:
         futures = {
-            executor.submit(execute_agent, agent_home, context, prior_outputs, agent_name, use_mock, aggregate.get("agent_roles", {}), aggregate.get("agent_dependencies", {})): agent_name
+            executor.submit(execute_agent, agent_home, aggregate.get("report_date", ""), context, prior_outputs, agent_name, use_mock, aggregate.get("agent_roles", {}), aggregate.get("agent_dependencies", {})): agent_name
             for agent_name in agent_names
         }
         for future in as_completed(futures):
@@ -1523,6 +1735,8 @@ def main() -> None:
         "failed_agent_names": [],
         "blocking_failures": [],
         "degraded_ok": False,
+        "degradation_mode": "none",
+        "execution_eligible": True,
         "committee_ready": False,
         "ordered_agents": ordered_agents,
         "required_committee_agents": [name for name in manager_order if name in ordered_agents],
@@ -1592,6 +1806,7 @@ def main() -> None:
             continue
         name, record, failure, trace = execute_agent(
             agent_home,
+            report_date,
             context,
             dict(aggregate["agents"]),
             agent_name,
@@ -1610,6 +1825,7 @@ def main() -> None:
     aggregate.update(summary)
     aggregate["stage_status"] = build_stage_status(aggregate)
     aggregate["committee"] = build_committee_summary(aggregate)
+    aggregate["committee_decision_bundle"] = build_committee_decision_bundle(aggregate, context)
     write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
     issue_path = None
     if aggregate["failed_agents"] and not args.mock:
@@ -1628,6 +1844,7 @@ def main() -> None:
         dump_json(output_dir / "aggregate.json", aggregate)
         if snapshot_dir is not None:
             dump_json(snapshot_dir / "aggregate.json", aggregate)
+    dump_json(committee_decision_bundle_path(agent_home, report_date), aggregate["committee_decision_bundle"])
     print(output_dir / "aggregate.json")
 
 

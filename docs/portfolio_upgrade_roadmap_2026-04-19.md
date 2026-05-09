@@ -25,7 +25,7 @@ The current project already has strong building blocks:
 - Structured context and evidence assembly in `scripts/build_llm_context.py`
 - Multi-stage committee workflow in `scripts/run_multiagent_research.py`
 - Rule validation in `scripts/validate_llm_advice.py`
-- Review and memory loop in `scripts/review_advice.py` and `scripts/update_review_memory.py`
+- Review and memory loop in `scripts/review_advice.py` and `scripts/run_long_memory_analysis.py`
 - Task manifests and desktop observability
 
 The missing gap is not "whether the system works". The missing gap is "whether the system can be replayed, compared, and globally optimized with confidence".

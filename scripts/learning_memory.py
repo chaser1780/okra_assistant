@@ -8,12 +8,12 @@ from typing import Any
 from common import (
     dump_json,
     learning_report_path,
+    long_memory_compat_view_path,
+    long_memory_learning_cycle_path,
+    long_memory_learning_ledger_path,
     load_json,
-    load_review_memory,
+    load_long_memory_compat_view,
     nightly_review_report_path,
-    review_memory_cycle_path,
-    review_memory_ledger_path,
-    review_memory_path,
     timestamp_now,
 )
 
@@ -112,7 +112,7 @@ def new_memory_ledger() -> dict[str, Any]:
 
 
 def load_memory_ledger(agent_home: Path) -> dict[str, Any]:
-    path = review_memory_ledger_path(agent_home)
+    path = long_memory_learning_ledger_path(agent_home)
     if not path.exists():
         return new_memory_ledger()
     payload = load_json(path)
@@ -453,7 +453,7 @@ def _batch_rule_events(review_batches: list[dict[str, Any]]) -> tuple[Counter[st
 
 def run_learning_sync(agent_home: Path, review_date: str, review_batches: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     ledger = load_memory_ledger(agent_home)
-    memory = load_review_memory(agent_home)
+    memory = load_long_memory_compat_view(agent_home)
     support_counter, contradiction_counter, watchouts = _batch_rule_events(review_batches)
     now = _now()
 
@@ -528,7 +528,7 @@ def run_learning_sync(agent_home: Path, review_date: str, review_batches: list[d
 
 def apply_replay_summary_to_ledger(agent_home: Path, replay_summary: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     ledger = load_memory_ledger(agent_home)
-    memory = load_review_memory(agent_home)
+    memory = load_long_memory_compat_view(agent_home)
     replay_id = str(replay_summary.get("experiment_id", "") or "")
     if not replay_id:
         return ledger, memory
@@ -661,9 +661,9 @@ def build_learning_report_text(review_date: str, cycle_summary: dict[str, Any], 
 
 
 def write_learning_artifacts(agent_home: Path, review_date: str, cycle_summary: dict[str, Any], ledger: dict[str, Any], memory: dict[str, Any], review_batches: list[dict[str, Any]]) -> dict[str, Path]:
-    cycle_path = dump_json(review_memory_cycle_path(agent_home, review_date), cycle_summary)
-    ledger_path = dump_json(review_memory_ledger_path(agent_home), ledger)
-    memory_path = dump_json(review_memory_path(agent_home), memory)
+    cycle_path = dump_json(long_memory_learning_cycle_path(agent_home, review_date), cycle_summary)
+    ledger_path = dump_json(long_memory_learning_ledger_path(agent_home), ledger)
+    memory_path = dump_json(long_memory_compat_view_path(agent_home), memory)
     report_text = build_learning_report_text(review_date, cycle_summary, ledger, memory, review_batches)
     learning_path = learning_report_path(agent_home, review_date)
     legacy_path = nightly_review_report_path(agent_home, review_date)

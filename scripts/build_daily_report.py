@@ -219,13 +219,14 @@ def build_fallback_score_report(report_date: str, portfolio: dict, strategy: dic
         "",
         "## 评分层概览",
         f"- 覆盖基金数：{len(funds)}",
+        "- 注意：以下仅为 signal snapshot，不代表可执行交易建议。",
     ]
     for item in funds[:10]:
         lines.extend(
             [
                 "",
                 f"### {item.get('name', item.get('code', '未知'))}（{item.get('code', '')}）",
-                f"- 评分层动作：`{item.get('action', 'observe')}`",
+                "- 评分层动作：仅供参考，不作为执行口径。",
                 f"- 综合评分：{item.get('score', 0)}",
                 f"- 风险提示：{'；'.join(item.get('risk_flags', [])) or '无'}",
                 "- 相关新闻：",

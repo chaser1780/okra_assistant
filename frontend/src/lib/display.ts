@@ -285,7 +285,7 @@ export function valueLabel(value: unknown): string {
     fallback: "兜底",
     local: "本地",
     api: "接口",
-    daily: "每日首启",
+    daily: "今日分析",
     realtime: "实时刷新",
     nightly: "夜间复盘",
     proxy_fallback: "代理行情兜底",

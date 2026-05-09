@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from common import iter_actual_trade_items
+
 
 def parse_date(value: str) -> datetime.date:
     return datetime.strptime(value, "%Y-%m-%d").date()
@@ -72,15 +74,42 @@ def infer_default_redeem_fee_rate(fund: dict) -> float:
 
 
 def iter_trade_items(agent_home: Path) -> list[dict]:
-    trade_dir = agent_home / "db" / "trade_journal"
     items: list[dict] = []
-    if not trade_dir.exists():
-        return items
-    for path in sorted(trade_dir.glob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        trade_date = payload.get("trade_date") or path.stem
-        for item in payload.get("items", []):
-            items.append({"trade_date": trade_date, **item})
+    for item in iter_actual_trade_items(agent_home):
+        operation = str(item.get("operation_type", "") or "")
+        if operation == "convert":
+            items.append(
+                {
+                    "trade_date": item.get("trade_date", ""),
+                    "fund_code": item.get("out_fund_code", ""),
+                    "action": "switch_out",
+                    "amount": float(item.get("out_amount", 0.0) or 0.0),
+                }
+            )
+            items.append(
+                {
+                    "trade_date": item.get("trade_date", ""),
+                    "fund_code": item.get("in_fund_code", ""),
+                    "action": "switch_in",
+                    "amount": float(item.get("in_amount", 0.0) or 0.0),
+                }
+            )
+            continue
+        mapped_action = {
+            "buy": "buy",
+            "dca": "buy",
+            "sell": "sell",
+            "convert_in": "switch_in",
+            "convert_out": "switch_out",
+        }.get(operation, operation)
+        items.append(
+            {
+                "trade_date": item.get("trade_date", ""),
+                "fund_code": item.get("fund_code", ""),
+                "action": mapped_action,
+                "amount": float(item.get("amount", 0.0) or 0.0),
+            }
+        )
     items.sort(key=lambda item: item["trade_date"])
     return items
 
@@ -128,6 +157,17 @@ def build_trade_constraints(agent_home: Path, portfolio: dict, report_date: str)
         notes.append(f"{'支持' if conversion_supported else '不支持'}直接转换。")
         if redeem_fee_rate > 0:
             notes.append(f"估算赎回费率约 {redeem_fee_rate:.2f}%。")
+        delayed_sell_proceeds = 0.0
+        for trade in iter_actual_trade_items(agent_home):
+            if str(trade.get("fund_code", "") or "") != str(fund.get("fund_code", "") or ""):
+                continue
+            if str(trade.get("operation_type", "") or "") not in {"sell", "convert_out"}:
+                continue
+            if str(trade.get("trade_date", "") or "") > report_date:
+                continue
+            if str(trade.get("status", "") or "").lower() in {"settled", "canceled", "failed"}:
+                continue
+            delayed_sell_proceeds += float(trade.get("amount", 0.0) or 0.0)
         constraints[fund["fund_code"]] = {
             "min_hold_days": min_hold_days,
             "redeem_settlement_days": settlement_days,
@@ -137,6 +177,7 @@ def build_trade_constraints(agent_home: Path, portfolio: dict, report_date: str)
             "estimated_redeem_fee_rate": round(redeem_fee_rate, 4),
             "locked_amount": round(locked_amount, 2),
             "available_to_sell": available_to_sell,
+            "delayed_sell_proceeds": round(delayed_sell_proceeds, 2),
             "notes": notes,
         }
     return constraints

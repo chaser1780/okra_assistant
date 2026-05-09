@@ -305,13 +305,8 @@ class TempAgentHome:
             "db/replay_experiments",
             "db/portfolio_state",
             "db/portfolio_state/snapshots",
+            "db/portfolio_state/events",
             "db/review_results",
-            "db/review_memory",
-            "db/review_memory/cycles",
-            "db/review_memory/permanent",
-            "db/review_memory/user_confirmed",
-            "db/review_memory/candidates",
-            "db/review_memory/promotion_log",
             "db/long_memory",
             "db/long_memory/funds",
             "db/long_memory/market",
@@ -321,6 +316,10 @@ class TempAgentHome:
             "db/long_memory/candidates",
             "db/long_memory/approvals",
             "db/long_memory/exports",
+            "db/long_memory/cycles",
+            "db/long_memory/cycles/pending",
+            "db/long_memory/cycles/completed",
+            "db/long_memory/cycles/failed",
             "db/daily_workspace",
             "db/execution_reviews",
             "db/execution_sync",
@@ -330,7 +329,9 @@ class TempAgentHome:
             "db/execution_sync/imports",
             "db/execution_sync/imports/alipay_screenshots",
             "db/execution_sync/imports/parsed",
-            "db/trade_journal",
+            "db/legacy",
+            "db/legacy/review_memory",
+            "db/legacy/trade_journal",
             "db/estimated_nav",
             "db/portfolio_valuation",
             "db/preflight",
@@ -350,10 +351,12 @@ class TempAgentHome:
         self.write_text("config/agents.toml", BASE_AGENTS_TOML)
         self.write_text("config/realtime_valuation.toml", BASE_REALTIME_TOML)
         self.write_text("config/llm.toml", BASE_LLM_TOML)
+        self.write_json("config/trading_calendar.json", {"holidays": [], "makeup_trading_days": []})
         self.write_json("config/portfolio.json", {"portfolio_name": "测试组合", "funds": [], "as_of_date": ""})
         self.write_json("config/watchlist.json", {"funds": []})
         self.write_json("config/market_overrides.json", {"biases": []})
-        self.write_json("db/review_memory/memory.json", {"updated_at": "", "lessons": [], "review_history": [], "bias_adjustments": [], "agent_feedback": []})
+        self.write_json("db/long_memory/exports/all_memory.json", {"updated_at": "", "items": []})
+        self.write_json("db/long_memory/candidates/pending_permanent.json", {"updated_at": "", "items": []})
 
     def cleanup(self):
         self._tmp.cleanup()
