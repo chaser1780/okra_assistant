@@ -35,22 +35,30 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
     provider = config["model_providers"][config["model_provider"]]
     api_key = resolve_api_key(config)
     is_rag_pack = isinstance(evidence, dict) and evidence.get("kind") == "copilot_rag_pack"
+    is_general_chat = isinstance(evidence, dict) and evidence.get("kind") == "general_chat"
     history = _conversation_history(evidence)
     history_text = json.dumps(history, ensure_ascii=False, indent=2) if history else "[]"
     system_prompt = (
-        "你是 OKRA 智能问答助手。用中文自然对话回答用户，不要表现得像固定模板。"
-        "你必须基于提供的 OKRA 本地证据、RAG 检索结果和对话上下文回答；证据不足时直接说明缺口。"
-        "不要编造净值、收益、新闻、持仓、交易状态或执行结论。"
-        "回答要先给可执行结论，再说明依据、风险和下一步。"
-        "不要输出 JSON，不要写泛泛免责声明。"
+        "你是 OKRA 智能问答助手。默认作为通用大模型自然回答用户问题，可以使用你的通用知识、推理能力和对话上下文。"
+        "当提供 OKRA 本地证据、RAG evidence pack 或页面数据时，说明它们只代表用户本地工作台信息；涉及具体持仓、基金、交易、系统建议或历史决策时必须优先依据这些证据。"
+        "如果问题只是概念解释、方法讨论、普通聊天或通用知识，不要强行绑定 OKRA 数据。"
+        "涉及具体投资判断时，不要编造净值、收益、新闻、持仓、交易状态或执行结论；证据不足就说明缺口，并可以给通用分析框架。"
+        "回答要自然、直接，不要输出 JSON，不要写泛泛免责声明。"
     )
     user_prompt = (
         f"当前页面上下文：{context}\n"
         f"最近对话历史：\n{history_text}\n"
         f"用户当前问题：{question}\n\n"
-        "OKRA 本地证据数据：\n"
+        "可用上下文数据：\n"
         + json.dumps(evidence, ensure_ascii=False, indent=2)
     )
+    if is_general_chat:
+        user_prompt = (
+            f"当前页面上下文：{context}\n"
+            f"最近对话历史：\n{history_text}\n"
+            f"用户当前问题：{question}\n\n"
+            "本轮没有触发 OKRA RAG 检索。请按通用智能助手方式回答；只有用户明确要求 OKRA、基金、持仓、交易或本地决策数据时，才提示需要查询本地证据。"
+        )
     if is_rag_pack:
         system_prompt = (
             "你是 OKRA 智能问答助手。用中文自然对话回答用户，不要表现得像固定模板。"
@@ -105,6 +113,19 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
 
 
 def local_copilot_answer(context: str, question: str, evidence: dict, error: str) -> str:
+    if isinstance(evidence, dict) and evidence.get("kind") == "general_chat":
+        return "\n".join(
+            [
+                "这次没有成功连接 LLM，且本轮问题没有触发 OKRA 本地 RAG 检索。",
+                "",
+                f"问题：{question}",
+                "",
+                "请稍后重试；如果你问的是具体基金、持仓、交易或系统决策，我会在可用时结合本地证据回答。",
+                "",
+                f"LLM 调用失败原因：{error[:500]}",
+            ]
+        )
+
     if isinstance(evidence, dict) and evidence.get("kind") == "copilot_rag_pack":
         citations = list(evidence.get("citations", []) or [])
         retrieval = evidence.get("retrieval", {}) if isinstance(evidence.get("retrieval"), dict) else {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,6 +61,49 @@ ALLOWED_ORIGINS = {
 }
 LOCAL_CORS_HOSTS = {"127.0.0.1", "localhost", "tauri.localhost"}
 MAX_COPILOT_HISTORY_MESSAGES = 10
+COPILOT_RAG_PAGES = {"fundDetail", "execution"}
+COPILOT_RAG_KEYWORDS = (
+    "okra",
+    "持仓",
+    "我的组合",
+    "当前组合",
+    "这个组合",
+    "加仓",
+    "减仓",
+    "买入",
+    "卖出",
+    "定投",
+    "净值",
+    "回撤",
+    "仓位",
+    "估值",
+    "执行",
+    "交易",
+    "确认",
+    "调仓",
+    "换仓",
+    "系统建议",
+    "决策",
+    "今日分析",
+    "长期记忆",
+    "本地",
+    "工作台",
+    "页面",
+    "证据",
+    "my portfolio",
+    "current portfolio",
+    "okra portfolio",
+    "holding",
+    "position",
+    "local evidence",
+    "local data",
+    "workspace",
+    "trade",
+    "buy",
+    "sell",
+    "rebalance",
+)
+COPILOT_FUND_CODE_PATTERN = re.compile(r"\b(?:F\d+|\d{6})\b", re.IGNORECASE)
 
 
 def is_allowed_origin(origin: str | None) -> bool:
@@ -343,21 +387,24 @@ class OkraWebApi:
         fund_code = str(payload.get("fundCode", "") or "").strip()
         prompt_question = question
         rag_error = ""
-        try:
-            rag_payload = dict(payload)
-            rag_payload["question"] = prompt_question
-            rag_payload["messages"] = messages
-            rag_pack = self._build_copilot_rag_pack(rag_payload)
-        except RagUnavailable:
-            rag_pack = None
-        except Exception as exc:
-            rag_pack = None
-            rag_error = str(exc)
-        if rag_pack is not None:
-            rag_fallback_reason = str(rag_pack.get("fallbackReason", "") or "")
-            if rag_fallback_reason and bool(rag_pack.get("fallbackToLegacy", True)):
-                rag_error = rag_fallback_reason
+        rag_requested = _copilot_should_use_rag(payload, question=question, messages=messages, page=page, fund_code=fund_code)
+        rag_pack = None
+        if rag_requested:
+            try:
+                rag_payload = dict(payload)
+                rag_payload["question"] = prompt_question
+                rag_payload["messages"] = messages
+                rag_pack = self._build_copilot_rag_pack(rag_payload)
+            except RagUnavailable:
                 rag_pack = None
+            except Exception as exc:
+                rag_pack = None
+                rag_error = str(exc)
+            if rag_pack is not None:
+                rag_fallback_reason = str(rag_pack.get("fallbackReason", "") or "")
+                if rag_fallback_reason and bool(rag_pack.get("fallbackToLegacy", True)):
+                    rag_error = rag_fallback_reason
+                    rag_pack = None
 
         if rag_pack is not None:
             rag_pack["conversationMessages"] = messages
@@ -384,18 +431,22 @@ class OkraWebApi:
                     "traceSummary": rag_pack.get("traceSummary", {}),
                     "fallbackReason": str(exc),
                 }
-        evidence = self._copilot_evidence(page, selected, fund_code)
+        evidence = self._copilot_evidence(page, selected, fund_code) if rag_requested else {"kind": "general_chat", "conversationMessages": messages}
         evidence["conversationMessages"] = messages
         prompt_question = question
         try:
             answer = self._call_copilot_llm(context, prompt_question, evidence)
             result = {"answer": answer, "mode": "llm", "sourceDate": evidence.get("selectedDate", "")}
+            if not rag_requested:
+                result["retrieval"] = {"intent": "general_chat", "hitCount": 0}
             if rag_error:
                 result["ragFallbackReason"] = rag_error
             return result
         except Exception as exc:
             answer = self._local_copilot_answer(context, prompt_question, evidence, str(exc))
             result = {"answer": answer, "mode": "local_fallback", "sourceDate": evidence.get("selectedDate", "")}
+            if not rag_requested:
+                result["retrieval"] = {"intent": "general_chat", "hitCount": 0}
             if rag_error:
                 result["ragFallbackReason"] = rag_error
             return result
@@ -527,6 +578,19 @@ def _optional_bool(value) -> bool | None:
     if text in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+def _copilot_should_use_rag(payload: dict, *, question: str, messages: list[dict[str, str]], page: str, fund_code: str) -> bool:
+    if isinstance(payload.get("useRag"), bool):
+        return bool(payload["useRag"])
+    if fund_code or page in COPILOT_RAG_PAGES:
+        return True
+    recent_text = " ".join([question, *(item["content"] for item in messages[-4:])]).lower()
+    if COPILOT_FUND_CODE_PATTERN.search(recent_text):
+        return True
+    if any(keyword in recent_text for keyword in COPILOT_RAG_KEYWORDS):
+        return True
+    return False
 
 
 def _copilot_messages(payload: dict) -> list[dict[str, str]]:

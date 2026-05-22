@@ -123,12 +123,113 @@ class WebApiRagCopilotTests(unittest.TestCase):
     def test_rag_disabled_keeps_legacy_copilot_path(self):
         api = OkraWebApi(self.agent.root)
         with patch.object(api, "_call_copilot_llm", return_value="legacy answer") as call_llm:
-            result = api.explain({"context": "today", "question": "risk?", "page": "today", "selectedDate": "2026-05-20"})
+            result = api.explain({"context": "today", "question": "F1 今天有什么风险？", "page": "today", "selectedDate": "2026-05-20"})
         self.assertEqual("llm", result["mode"])
         self.assertEqual("legacy answer", result["answer"])
         evidence = call_llm.call_args.args[2]
         self.assertNotEqual("copilot_rag_pack", evidence.get("kind"))
         self.assertIn("pageData", evidence)
+
+    def test_general_chat_does_not_force_rag_when_rag_enabled(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        api = OkraWebApi(self.agent.root)
+        with (
+            patch.object(api, "_build_copilot_rag_pack") as build_rag,
+            patch.object(api, "_call_copilot_llm", return_value="general answer") as call_llm,
+        ):
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "你能简单解释一下什么是夏普比率吗？",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                }
+            )
+
+        build_rag.assert_not_called()
+        self.assertEqual("llm", result["mode"])
+        self.assertEqual("general_chat", result["retrieval"]["intent"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("general_chat", evidence["kind"])
+
+    def test_general_investment_concept_does_not_force_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        api = OkraWebApi(self.agent.root)
+        with (
+            patch.object(api, "_build_copilot_rag_pack") as build_rag,
+            patch.object(api, "_call_copilot_llm", return_value="concept answer") as call_llm,
+        ):
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "红利基金和成长基金有什么区别？",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                }
+            )
+
+        build_rag.assert_not_called()
+        self.assertEqual("llm", result["mode"])
+        self.assertEqual("general_chat", result["retrieval"]["intent"])
+        self.assertEqual("general_chat", call_llm.call_args.args[2]["kind"])
+
+    def test_okra_question_triggers_rag_when_rag_enabled(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+
+        with patch.object(api, "_call_copilot_llm", return_value="okra answer [C1]") as call_llm:
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "OKRA 里 F1 这只基金今天有什么风险？",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("copilot_rag_pack", evidence["kind"])
+
+    def test_explicit_fund_code_triggers_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+
+        with patch.object(api, "_call_copilot_llm", return_value="F1 answer [C1]") as call_llm:
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "F1 今天怎么看？",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("copilot_rag_pack", evidence["kind"])
+
+    def test_use_rag_flag_can_force_general_question_into_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+
+        with patch.object(api, "_call_copilot_llm", return_value="forced rag [C1]") as call_llm:
+            result = api.explain(
+                {
+                    "context": "today",
+                    "question": "请结合本地资料回答这个问题",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                    "useRag": True,
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("copilot_rag_pack", evidence["kind"])
 
     def test_rag_enabled_returns_trace_citations_and_retrieval(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
@@ -171,7 +272,7 @@ class WebApiRagCopilotTests(unittest.TestCase):
             patch.object(api, "_build_copilot_rag_pack", side_effect=RuntimeError("rag broke")),
             patch.object(api, "_call_copilot_llm", return_value="legacy after rag failure") as call_llm,
         ):
-            result = api.explain({"context": "today", "question": "risk?", "page": "today", "selectedDate": "2026-05-20"})
+            result = api.explain({"context": "today", "question": "OKRA 里 F1 今天有什么风险？", "page": "today", "selectedDate": "2026-05-20"})
         self.assertEqual("llm", result["mode"])
         self.assertEqual("legacy after rag failure", result["answer"])
         self.assertEqual("rag broke", result["ragFallbackReason"])
