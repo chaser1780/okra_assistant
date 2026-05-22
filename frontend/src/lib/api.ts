@@ -125,9 +125,10 @@ export function runLongMemoryAction(
   });
 }
 
-export async function askCopilot(payload: CopilotRequest): Promise<CopilotResponse> {
+export async function askCopilot(payload: CopilotRequest, signal?: AbortSignal): Promise<CopilotResponse> {
   const result = await request<unknown>("/api/copilot/explain", {
     method: "POST",
+    signal,
     body: JSON.stringify(payload)
   });
   return copilotResponseSchema.parse(result) as CopilotResponse;

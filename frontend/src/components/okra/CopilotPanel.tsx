@@ -1,4 +1,4 @@
-import { SendHorizontal, Sparkles } from "lucide-react";
+import { SendHorizontal, Sparkles, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { askCopilot } from "../../lib/api";
 import type { CopilotMessage, CopilotResponse } from "../../lib/types";
@@ -8,6 +8,7 @@ const ASSISTANT_TITLE = "\u667a\u80fd\u95ee\u7b54";
 const INITIAL_ANSWER = "\u4f60\u53ef\u4ee5\u76f4\u63a5\u95ee\u6211\u7ec4\u5408\u3001\u57fa\u91d1\u3001\u5e02\u573a\u3001\u98ce\u9669\u6216\u8bc1\u636e\u6765\u6e90\u3002";
 const EMPTY_ANSWER = "\u667a\u80fd\u52a9\u624b\u6682\u65f6\u6ca1\u6709\u8fd4\u56de\u53ef\u5c55\u793a\u7684\u5185\u5bb9\u3002";
 const OFFLINE_ANSWER = "\u667a\u80fd\u52a9\u624b\u6682\u65f6\u4e0d\u53ef\u7528\u3002";
+const STOPPED_ANSWER = "\u5df2\u505c\u6b62\u672c\u6b21\u56de\u7b54\u3002";
 const QUESTION_PLACEHOLDER = "\u8f93\u5165\u4f60\u7684\u95ee\u9898";
 const HISTORY_LIMIT = 10;
 
@@ -38,6 +39,7 @@ export function CopilotPanel({
   const [lastResult, setLastResult] = useState<CopilotResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const trimmedQuestion = question.trim();
   const canSubmit = trimmedQuestion.length > 0 && !busy;
 
@@ -51,21 +53,34 @@ export function CopilotPanel({
     }
     const userMessage: UiMessage = { id: newMessageId(), role: "user", content: trimmedQuestion };
     const nextMessages = [...messages, userMessage];
+    const controller = new AbortController();
+    abortRef.current = controller;
     setMessages(nextMessages);
     setBusy(true);
     try {
       const history = nextMessages.slice(-HISTORY_LIMIT).map(({ role, content }) => ({ role, content }));
-      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode, messages: history });
+      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode, messages: history }, controller.signal);
       const answer = result.answer || EMPTY_ANSWER;
       setMessages((current) => [...current, { id: newMessageId(), role: "assistant", content: answer }]);
       setLastResult(result);
       setQuestion("");
     } catch (error) {
-      setMessages((current) => [...current, { id: newMessageId(), role: "assistant", content: error instanceof Error ? error.message : OFFLINE_ANSWER }]);
+      const stopped = error instanceof DOMException && error.name === "AbortError";
+      setMessages((current) => [
+        ...current,
+        { id: newMessageId(), role: "assistant", content: stopped ? STOPPED_ANSWER : error instanceof Error ? error.message : OFFLINE_ANSWER }
+      ]);
       setLastResult(null);
     } finally {
-      setBusy(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setBusy(false);
+      }
     }
+  }
+
+  function stop() {
+    abortRef.current?.abort();
   }
 
   const citations = Array.isArray(lastResult?.citations) ? lastResult.citations : [];
@@ -136,12 +151,18 @@ export function CopilotPanel({
         <textarea
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
           placeholder={QUESTION_PLACEHOLDER}
           className="h-20 w-full resize-none rounded-md border border-slate-800 bg-slate-950 p-3 text-sm text-slate-100 outline-none focus:border-cyan-700"
         />
-        <Button className="mt-2 w-full gap-2" variant="primary" onClick={submit} disabled={!canSubmit}>
-          <SendHorizontal className="h-4 w-4" />
-          {busy ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}
+        <Button className="mt-2 w-full gap-2" variant={busy ? "danger" : "primary"} onClick={busy ? stop : submit} disabled={!busy && !canSubmit}>
+          {busy ? <Square className="h-4 w-4" /> : <SendHorizontal className="h-4 w-4" />}
+          {busy ? "\u6682\u505c" : "\u53d1\u9001"}
         </Button>
       </div>
     </aside>

@@ -152,6 +152,79 @@ class WebApiRagCopilotTests(unittest.TestCase):
         evidence = call_llm.call_args.args[2]
         self.assertEqual("general_chat", evidence["kind"])
 
+    def test_assistant_welcome_text_does_not_force_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        api = OkraWebApi(self.agent.root)
+        with (
+            patch.object(api, "_build_copilot_rag_pack") as build_rag,
+            patch.object(api, "_call_copilot_llm", return_value="hello") as call_llm,
+        ):
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "你好，随便聊聊",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                    "messages": [
+                        {"role": "assistant", "content": "你可以直接问我组合、基金、市场、风险或证据来源。"},
+                        {"role": "user", "content": "你好，随便聊聊"},
+                    ],
+                }
+            )
+
+        build_rag.assert_not_called()
+        self.assertEqual("llm", result["mode"])
+        self.assertEqual("general_chat", result["retrieval"]["intent"])
+        self.assertEqual("general_chat", call_llm.call_args.args[2]["kind"])
+
+    def test_previous_user_rag_topic_does_not_force_new_general_chat(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        api = OkraWebApi(self.agent.root)
+        with (
+            patch.object(api, "_build_copilot_rag_pack") as build_rag,
+            patch.object(api, "_call_copilot_llm", return_value="casual answer") as call_llm,
+        ):
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "我们换个话题，聊聊周末计划",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                    "messages": [
+                        {"role": "user", "content": "OKRA 里 F1 今天有什么风险？"},
+                        {"role": "assistant", "content": "F1 今天需要关注估值和回撤。"},
+                        {"role": "user", "content": "我们换个话题，聊聊周末计划"},
+                    ],
+                }
+            )
+
+        build_rag.assert_not_called()
+        self.assertEqual("llm", result["mode"])
+        self.assertEqual("general_chat", result["retrieval"]["intent"])
+        self.assertEqual("general_chat", call_llm.call_args.args[2]["kind"])
+
+    def test_context_followup_can_reuse_recent_user_rag_topic(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+        with patch.object(api, "_call_copilot_llm", return_value="followup answer [C1]") as call_llm:
+            result = api.explain(
+                {
+                    "context": "当前页面：今日。查看日期：2026-05-20",
+                    "question": "继续展开",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                    "messages": [
+                        {"role": "user", "content": "OKRA 里 F1 今天有什么风险？"},
+                        {"role": "assistant", "content": "F1 今天需要关注估值和回撤。"},
+                        {"role": "user", "content": "继续展开"},
+                    ],
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        self.assertEqual("copilot_rag_pack", call_llm.call_args.args[2]["kind"])
+
     def test_general_investment_concept_does_not_force_rag(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
         api = OkraWebApi(self.agent.root)

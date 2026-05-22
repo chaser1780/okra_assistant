@@ -153,6 +153,23 @@ COPILOT_GENERAL_CONCEPT_PATTERNS = (
     "difference between",
     "explain",
 )
+COPILOT_AMBIGUOUS_RAG_KEYWORDS = {"净值", "回撤", "仓位", "估值", "页面"}
+COPILOT_CONTEXT_FOLLOWUP_KEYWORDS = (
+    "继续",
+    "展开",
+    "详细",
+    "再说",
+    "为什么",
+    "原因",
+    "怎么办",
+    "那它",
+    "它呢",
+    "这个呢",
+    "那这个",
+    "continue",
+    "what about",
+    "why",
+)
 
 
 def is_allowed_origin(origin: str | None) -> bool:
@@ -629,19 +646,31 @@ def _optional_bool(value) -> bool | None:
     return None
 
 
+def _copilot_text_requests_rag(text: str, *, page: str, fund_code: str) -> bool:
+    if fund_code and any(keyword in text for keyword in COPILOT_CONTEXTUAL_FUND_KEYWORDS):
+        return True
+    if page == "execution" and any(keyword in text for keyword in COPILOT_CONTEXTUAL_EXECUTION_KEYWORDS):
+        return True
+    if COPILOT_FUND_CODE_PATTERN.search(text):
+        return True
+    return any(keyword in text for keyword in COPILOT_RAG_KEYWORDS if keyword not in COPILOT_AMBIGUOUS_RAG_KEYWORDS)
+
+
+def _copilot_is_context_followup(text: str) -> bool:
+    return any(keyword in text for keyword in COPILOT_CONTEXT_FOLLOWUP_KEYWORDS)
+
+
 def _copilot_should_use_rag(payload: dict, *, question: str, messages: list[dict[str, str]], page: str, fund_code: str) -> bool:
     if isinstance(payload.get("useRag"), bool):
         return bool(payload["useRag"])
-    recent_text = " ".join([question, *(item["content"] for item in messages[-4:])]).lower()
-    if any(pattern in recent_text for pattern in COPILOT_GENERAL_CONCEPT_PATTERNS):
+    current_text = question.lower()
+    if any(pattern in current_text for pattern in COPILOT_GENERAL_CONCEPT_PATTERNS):
         return False
-    if fund_code and any(keyword in recent_text for keyword in COPILOT_CONTEXTUAL_FUND_KEYWORDS):
+    if _copilot_text_requests_rag(current_text, page=page, fund_code=fund_code):
         return True
-    if page == "execution" and any(keyword in recent_text for keyword in COPILOT_CONTEXTUAL_EXECUTION_KEYWORDS):
-        return True
-    if COPILOT_FUND_CODE_PATTERN.search(recent_text):
-        return True
-    if any(keyword in recent_text for keyword in COPILOT_RAG_KEYWORDS):
+    recent_user_messages = [item["content"] for item in messages[-4:] if item.get("role") == "user"]
+    recent_user_text = " ".join(recent_user_messages).lower()
+    if _copilot_is_context_followup(current_text) and _copilot_text_requests_rag(recent_user_text, page=page, fund_code=fund_code):
         return True
     return False
 
