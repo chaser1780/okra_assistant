@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import uuid
 from copy import deepcopy
 from pathlib import Path
 
@@ -8,9 +10,11 @@ from common import (
     iter_actual_trade_items,
     dump_json,
     execution_status_path,
+    file_lock,
     legacy_portfolio_path,
     load_json,
     load_portfolio,
+    lock_path,
     parse_date_text,
     portfolio_definition_path,
     portfolio_state_current_path,
@@ -45,6 +49,13 @@ def portfolio_state_event_path(agent_home: Path, event_date: str, event_type: st
         event_id = timestamp_now().replace(":", "").replace("+", "_").replace(".", "_")
     filename = f"{_safe_event_token(event_type)}_{_safe_event_token(event_id)}.json"
     return event_dir / filename
+
+
+def portfolio_state_hash(portfolio: dict) -> str:
+    payload = deepcopy(portfolio)
+    payload.pop("state_metadata", None)
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def ensure_portfolio_definition(agent_home: Path) -> dict:
@@ -84,14 +95,49 @@ def save_portfolio_state(
     event_type: str,
     event_id: str | None = None,
     extra_meta: dict | None = None,
+    source_path: str = "",
     persist_legacy: bool = False,
 ) -> tuple[Path, Path]:
+    with file_lock(lock_path(agent_home, "portfolio_state")):
+        return _save_portfolio_state_unlocked(
+            agent_home,
+            portfolio,
+            source=source,
+            event_date=event_date,
+            event_type=event_type,
+            event_id=event_id,
+            extra_meta=extra_meta,
+            source_path=source_path,
+            persist_legacy=persist_legacy,
+        )
+
+
+def _save_portfolio_state_unlocked(
+    agent_home: Path,
+    portfolio: dict,
+    *,
+    source: str,
+    event_date: str,
+    event_type: str,
+    event_id: str | None = None,
+    extra_meta: dict | None = None,
+    source_path: str = "",
+    persist_legacy: bool = False,
+) -> tuple[Path, Path]:
+    previous_state = load_json(portfolio_state_current_path(agent_home)) if portfolio_state_current_path(agent_home).exists() else {}
+    parent_state_id = str((previous_state.get("state_metadata", {}) or {}).get("state_id", ""))
+    resolved_event_id = event_id or timestamp_now().replace(":", "").replace("+", "_").replace(".", "_")
+    state_id = uuid.uuid4().hex
     current_payload = deepcopy(portfolio)
     current_payload.setdefault("state_metadata", {})
     updated_at = timestamp_now()
     current_payload["state_metadata"].update(
         {
+            "state_id": state_id,
+            "parent_state_id": parent_state_id,
+            "event_id": resolved_event_id,
             "source": source,
+            "source_path": source_path,
             "event_type": event_type,
             "event_date": event_date,
             "updated_at": updated_at,
@@ -103,7 +149,7 @@ def save_portfolio_state(
     current_path = dump_json(portfolio_state_current_path(agent_home), current_payload)
     snapshot_payload = deepcopy(current_payload)
     snapshot_path = dump_json(portfolio_state_snapshot_path(agent_home, event_date), snapshot_payload)
-    event_path = portfolio_state_event_path(agent_home, event_date, event_type, event_id)
+    event_path = portfolio_state_event_path(agent_home, event_date, event_type, resolved_event_id)
     event_payload = deepcopy(current_payload)
     event_payload["state_metadata"].update({"event_journal_path": str(event_path), "latest_snapshot_path": str(snapshot_path)})
     dump_json(event_path, event_payload)
@@ -219,6 +265,11 @@ def load_execution_status(agent_home: Path, report_date: str) -> dict:
 
 
 def upsert_execution_status(agent_home: Path, report_date: str, item: dict) -> Path:
+    with file_lock(lock_path(agent_home, f"execution_status_{report_date}")):
+        return _upsert_execution_status_unlocked(agent_home, report_date, item)
+
+
+def _upsert_execution_status_unlocked(agent_home: Path, report_date: str, item: dict) -> Path:
     payload = load_execution_status(agent_home, report_date)
     existing = next((entry for entry in payload.get("items", []) if entry.get("suggestion_id") == item.get("suggestion_id")), None)
     items = [entry for entry in payload.get("items", []) if entry.get("suggestion_id") != item.get("suggestion_id")]

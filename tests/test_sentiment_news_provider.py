@@ -7,12 +7,49 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fetch_fund_news import build_dynamic_sentiment_queries, cookie_has_required_tokens, extract_douyin_aweme_items, extract_xueqiu_status_items, parse_cookie_pairs, read_cookie_file
+from fetch_fund_news import (
+    build_dynamic_sentiment_queries,
+    classify_news_with_llm,
+    compute_heat_metrics,
+    cookie_has_required_tokens,
+    dedupe_news_items,
+    extract_douyin_aweme_items,
+    extract_eastmoney_search_items,
+    fetch_rss_news,
+    extract_xueqiu_status_items,
+    normalize_query_news_item,
+    parse_rss_feed,
+    parse_rss_datetime,
+    parse_cookie_pairs,
+    parse_jsonp_payload,
+    parse_sse_general_announcements,
+    parse_szse_report_json,
+    parse_szse_notice_page,
+    fetch_regulatory_news,
+    news_dedup_summary,
+    read_cookie_file,
+    parse_amac_notice_board,
+)
+from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
 
 from helpers import TempAgentHome
 
 
 class SentimentNewsProviderTests(unittest.TestCase):
+    def test_news_dedup_summary_counts_final_item_set(self):
+        items = [
+            {"code": "F1", "title": "same", "summary": "body", "canonical_url": "https://example.test/a", "published_at": "2026-05-15T10:00:00+08:00"},
+            {"code": "F2", "title": "same", "summary": "body", "canonical_url": "https://example.test/a", "published_at": "2026-05-15T10:01:00+08:00"},
+            {"code": "F1", "title": "same", "summary": "body", "canonical_url": "https://example.test/a", "published_at": "2026-05-15T10:02:00+08:00"},
+        ]
+
+        summary = news_dedup_summary(items, dedup_window_hours=12)
+
+        self.assertEqual(summary["mapped_item_count"], 2)
+        self.assertEqual(summary["unique_item_count"], 1)
+        self.assertEqual(summary["duplicate_item_count"], 1)
+        self.assertEqual(summary["dedup_drop_count"], 1)
+
     def test_build_dynamic_sentiment_queries_from_holdings(self):
         portfolio = {
             "funds": [
@@ -34,6 +71,26 @@ class SentimentNewsProviderTests(unittest.TestCase):
         self.assertIn("算力", keywords)
         self.assertIn("电网设备", keywords)
         self.assertNotIn("现金仓", keywords)
+
+    def test_build_news_query_plan_splits_query_types(self):
+        portfolio = {
+            "funds": [
+                {"fund_code": "AI1", "fund_name": "人工智能C", "role": "tactical", "current_value": 100.0, "style_group": "ai"},
+                {"fund_code": "CASH", "fund_name": "现金仓", "role": "cash_hub", "current_value": 500.0, "style_group": "cash_buffer"},
+            ]
+        }
+        watchlist = {
+            "funds": [
+                {"code": "AI1", "name": "人工智能C", "category": "index_equity", "benchmark": "中证人工智能主题指数"},
+            ]
+        }
+        settings = {"providers": {"news": {"query_limit": 12}, "sentiment_news": {"keyword_limit": 12}}}
+        plan = build_news_query_plan(portfolio, watchlist, settings, "2026-05-10")
+        self.assertEqual(plan["report_date"], "2026-05-10")
+        self.assertTrue(plan["direct_queries"])
+        self.assertTrue(plan["theme_queries"])
+        self.assertTrue(plan["sentiment_queries"])
+        self.assertIn("AI", {item["keyword"] for item in sentiment_queries_from_plan(plan)})
 
     def test_read_cookie_file_strips_prefix(self):
         agent = TempAgentHome()
@@ -89,6 +146,299 @@ class SentimentNewsProviderTests(unittest.TestCase):
         self.assertIn("算力", items[0]["title"])
         self.assertEqual(items[0]["author_name"], "douyin-user")
         self.assertTrue(items[0]["virality_score"] > 0)
+
+    def test_extract_eastmoney_search_items_from_jsonp(self):
+        payload = parse_jsonp_payload(
+            'callback({"result":{"cmsArticleWebOld":[{"date":"2026-05-10 09:48:52","title":"<em>AI</em>、算力，利好消息","content":"研报称 <em>AI</em> 算力迎来产业加速期","mediaName":"中国证券报","url":"http://finance.eastmoney.com/a/202605103732338111.html","code":"202605103732338111"}]}})'
+        )
+        items = extract_eastmoney_search_items(payload)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "AI、算力，利好消息")
+        self.assertEqual(items[0]["source_name"], "中国证券报")
+
+    def test_normalize_query_news_item_maps_to_related_funds(self):
+        raw_item = {
+            "title": "AI、算力，利好消息",
+            "summary": "AI 算力迎来产业加速期",
+            "published_at": "2026-05-10T09:48:52+08:00",
+            "source_name": "中国证券报",
+            "url": "http://finance.eastmoney.com/a/202605103732338111.html",
+        }
+        query = {"keyword": "AI", "fund_codes": ["F1", "F2"], "fund_names": ["人工智能C", "科技成长C"]}
+        items = normalize_query_news_item(raw_item, query, source_role="theme_news", report_date="2026-05-10")
+        self.assertEqual({item["code"] for item in items}, {"F1", "F2"})
+        self.assertTrue(all(item["provider"] == "eastmoney_search_api" for item in items))
+        self.assertTrue(all(item["evidence_type"] == "theme_news" for item in items))
+
+    def test_dedupe_and_heat_metrics_preserve_multi_fund_mapping(self):
+        items = [
+            {
+                "code": "F1",
+                "title": "AI 算力继续升温",
+                "summary": "AI 算力继续升温",
+                "published_at": "2026-05-10T09:48:52+08:00",
+                "url": "http://finance.eastmoney.com/a/202605103732338111.html?spm=abc",
+                "source_name": "中国证券报",
+                "matched_keywords": ["AI"],
+                "query_type": "direct",
+            },
+            {
+                "code": "F2",
+                "title": "AI 算力继续升温",
+                "summary": "AI 算力继续升温",
+                "published_at": "2026-05-10T09:48:52+08:00",
+                "url": "http://finance.eastmoney.com/a/202605103732338111.html?spm=def",
+                "source_name": "中国证券报",
+                "matched_keywords": ["AI"],
+                "query_type": "direct",
+            },
+            {
+                "code": "F1",
+                "title": "AI 算力继续升温",
+                "summary": "AI 算力继续升温",
+                "published_at": "2026-05-10T09:48:52+08:00",
+                "url": "http://finance.eastmoney.com/a/202605103732338111.html?spm=ghi",
+                "source_name": "中国证券报",
+                "matched_keywords": ["AI"],
+                "query_type": "direct",
+            },
+        ]
+        deduped, stats = dedupe_news_items(items, dedup_window_hours=12)
+        compute_heat_metrics(deduped)
+        self.assertEqual(len(deduped), 2)
+        self.assertEqual(stats["mapped_item_count"], 2)
+        self.assertEqual(stats["unique_item_count"], 1)
+        self.assertGreaterEqual(float(deduped[0]["heat_score"]), 0.0)
+        self.assertTrue(all(int(item["heat_rank"]) >= 1 for item in deduped))
+
+    def test_classify_news_with_llm_falls_back_to_rule(self):
+        agent = TempAgentHome()
+        try:
+            settings = {
+                "providers": {
+                    "news_classification": {
+                        "enabled": True,
+                        "mode": "llm_first",
+                        "batch_size": 20,
+                        "timeout_seconds": 1,
+                        "fallback": "rule",
+                        "model": "",
+                    }
+                }
+            }
+            items = [
+                {
+                    "title": "基金清盘风险提示公告",
+                    "summary": "出现清盘风险提示",
+                    "source_name": "eastmoney_notice",
+                    "source_role": "fund_news",
+                    "published_at": "2026-05-10T09:48:52+08:00",
+                    "matched_keywords": ["清盘"],
+                }
+            ]
+            classified, summary = classify_news_with_llm(agent.root, settings, items)
+            self.assertEqual(summary["status"], "fallback_only")
+            self.assertEqual(classified[0]["classification_status"], "rule_fallback")
+            self.assertEqual(classified[0]["risk_level"], "high")
+            self.assertEqual(classified[0]["impact"], "negative")
+        finally:
+            agent.cleanup()
+
+    def test_parse_rss_feed_and_fetch_rss_news(self):
+        self.assertEqual(parse_rss_datetime("Thu, 14 May 2026 22:26:52 +0800", "2026-05-15"), "2026-05-14T22:26:52+08:00")
+
+        xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Finance Feed</title>
+            <item>
+              <title>AI 算力迎来产业加速期</title>
+              <description>AI 算力板块继续升温</description>
+              <link>https://example.com/rss/ai-1</link>
+              <pubDate>Sat, 10 May 2026 09:48:52 +0800</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """
+        rows = parse_rss_feed(xml_text, "2026-05-10")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "AI 算力迎来产业加速期")
+
+        agent = TempAgentHome()
+        try:
+            settings = {
+                "providers": {
+                    "rss_news": {
+                        "enabled": True,
+                        "timeout_seconds": 12,
+                        "feeds": [{"name": "sina_finance", "url": "https://example.com/rss.xml", "provider": "rss:sina_finance"}],
+                    }
+                }
+            }
+            query_plan = {
+                "direct_queries": [{"keyword": "AI", "fund_codes": ["F1"], "fund_names": ["人工智能C"], "query_type": "direct"}],
+                "theme_queries": [],
+                "market_queries": [],
+            }
+            from unittest.mock import patch
+
+            with patch("fetch_fund_news.fetch_xml_text", return_value=xml_text):
+                items, health = fetch_rss_news(settings, "2026-05-10", query_plan)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["provider"], "rss:sina_finance")
+            self.assertEqual(items[0]["source_role"], "fund_news")
+            self.assertEqual(items[0]["query_type"], "direct")
+            self.assertEqual(health[0]["metrics"]["raw_item_count"], 1)
+            self.assertEqual(health[0]["metrics"]["matched_item_count"], 1)
+        finally:
+            agent.cleanup()
+
+    def test_fetch_news_demo_with_rss_disabled_still_writes_new_fields(self):
+        agent = TempAgentHome()
+        try:
+            agent.run_script("fetch_fund_news.py", "--date", "2026-05-14", "--demo")
+            payload = json.loads((agent.root / "raw" / "news" / "2026-05-14.json").read_text(encoding="utf-8"))
+            self.assertIn("dedup_summary", payload)
+            self.assertIn("classification_summary", payload)
+            self.assertIn("query_plan", payload)
+            self.assertTrue(any(item.get("source_key") == "sentiment:xueqiu_web" and item.get("status") == "disabled" for item in payload.get("source_health", [])))
+        finally:
+            agent.cleanup()
+
+    def test_parse_sse_general_announcements_and_fetch_regulatory_news(self):
+        html = """
+        <html><body>
+        <a href="/disclosure/announcement/general/c/c_20260515_10899999.shtml" title="关于某基金临时停牌的公告">关于某基金临时停牌的公告</a>
+        <a href="/disclosure/announcement/general/jjzssgg/c/c_20260515_10899998.shtml" title="关于某ETF提供做市服务的公告">关于某ETF提供做市服务的公告</a>
+        </body></html>
+        """
+        rows = parse_sse_general_announcements(html, "https://www.sse.com.cn/disclosure/announcement/general/", "2026-05-15")
+        self.assertEqual(len(rows), 2)
+        self.assertIn("临时停牌", rows[0]["title"])
+
+        from unittest.mock import patch
+
+        settings = {
+            "providers": {
+                "regulatory_news": {
+                    "enabled": True,
+                    "timeout_seconds": 15,
+                    "feeds": [
+                        {
+                            "name": "sse_general_announcements",
+                            "url": "https://www.sse.com.cn/disclosure/announcement/general/",
+                            "provider": "reg:sse_general",
+                            "source_role": "regulatory_news",
+                        }
+                    ],
+                }
+            }
+        }
+        with patch("fetch_fund_news.fetch_xml_text", return_value=html):
+            items, health = fetch_regulatory_news(settings, "2026-05-15")
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all(item["source_role"] == "regulatory_news" for item in items))
+        self.assertTrue(all(item["evidence_type"] == "regulatory_notice" for item in items))
+        self.assertEqual(health[0]["metrics"]["normalized_count"], 2)
+
+    def test_parse_szse_notice_page_and_fetch_regulatory_news(self):
+        html = """
+        <html><body>
+        <a href="/disclosure/listed/notice/2026-05-15/notice-1.html" title="关于上市公司重大事项公告">关于上市公司重大事项公告</a>
+        <a href="/disclosure/supervision/inquire/2026-05-15/inquire-1.html">关于某公司年报问询函</a>
+        <a href="/market/index.html">无关链接</a>
+        </body></html>
+        """
+        rows = parse_szse_notice_page(html, "https://www.szse.cn/disclosure/listed/notice/index.html", "2026-05-15")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["published_at"], "2026-05-15T00:00:00+08:00")
+        self.assertTrue(all(row["url"].startswith("https://www.szse.cn/") for row in rows))
+
+        from unittest.mock import patch
+
+        settings = {
+            "providers": {
+                "regulatory_news": {
+                    "enabled": True,
+                    "timeout_seconds": 15,
+                    "feeds": [
+                        {
+                            "name": "szse_listed_notices",
+                            "url": "https://www.szse.cn/disclosure/listed/notice/index.html",
+                            "provider": "reg:szse_listed_notice",
+                            "source_role": "regulatory_news",
+                        }
+                    ],
+                }
+            }
+        }
+        with patch("fetch_fund_news.fetch_xml_text", return_value=html):
+            items, health = fetch_regulatory_news(settings, "2026-05-15")
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all(item["provider"] == "reg:szse_listed_notice" for item in items))
+        self.assertTrue(all(item["source_role"] == "regulatory_news" for item in items))
+        self.assertEqual(health[0]["metrics"]["normalized_count"], 2)
+
+    def test_parse_szse_report_json_for_official_inquiry_api(self):
+        payload = json.dumps(
+            [
+                {
+                    "metadata": {"catalogid": "main_wxhj", "name": "主板"},
+                    "data": [
+                        {
+                            "gsdm": "000711",
+                            "gsjc": "ST京蓝",
+                            "fhrq": "2026-05-13",
+                            "hjlb": "关注函",
+                            "ck": "<a href='javascript:void(0)' encode-open='/UpFiles/zqjghj/sup_jghj_test.pdf'>详细内容</a>",
+                        }
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+        )
+        rows = parse_szse_report_json(payload, "https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=main_wxhj", "2026-05-15")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("ST京蓝", rows[0]["title"])
+        self.assertEqual(rows[0]["published_at"], "2026-05-13T00:00:00+08:00")
+        self.assertTrue(rows[0]["url"].startswith("https://www.szse.cn/UpFiles/"))
+
+        from unittest.mock import patch
+
+        settings = {
+            "providers": {
+                "regulatory_news": {
+                    "enabled": True,
+                    "timeout_seconds": 15,
+                    "feeds": [
+                        {
+                            "name": "szse_inquiries",
+                            "url": "https://www.szse.cn/disclosure/supervision/inquire/index.html",
+                            "provider": "reg:szse_inquiry",
+                            "source_role": "regulatory_news",
+                        }
+                    ],
+                }
+            }
+        }
+        with patch("fetch_fund_news.fetch_json_text", return_value=payload):
+            items, health = fetch_regulatory_news(settings, "2026-05-15")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["provider"], "reg:szse_inquiry")
+        self.assertEqual(health[0]["metrics"]["normalized_count"], 1)
+
+    def test_parse_amac_notice_board_filters_only_regulatory_items(self):
+        html = """
+        <html><body>
+        <a href="../../zlgl/jlcf/scfjg/202605/P020260508595084826608.pdf">纪律处分决定书（某私募机构）</a>
+        <a href="../../zlgl/ycjy/ycjyjgclgg/202605/t20260508_27685.html">关于注销某异常经营私募基金管理人登记的公告</a>
+        <a href="../xhyw/202604/t20260417_27594.html">关于发布《基金管理公司绩效考核管理指引》的公告</a>
+        </body></html>
+        """
+        rows = parse_amac_notice_board(html, "https://www.amac.org.cn/xwfb/tzgg/", "2026-05-15")
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(any("纪律处分决定书" in row["title"] for row in rows))
+        self.assertTrue(any("异常经营" in row["title"] for row in rows))
 
 
 if __name__ == "__main__":

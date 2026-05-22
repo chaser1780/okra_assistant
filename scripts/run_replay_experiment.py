@@ -20,6 +20,7 @@ from common import (
 )
 from learning_memory import apply_replay_summary_to_ledger
 from long_memory_store import stable_memory_id, upsert_memory_record
+from rag_profile_evidence import build_backtest_evidence_pack
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
 from validate_llm_advice import build_validated_payload
 from decision_ledger import load_decisions
@@ -455,6 +456,18 @@ def main() -> None:
         review_summary = review_summary_for_base_date(agent_home, report_date)
         counterfactual = compare_signatures_with_review(existing_signature, replay_signature, advice_review_items_for_base_date(agent_home, report_date))
         optimizer = optimizer_snapshot(replay_payload)
+        try:
+            rag_backtest = build_backtest_evidence_pack(
+                agent_home,
+                report_date,
+                fund_codes=metrics.get("selected_fund_codes", []),
+                mode=args.mode,
+            )
+        except Exception as exc:
+            rag_backtest = {"enabled": True, "profile": "backtest", "status": "failed", "fallback_reason": str(exc)}
+        if (rag_backtest.get("noFutureAudit", {}) or {}).get("strictNoFuture") and not (rag_backtest.get("noFutureAudit", {}) or {}).get("passed", True):
+            skipped_dates.append({"report_date": report_date, "reason": "rag_no_future_audit_failed", "audit": rag_backtest.get("noFutureAudit", {})})
+            continue
         aggregate["total_tactical_actions"] += metrics["tactical_action_count"]
         aggregate["total_gross_trade"] = round(aggregate["total_gross_trade"] + metrics["gross_trade"], 2)
         aggregate["supportive_reviews"] += review_summary["supportive"]
@@ -477,6 +490,7 @@ def main() -> None:
                 "advice_mode": str(llm_raw.get("mode", "") or ""),
                 "counterfactual": counterfactual,
                 "optimizer": optimizer,
+                **({"rag_backtest_evidence": rag_backtest} if rag_backtest.get("enabled", True) else {}),
             }
         )
 

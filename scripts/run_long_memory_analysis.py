@@ -21,6 +21,7 @@ from common import (
 )
 from long_memory_store import list_memory_records, stable_memory_id, upsert_memory_record, write_domain_mirrors, write_long_memory_cycle
 from multiagent_utils import call_json_agent
+from rag_profile_evidence import build_memory_evidence_pack
 
 
 MEMORY_AGENT_SCHEMA = {
@@ -227,10 +228,12 @@ def _call_memory_agent(agent_home: Path, agent_name: str, bundle: dict, *, mock:
         prompt,
         json.dumps(bundle, ensure_ascii=False, indent=2),
         schema=MEMORY_MANAGER_SCHEMA if agent_name == "memory_manager" else MEMORY_AGENT_SCHEMA,
+        max_attempts=1,
         request_name=agent_name,
         reasoning_effort=load_llm_config(agent_home).get("model_reasoning_effort", "high"),
         max_output_tokens=2200 if agent_name == "memory_manager" else 1800,
         fallback_defaults={"agent_name": agent_name, "summary": "", "records": []},
+        timeout=(10, 45),
     )
     return result["response_json"]
 
@@ -245,10 +248,19 @@ def _date_plus_days(report_date: str, valid_days: int) -> str:
 def _normalize_record(report_date: str, run_meta: dict, agent_name: str, item: dict[str, Any]) -> dict[str, Any]:
     horizon_bucket = str(item.get("horizon_bucket", "long_term") or "long_term")
     valid_days = int(item.get("valid_days", 0) or 0)
+    domain = str(item.get("domain", "") or "")
+    metadata = {
+        "tags": list(item.get("tags", []) or []),
+        "valid_days": valid_days,
+        "report_date": report_date,
+    }
+    if domain == "execution" or agent_name == "execution_memory_analyst":
+        metadata["learning_scope"] = "execution_only"
+        metadata["visibility"] = "execution_only"
     return {
         "memory_id": stable_memory_id(str(item.get("domain", "")), str(item.get("entity_key", "")), str(item.get("title", "")), str(item.get("memory_type", ""))),
         "memory_type": str(item.get("memory_type", "semantic") or "semantic"),
-        "domain": str(item.get("domain", "") or ""),
+        "domain": domain,
         "horizon_bucket": horizon_bucket,
         "entity_key": str(item.get("entity_key", "") or ""),
         "title": str(item.get("title", "") or ""),
@@ -266,13 +278,38 @@ def _normalize_record(report_date: str, run_meta: dict, agent_name: str, item: d
         "source_analysis_run_id": str(run_meta.get("analysis_run_id", "") or ""),
         "source_analysis_quality": str(run_meta.get("analysis_quality", "") or ""),
         "source_agent": agent_name,
-        "metadata": {
-            "tags": list(item.get("tags", []) or []),
-            "valid_days": valid_days,
-            "report_date": report_date,
-        },
+        "metadata": metadata,
         "evidence_refs": [{"kind": "memory_agent", "ref": str(ref), "date": report_date} for ref in (item.get("evidence_refs", []) or [])],
     }
+
+
+def _attach_memory_rag_check(agent_home: Path, report_date: str, record: dict[str, Any]) -> dict[str, Any]:
+    try:
+        pack = build_memory_evidence_pack(
+            agent_home,
+            report_date,
+            domain=str(record.get("domain", "") or ""),
+            entity_key=str(record.get("entity_key", "") or ""),
+            title=str(record.get("title", "") or ""),
+            text=str(record.get("text", "") or ""),
+        )
+    except Exception as exc:
+        pack = {"enabled": True, "profile": "memory", "status": "failed", "fallback_reason": str(exc)}
+    if not pack.get("enabled", True):
+        return record
+    metadata = dict(record.get("metadata", {}) or {})
+    metadata["rag_memory_check"] = {
+        "enabled": pack.get("enabled", True),
+        "traceId": pack.get("traceId", ""),
+        "hitCount": len(pack.get("hits", []) or []),
+        "memoryCheck": pack.get("memoryCheck", {}),
+        "fallback_reason": pack.get("fallback_reason", ""),
+    }
+    record["metadata"] = metadata
+    if (pack.get("memoryCheck", {}) or {}).get("skipWriteRecommended"):
+        record["status"] = "candidate"
+        record["priority"] = "duplicate_review"
+    return record
 
 
 def run_memory_cycle(agent_home: Path, report_date: str, *, mock: bool = False) -> dict:
@@ -317,8 +354,11 @@ def run_memory_cycle(agent_home: Path, report_date: str, *, mock: bool = False) 
     manager_output = _call_memory_agent(agent_home, "memory_manager", manager_bundle, mock=mock)
 
     written = []
+    rag_memory_checks = []
     for item in manager_output.get("records", []) or []:
         record = _normalize_record(report_date, run_meta, str(manager_output.get("agent_name", "memory_manager") or "memory_manager"), item)
+        record = _attach_memory_rag_check(agent_home, report_date, record)
+        rag_memory_checks.append(record.get("metadata", {}).get("rag_memory_check", {}))
         written.append(upsert_memory_record(agent_home, record))
     write_domain_mirrors(agent_home)
 
@@ -332,6 +372,7 @@ def run_memory_cycle(agent_home: Path, report_date: str, *, mock: bool = False) 
         "mode": "mock" if mock else "llm",
         "agent_outputs": agent_outputs,
         "manager_output": manager_output,
+        "rag_memory_checks": rag_memory_checks,
         "written_count": len(written),
         "written_records": written[:40],
     }

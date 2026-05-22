@@ -8,6 +8,7 @@ import sys
 try:
     from api_contracts import (
         ExecutionPageDto,
+        IntelligencePageDto,
         PortfolioPageDto,
         RealtimePageDto,
         ResearchPageDto,
@@ -36,6 +37,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from api_contracts import (
         ExecutionPageDto,
+        IntelligencePageDto,
         PortfolioPageDto,
         RealtimePageDto,
         ResearchPageDto,
@@ -109,6 +111,10 @@ class ResearchViewModel:
     aggregate: dict[str, Any]
     realtime_map: dict[str, dict[str, Any]]
     review_map: dict[str, dict[str, Any]]
+    source_health: dict[str, Any]
+    news_digest: dict[str, Any]
+    sentiment_digest: dict[str, Any]
+    event_risks: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -332,7 +338,19 @@ class WorkbenchStateService:
             MetricViewModel("观察项", str(hold_count), "今天继续等待的基金", "info"),
         ]
         meta = f"建议 {len(rows)} 条 | 战术 {tactical_count} | 定投 {dca_count} | 观察 {hold_count}"
-        return ResearchViewModel(meta=meta, metrics=metrics, rows=rows, aggregate=aggregate, realtime_map=realtime_map, review_map=review_map)
+        llm_context = state.get("llm_context", {}) or {}
+        return ResearchViewModel(
+            meta=meta,
+            metrics=metrics,
+            rows=rows,
+            aggregate=aggregate,
+            realtime_map=realtime_map,
+            review_map=review_map,
+            source_health=state.get("source_health", {}) or {},
+            news_digest=llm_context.get("news_digest", {}) or {},
+            sentiment_digest=llm_context.get("sentiment_digest", {}) or {},
+            event_risks=list(llm_context.get("event_risks", []) or []),
+        )
 
     def build_realtime_view_model(self, snapshot: DesktopSnapshot) -> RealtimeViewModel:
         state = snapshot.state
@@ -517,6 +535,16 @@ def _build_research_page_dto(self, snapshot: DesktopSnapshot, *, research: dict[
     )
 
 
+def _build_intelligence_page_dto(self, snapshot: DesktopSnapshot, *, intelligence: dict[str, Any]) -> dict[str, Any]:
+    return coerce_model(
+        IntelligencePageDto,
+        {
+            "selectedDate": snapshot.selected_date,
+            "intelligence": intelligence,
+        },
+    )
+
+
 def _build_realtime_page_dto(self, snapshot: DesktopSnapshot, *, realtime: dict[str, Any]) -> dict[str, Any]:
     return coerce_model(
         RealtimePageDto,
@@ -569,6 +597,7 @@ WorkbenchStateService.build_today_page_dto = _build_today_page_dto
 WorkbenchStateService.build_portfolio_page_dto = _build_portfolio_page_dto
 WorkbenchStateService.build_execution_page_dto = _build_execution_page_dto
 WorkbenchStateService.build_research_page_dto = _build_research_page_dto
+WorkbenchStateService.build_intelligence_page_dto = _build_intelligence_page_dto
 WorkbenchStateService.build_realtime_page_dto = _build_realtime_page_dto
 WorkbenchStateService.build_review_page_dto = _build_review_page_dto
 WorkbenchStateService.build_system_page_dto = _build_system_page_dto

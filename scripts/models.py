@@ -45,16 +45,32 @@ class NewsItem(TypedDict, total=False):
     source_url: str
     source_title: str
     url: str
+    canonical_url: str
+    content_hash: str
     provider: str
     mapping_mode: str
     evidence_type: str
     impact: str
+    sentiment_label: str
+    risk_level: str
+    risk_tags: list[str]
     relevance_score: float
     sentiment_score: float
     novelty_score: float
     virality_score: float
     historical_significance: float
     crowding_signal: str
+    heat_score: float
+    heat_rank: int
+    query_type: str
+    matched_keywords: list[str]
+    topic_tags: list[str]
+    classifier: str
+    classifier_version: str
+    classification_status: str
+    is_policy_signal: bool
+    is_hype_signal: bool
+    reason_short: str
     freshness_status: str
     stale: bool
     confidence: float
@@ -164,6 +180,7 @@ class SourceHealthItem(TypedDict, total=False):
     latest_as_of: str
     latest_retrieved_at: str
     notes: list[str]
+    metrics: dict[str, Any]
 
 
 class MemoryRecord(TypedDict, total=False):
@@ -307,6 +324,10 @@ class LlmContext(TypedDict, total=False):
     constraints: dict[str, Any]
     external_reference: dict[str, Any]
     memory_digest: dict[str, Any]
+    news_digest: dict[str, Any]
+    sentiment_digest: dict[str, Any]
+    event_risks: list[dict[str, Any]]
+    news_query_plan: dict[str, Any]
     evidence_items: list[EvidenceItem]
     fund_evidence_map: dict[str, list[EvidenceRef]]
     source_health_summary: list[SourceHealthItem]

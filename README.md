@@ -217,6 +217,7 @@ python "F:\okra_assistant\scripts\update_pending_confirmations.py"
 - **Realtime**: estimated NAV, daily return change, and intraday proxy views.
 - **Review / Memory**: review outcomes, long-memory candidates, approvals, and execution memory traces.
 - **System**: data health, logs, task status, and current runtime metadata.
+- **Intelligence**: news, related items, sentiment, source health, and regulatory information for the selected date.
 
 ## API and Frontend Entrypoints
 
@@ -232,6 +233,7 @@ Primary page APIs:
 - `GET /api/workbench/portfolio?date=YYYY-MM-DD`
 - `GET /api/workbench/execution?date=YYYY-MM-DD`
 - `GET /api/workbench/research?date=YYYY-MM-DD`
+- `GET /api/workbench/intelligence?date=YYYY-MM-DD`
 - `GET /api/workbench/realtime?date=YYYY-MM-DD`
 - `GET /api/workbench/review?date=YYYY-MM-DD`
 - `GET /api/workbench/system?date=YYYY-MM-DD`
@@ -280,6 +282,15 @@ Run targeted backend tests:
 cd "F:\okra_assistant"
 python -B -X utf8 -m unittest tests.test_execution_sync tests.test_long_memory tests.test_multiagent_and_review tests.test_web_api_long_memory
 ```
+
+Preview retention cleanup without changing files:
+
+```powershell
+cd "F:\okra_assistant"
+python -B -X utf8 scripts\cleanup_retention.py --dry-run --assert-protected --report
+```
+
+Retention rules live in `config/retention.toml`. The cleanup script is dry-run by default, writes a local review report under `reports/maintenance/`, and protects long memory, execution sync, portfolio state, validated advice, and decision audit data.
 
 ## Privacy and Local-First Design
 

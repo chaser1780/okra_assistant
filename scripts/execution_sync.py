@@ -12,13 +12,16 @@ from common import (
     dump_json,
     ensure_layout,
     actual_trade_path,
+    file_lock,
     load_json,
     load_portfolio,
+    lock_path,
     resolve_date,
+    settlement_event_path,
     timestamp_now,
     validated_advice_path,
 )
-from portfolio_state import save_portfolio_state, upsert_execution_status
+from portfolio_state import _save_portfolio_state_unlocked, portfolio_state_hash, upsert_execution_status
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
 from update_portfolio_from_trade import apply_trade
 
@@ -130,6 +133,24 @@ def _update_actual_trade_record(agent_home: Path, item: dict[str, Any]) -> Path 
     return dump_json(path, payload)
 
 
+def settlement_idempotency_key(trade: dict[str, Any]) -> str:
+    trade_id = str(trade.get("trade_id") or trade.get("conversion_id") or "")
+    if trade_id:
+        return trade_id
+    parts = [
+        str(trade.get("trade_date", "")),
+        str(trade.get("settlement_date", "")),
+        str(trade.get("operation_type", "")),
+        str(trade.get("fund_code") or trade.get("out_fund_code", "")),
+        str(trade.get("amount") or trade.get("out_amount", "")),
+    ]
+    return "_".join(part for part in parts if part) or _new_id("settlement")
+
+
+def settlement_event_exists(agent_home: Path, trade: dict[str, Any]) -> bool:
+    return settlement_event_path(agent_home, settlement_idempotency_key(trade)).exists()
+
+
 def match_suggestion(agent_home: Path, advice_date: str, fund_code: str, operation_type: str, suggestion_id: str = "") -> dict[str, Any] | None:
     path = validated_advice_path(agent_home, advice_date)
     if not path.exists():
@@ -190,6 +211,11 @@ def build_execution_deviation(agent_home: Path, item: dict[str, Any]) -> dict[st
 
 def record_actual_trade(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     ensure_layout(agent_home)
+    with file_lock(lock_path(agent_home, "execution_sync")):
+        return _record_actual_trade_unlocked(agent_home, payload)
+
+
+def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     operation = str(payload.get("operation_type") or payload.get("action") or "buy").strip()
     if operation == "planned_dca":
         operation = "dca"
@@ -258,6 +284,11 @@ def record_actual_trade(agent_home: Path, payload: dict[str, Any]) -> dict[str, 
 
 def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     ensure_layout(agent_home)
+    with file_lock(lock_path(agent_home, "execution_sync")):
+        return _record_conversion_unlocked(agent_home, payload)
+
+
+def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     trade_date = resolve_date(str(payload.get("trade_date") or payload.get("date") or "") or None)
     conversion_id = str(payload.get("conversion_id") or _new_id("conversion"))
     out_lifecycle = resolve_trade_lifecycle(
@@ -317,6 +348,11 @@ def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, An
 
 
 def update_pending_confirmations(agent_home: Path, as_of: str | None = None) -> dict[str, Any]:
+    with file_lock(lock_path(agent_home, "execution_sync")):
+        return _update_pending_confirmations_unlocked(agent_home, as_of)
+
+
+def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None = None) -> dict[str, Any]:
     as_of_date = resolve_date(as_of)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     updated: list[dict[str, Any]] = []
@@ -333,15 +369,20 @@ def update_pending_confirmations(agent_home: Path, as_of: str | None = None) -> 
         entry["updated_at"] = timestamp_now()
         if status == "settled":
             settled += 1
-            if not entry.get("portfolio_applied_at"):
+            if not entry.get("portfolio_applied_at") and not settlement_event_exists(agent_home, entry):
                 try:
-                    apply_settled_trade_to_portfolio(agent_home, entry)
+                    result = apply_settled_trade_to_portfolio(agent_home, entry)
                     entry["portfolio_applied_at"] = timestamp_now()
                     entry["portfolio_applied_as_of"] = as_of_date
+                    entry["portfolio_settlement_event_path"] = result.get("settlement_event_path", "")
                     applied += 1
                 except Exception as exc:
                     entry["portfolio_apply_error"] = str(exc)
                     apply_errors.append({"trade_id": entry.get("trade_id", ""), "error": str(exc)})
+            elif settlement_event_exists(agent_home, entry):
+                entry["portfolio_applied_at"] = entry.get("portfolio_applied_at") or timestamp_now()
+                entry["portfolio_applied_as_of"] = entry.get("portfolio_applied_as_of") or as_of_date
+                entry["portfolio_settlement_event_path"] = str(settlement_event_path(agent_home, settlement_idempotency_key(entry)))
             _update_actual_trade_record(agent_home, entry)
         updated.append(entry)
     path = _write_pending_confirmations(agent_home, updated)
@@ -423,6 +464,11 @@ def _position_row_from_preview(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_reconciliation(agent_home: Path, preview: dict[str, Any], *, drop_missing: bool = False) -> dict[str, Any]:
+    with file_lock(lock_path(agent_home, "portfolio_state")):
+        return _apply_reconciliation_unlocked(agent_home, preview, drop_missing=drop_missing)
+
+
+def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *, drop_missing: bool = False) -> dict[str, Any]:
     portfolio = deepcopy(load_portfolio(agent_home))
     current_by_code = {str(item.get("fund_code", "")): item for item in portfolio.get("funds", []) or []}
     snapshot_date = str(preview.get("snapshot_date") or preview.get("sync_date") or resolve_date())
@@ -477,7 +523,7 @@ def apply_reconciliation(agent_home: Path, preview: dict[str, Any], *, drop_miss
     portfolio["as_of_date"] = snapshot_date
     portfolio["total_value"] = round(sum(_money(item.get("current_value")) for item in portfolio.get("funds", []) or []), 2)
     portfolio["holding_pnl"] = round(sum(_money(item.get("holding_pnl")) for item in portfolio.get("funds", []) or []), 2)
-    current_path, snapshot_path = save_portfolio_state(
+    current_path, snapshot_path = _save_portfolio_state_unlocked(
         agent_home,
         portfolio,
         source=str(preview.get("source") or "actual_position_sync"),
@@ -544,9 +590,11 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
         "new_items": [],
         "missing_items": [],
         "apply_ready": False,
+        "auto_parse_attempted": bool(payload.get("auto_parse", True) and saved),
+        "auto_parse_ok": False,
+        "auto_parse_error": "",
         "warnings": [
-            "截图已保存到本地。第一版不会自动覆盖仓位，请在预览区手动校正识别结果后再应用。",
-            "如需自动视觉识别，可继续接入已有 sync_portfolio_from_screenshots.py 的 LLM 解析流程。",
+            "截图已保存到本地。自动识别成功前不会覆盖仓位。",
         ],
         "generated_at": timestamp_now(),
     }
@@ -571,9 +619,13 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
             recognized["saved_files"] = saved
             recognized["vision_warnings"] = extracted.get("warnings", []) or []
             recognized["transport_name"] = extracted.get("_transport_name", "")
+            recognized["auto_parse_attempted"] = True
+            recognized["auto_parse_ok"] = True
+            recognized["auto_parse_error"] = ""
             dump_json(parsed_import_path(agent_home, import_id), recognized)
             return recognized
         except Exception as exc:
+            preview["auto_parse_error"] = str(exc)
             preview["warnings"].append(f"自动识别未完成：{exc}")
     dump_json(parsed_import_path(agent_home, import_id), preview)
     return preview
@@ -604,7 +656,17 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
 
 
 def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:
+    with file_lock(lock_path(agent_home, "portfolio_state")):
+        return _apply_settled_trade_to_portfolio_unlocked(agent_home, trade)
+
+
+def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:
+    idempotency_key = settlement_idempotency_key(trade)
+    event_path = settlement_event_path(agent_home, idempotency_key)
+    if trade.get("portfolio_applied_at") or event_path.exists():
+        return {"ok": True, "skipped": True, "reason": "settlement_already_applied", "settlement_event_path": str(event_path)}
     portfolio = load_portfolio(agent_home)
+    before_hash = portfolio_state_hash(portfolio)
     operation = str(trade.get("operation_type", ""))
     if operation == "convert":
         portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", _money(trade.get("out_amount")), trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"))
@@ -615,12 +677,32 @@ def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) ->
         portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
     else:
         return {"ok": False, "reason": f"operation {operation} does not update portfolio automatically"}
-    current_path, snapshot_path = save_portfolio_state(
+    after_hash = portfolio_state_hash(portfolio)
+    settlement_payload = {
+        "event_type": "actual_trade_settlement",
+        "trade_id": trade.get("trade_id", ""),
+        "conversion_id": trade.get("conversion_id", ""),
+        "idempotency_key": idempotency_key,
+        "before_state_hash": before_hash,
+        "after_state_hash": after_hash,
+        "created_at": timestamp_now(),
+    }
+    current_path, snapshot_path = _save_portfolio_state_unlocked(
         agent_home,
         portfolio,
         source="actual_trade_settlement",
         event_date=str(trade.get("settlement_date") or trade.get("confirm_date") or trade.get("trade_date") or resolve_date()),
         event_type="actual_trade_settlement",
-        extra_meta={"trade_id": trade.get("trade_id", ""), "conversion_id": trade.get("conversion_id", "")},
+        event_id=idempotency_key,
+        source_path=str(trade.get("source_path", "")),
+        extra_meta={**settlement_payload, "settlement_event_path": str(event_path)},
     )
-    return {"ok": True, "current_path": str(current_path), "snapshot_path": str(snapshot_path)}
+    settlement_payload.update(
+        {
+            "current_path": str(current_path),
+            "snapshot_path": str(snapshot_path),
+            "source_path": str(trade.get("source_path", "")),
+        }
+    )
+    dump_json(event_path, settlement_payload)
+    return {"ok": True, "current_path": str(current_path), "snapshot_path": str(snapshot_path), "settlement_event_path": str(event_path)}

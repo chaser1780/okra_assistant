@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import json
-import unittest
-
-from helpers import TempAgentHome
-from pathlib import Path
 import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from build_llm_context import build_memory_digest
+from helpers import TempAgentHome
+from build_llm_context import build_event_risks, build_memory_digest, build_news_digest, build_sentiment_digest
+from build_daily_report import related_news
+from committee_synthesis import degradation_summary
 from generate_llm_advice import build_committee_advice_from_agents, merge_committee_narrative
 from learning_memory import run_learning_sync, write_learning_artifacts
 from long_memory_store import upsert_memory_record
 from portfolio_exposure import analyze_portfolio_exposure
-from run_multiagent_research import compact_agent_output, degradation_summary, sanitize_agent_output
+from run_multiagent_research import build_agent_reuse_metadata, build_user_prompt, can_reuse_agent_record, compact_agent_output, record_reuse_metadata, sanitize_agent_output
+import agent_inputs
 from decision_support import build_agent_stage_snapshot, summarize_fund_stage_signals
 from ui_support import build_auto_realtime_status_text, build_dashboard_text, load_state
 
@@ -111,6 +115,242 @@ class MultiagentAndReviewTests(unittest.TestCase):
         self.assertEqual(trace["status"], "ok")
         self.assertTrue(trace["agent_input_sha256"])
         self.assertIn("portfolio_item_count", trace["retrieval_summary"])
+        self.assertIn("rag_hit_count", trace["retrieval_summary"])
+        self.assertFalse(aggregate["workflow_meta"]["rag"]["rag_enabled"])
+        self.assertEqual("legacy", aggregate["workflow_meta"]["rag"]["retrieval_backend"])
+
+    def test_use_existing_requires_matching_agent_fingerprint(self):
+        self.build_context()
+        self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock", "--only", "market_analyst")
+        agent_path = self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "market_analyst.json"
+        record = json.loads(agent_path.read_text(encoding="utf-8"))
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        current_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        current_metadata = build_agent_reuse_metadata(
+            self.agent.root,
+            "market_analyst",
+            current_input,
+            build_user_prompt("market_analyst", current_input),
+            use_mock=True,
+        )
+        self.assertTrue(can_reuse_agent_record(record, current_metadata))
+
+        context["funds"][0]["quote"]["day_change_pct"] = 9.9
+        changed_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        changed_metadata = build_agent_reuse_metadata(
+            self.agent.root,
+            "market_analyst",
+            changed_input,
+            build_user_prompt("market_analyst", changed_input),
+            use_mock=True,
+        )
+        self.assertFalse(can_reuse_agent_record(record, changed_metadata))
+
+    def test_agent_input_rag_shadow_does_not_inject_by_default(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        context["_agent_home"] = self.agent.root
+        context["_rag_agent_shadow"] = {"enabled": True, "write_trace": False, "inject_into_prompt": False}
+        with patch("agent_inputs.retrieve_rag_evidence", return_value={"trace_id": "ragq-test", "hits": [{"doc_id": "d1", "source_kind": "evidence_item", "title": "hit", "summary": "summary"}], "missing_data": []}):
+            agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        self.assertEqual("ragq-test", agent_input["rag_retrieval_trace_id"])
+        self.assertEqual(1, agent_input["rag_legacy_diff"]["rag_hit_count"])
+        self.assertNotIn("rag_retrieved_evidence", agent_input)
+
+    def test_agent_input_rag_shadow_can_be_injected_explicitly(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        context["_agent_home"] = self.agent.root
+        context["_rag_agent_shadow"] = {"enabled": True, "write_trace": False, "inject_into_prompt": True}
+        with patch("agent_inputs.retrieve_rag_evidence", return_value={"trace_id": "ragq-test", "hits": [{"doc_id": "d1", "source_kind": "evidence_item", "title": "hit", "summary": "summary"}], "missing_data": []}):
+            agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        self.assertIn("rag_retrieved_evidence", agent_input)
+        self.assertEqual("ragq-test", agent_input["rag_retrieved_evidence"]["trace_id"])
+
+    def test_agent_default_rag_uses_rag_hits_when_enabled(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        context["_agent_home"] = self.agent.root
+        context["_rag_agent_default"] = {"enabled": True, "write_trace": False, "fallback_to_legacy": True, "min_hits": 1}
+        context["_rag_agent_profiles"] = {"market_analyst": {"enabled": True, "top_k_portfolio": 4, "source_kinds": ["evidence_item"], "domains": ["fund"]}}
+        with patch(
+            "agent_inputs.retrieve_rag_evidence",
+            return_value={
+                "trace_id": "ragq-default",
+                "hits": [{"doc_id": "d1", "chunk_id": "c1", "source_kind": "evidence_item", "title": "rag hit", "summary": "rag summary", "text_for_llm": "rag text"}],
+                "missing_data": [],
+            },
+        ):
+            agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        self.assertEqual("rag", agent_input["retrieval_backend"])
+        self.assertEqual("ragq-default", agent_input["rag_default_trace_id"])
+        self.assertEqual("rag hit", agent_input["evidence_items"][0]["title"])
+        self.assertEqual("rag:d1#c1", agent_input["evidence_items"][0]["evidence_id"])
+
+    def test_agent_default_rag_falls_back_to_legacy_when_hits_low(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        context["_agent_home"] = self.agent.root
+        context["_rag_agent_default"] = {"enabled": True, "write_trace": False, "fallback_to_legacy": True, "min_hits": 2}
+        with patch("agent_inputs.retrieve_rag_evidence", return_value={"trace_id": "ragq-low", "hits": [], "missing_data": []}):
+            agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        self.assertEqual("legacy_fallback", agent_input["retrieval_backend"])
+        self.assertEqual("hit_count_below_min", agent_input["rag_default_fallback_reason"])
+        self.assertNotIn("rag_retrieved_evidence", agent_input)
+
+    def test_agent_default_rag_evidence_id_and_fund_map_contract(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        context["_agent_home"] = self.agent.root
+        context["_rag_agent_default"] = {"enabled": True, "write_trace": False, "fallback_to_legacy": True, "min_hits": 1}
+        with patch(
+            "agent_inputs.retrieve_rag_evidence",
+            return_value={
+                "trace_id": "ragq-contract",
+                "hits": [
+                    {
+                        "doc_id": "doc-f1",
+                        "chunk_id": "chunk-f1",
+                        "source_kind": "committee_bundle",
+                        "title": "F1 decision",
+                        "summary": "F1 decision summary",
+                        "text_for_llm": "F1 decision text",
+                        "fund_codes": ["F1"],
+                        "score": 0.91,
+                    },
+                    {
+                        "doc_id": "doc-market",
+                        "chunk_id": "chunk-market",
+                        "source_kind": "llm_context",
+                        "title": "market",
+                        "summary": "global market summary",
+                        "text_for_llm": "global market text",
+                        "fund_codes": [],
+                        "score": 0.5,
+                    },
+                ],
+                "missing_data": [],
+            },
+        ):
+            agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+
+        self.assertEqual("rag", agent_input["retrieval_backend"])
+        self.assertEqual("rag:doc-f1#chunk-f1", agent_input["evidence_items"][0]["evidence_id"])
+        self.assertEqual("rag:doc-market#chunk-market", agent_input["evidence_items"][1]["evidence_id"])
+        self.assertEqual(["rag:doc-f1#chunk-f1"], [item["evidence_id"] for item in agent_input["fund_evidence_map"]["F1"]])
+        self.assertNotIn("F2", agent_input["fund_evidence_map"])
+
+    def test_workflow_metadata_records_rag_default_switch(self):
+        self.build_context()
+        self.agent.write_text(
+            "config/rag.toml",
+            """[rag]
+enabled = false
+
+[rag.agent_default]
+enabled = true
+fallback_to_legacy = true
+write_trace = false
+min_hits = 1
+""",
+        )
+        self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock", "--only", "market_analyst")
+        workflow = json.loads((self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "workflow_definition.json").read_text(encoding="utf-8"))
+        self.assertTrue(workflow["rag"]["rag_enabled"])
+        self.assertEqual("rag", workflow["rag"]["retrieval_backend"])
+        self.assertIn("manifest_set_sha256", workflow["rag"])
+
+    def test_reuse_metadata_tracks_prompt_and_model_config(self):
+        self.build_context()
+        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
+        agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
+        metadata = build_agent_reuse_metadata(
+            self.agent.root,
+            "market_analyst",
+            agent_input,
+            build_user_prompt("market_analyst", agent_input),
+            use_mock=True,
+        )
+        record = record_reuse_metadata({"status": "ok", "output": {"summary": "cached"}}, metadata)
+        self.assertTrue(can_reuse_agent_record(record, metadata))
+
+        changed_prompt_metadata = dict(metadata)
+        changed_prompt_metadata["prompt_sha256"] = "changed"
+        self.assertFalse(can_reuse_agent_record(record, changed_prompt_metadata))
+
+        self.agent.write_text("config/llm.toml", (self.agent.root / "config" / "llm.toml").read_text(encoding="utf-8").replace('model = "gpt-5.4"', 'model = "gpt-5.5"', 1))
+        changed_model_metadata = build_agent_reuse_metadata(
+            self.agent.root,
+            "market_analyst",
+            agent_input,
+            build_user_prompt("market_analyst", agent_input),
+            use_mock=True,
+        )
+        self.assertNotEqual(metadata["llm_config_sha256"], changed_model_metadata["llm_config_sha256"])
+        self.assertFalse(can_reuse_agent_record(record, changed_model_metadata))
+
+    def test_news_and_sentiment_digest_helpers(self):
+        payload = {
+            "items": [
+                {
+                    "code": "F1",
+                    "title": "F1 官方公告",
+                    "summary": "manager update",
+                    "impact": "negative",
+                    "source_name": "eastmoney_notice",
+                    "source_role": "fund_news",
+                    "source_tier": "official_notice",
+                    "evidence_type": "official_notice",
+                    "published_at": "2026-05-10T09:00:00+08:00",
+                    "url": "https://example.com/notice",
+                    "historical_significance": 0.8,
+                },
+                {
+                    "code": "F1",
+                    "title": "F1 social heat",
+                    "summary": "social sample",
+                    "impact": "positive",
+                    "source_name": "xueqiu_web",
+                    "source_role": "sentiment_news",
+                    "evidence_type": "social_post",
+                    "sentiment_score": 0.4,
+                    "virality_score": 0.7,
+                    "published_at": "2026-05-10T10:00:00+08:00",
+                    "provider": "xueqiu_web",
+                },
+            ],
+            "source_health": [
+                {"source_key": "sentiment:xueqiu_web", "source_role": "sentiment_news", "provider": "xueqiu_web", "status": "ok", "item_count": 1}
+            ],
+        }
+        news_digest = build_news_digest(payload)
+        sentiment_digest = build_sentiment_digest(payload)
+        event_risks = build_event_risks(payload)
+        self.assertEqual(news_digest["item_count"], 2)
+        self.assertEqual(news_digest["unique_item_count"], 2)
+        self.assertEqual(news_digest["mapped_item_count"], 2)
+        self.assertIn("top_heat_items", news_digest)
+        self.assertEqual(sentiment_digest["item_count"], 1)
+        self.assertIn("text_sentiment", sentiment_digest)
+        self.assertEqual(sentiment_digest["providers"][0]["provider"], "news_text_pool")
+        self.assertEqual(event_risks[0]["fund_code"], "F1")
+
+    def test_daily_report_related_news_tolerates_missing_impact(self):
+        lines = related_news(
+            {
+                "F1": [
+                    {
+                        "title": "F1 social heat",
+                        "url": "https://example.com/news",
+                        "source_name": "xueqiu_web",
+                        "published_at": "2026-05-11T10:00:00+08:00",
+                        "sentiment_score": 0.3,
+                    }
+                ]
+            },
+            "F1",
+        )
+        self.assertIn("positive", lines[0])
 
     def test_generate_llm_advice_mock_writes_committee_artifact(self):
         self.build_context()

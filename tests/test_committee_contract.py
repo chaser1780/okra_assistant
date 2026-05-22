@@ -6,8 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from run_multiagent_research import build_committee_decision_bundle, build_committee_summary
-from generate_llm_advice import build_final_advice_from_committee_bundle
+from committee_synthesis import build_committee_decision_bundle, build_committee_summary
+from generate_llm_advice import build_final_advice_from_committee_bundle, committee_hold_only_bundle_available
 
 
 class CommitteeContractTests(unittest.TestCase):
@@ -105,6 +105,36 @@ class CommitteeContractTests(unittest.TestCase):
         decision = advice["fund_decisions"][0]
         self.assertEqual(decision["action"], "hold")
         self.assertEqual(decision["suggest_amount"], 0.0)
+
+    def test_hold_only_degraded_bundle_can_finish_as_non_executable(self):
+        agent_bundle = {
+            "failed_agents": [],
+            "agents": {
+                "research_manager": {"status": "degraded"},
+                "risk_manager": {"status": "degraded"},
+                "portfolio_trader": {"status": "degraded"},
+            },
+        }
+        bundle = {
+            "decision_mode": "hold_only",
+            "execution_eligible": False,
+            "fund_decisions": [{"fund_code": "F1", "proposed_action": "hold", "execution_eligible": False}],
+        }
+
+        self.assertTrue(committee_hold_only_bundle_available(agent_bundle, bundle))
+
+    def test_hold_only_degraded_bundle_still_blocks_failed_agents(self):
+        agent_bundle = {
+            "failed_agents": [{"agent_name": "risk_manager", "error": "schema"}],
+            "agents": {"risk_manager": {"status": "failed"}},
+        }
+        bundle = {
+            "decision_mode": "hold_only",
+            "execution_eligible": False,
+            "fund_decisions": [{"fund_code": "F1", "proposed_action": "hold"}],
+        }
+
+        self.assertFalse(committee_hold_only_bundle_available(agent_bundle, bundle))
 
 
 if __name__ == "__main__":

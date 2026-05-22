@@ -26,7 +26,7 @@ from common import (
     resolve_date,
     timestamp_now,
 )
-from multiagent_utils import describe_api_failure, extract_response_output_text, resolve_api_key
+from multiagent_utils import describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
 from portfolio_state import ensure_portfolio_definition, save_portfolio_state
 
 
@@ -150,7 +150,7 @@ def call_screenshot_vision(agent_home: Path, image_paths: list[Path], provider: 
     config = load_llm_config(agent_home)
     provider_cfg = config["model_providers"][config["model_provider"]]
     api_key = resolve_api_key(config)
-    endpoint = provider_cfg["base_url"].rstrip("/") + "/responses"
+    endpoint = responses_endpoint(provider_cfg)
     content = [
         {
             "type": "input_text",
@@ -170,13 +170,13 @@ def call_screenshot_vision(agent_home: Path, image_paths: list[Path], provider: 
     ]
     for index, path in enumerate(image_paths, start=1):
         content.append({"type": "input_text", "text": f"第 {index} 张图片：{path.name}"})
-        content.append({"type": "input_image", "image_url": data_url_for_image(path)})
+        content.append({"type": "input_image", "image_url": data_url_for_image(path, max_side=1200), "detail": "high"})
 
     payload = {
         "model": config["model"],
         "stream": False,
         "store": False,
-        "reasoning": {"effort": config.get("model_reasoning_effort", "medium")},
+        "reasoning": {"effort": "low"},
         "input": [
             {
                 "role": "system",
@@ -212,7 +212,7 @@ def call_screenshot_vision(agent_home: Path, image_paths: list[Path], provider: 
         try:
             response = session.post(
                 endpoint,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=responses_headers(api_key, stream=False),
                 json=payload,
                 timeout=(30, 300),
             )

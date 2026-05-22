@@ -1,0 +1,121 @@
+[retention]
+archive_root = "backups/retention"
+dry_run_default = true
+protected_paths = [
+  "db/long_memory",
+  "db/execution_sync",
+  "db/portfolio_state",
+  "db/validated_advice",
+  "db/decisions",
+  "db/decision_ledger",
+  "db/decision_latest",
+  "config",
+  "docs",
+  "references"
+]
+
+[[retention.rules]]
+name = "raw_news"
+description = "Archive raw news only after the daily LLM context exists."
+enabled = true
+path = "raw/news"
+selector = "dated_files"
+pattern = "*.json"
+retention_days = 60
+action = "archive"
+require_existing = "db/llm_context/{date}.json"
+
+[[retention.rules]]
+name = "news_query_plans"
+description = "Archive generated news query plans."
+enabled = true
+path = "db/news_query_plans"
+selector = "dated_files"
+pattern = "*.json"
+retention_days = 60
+action = "archive"
+
+[[retention.rules]]
+name = "llm_context"
+description = "Archive LLM context files; keep them recoverable for audit."
+enabled = true
+path = "db/llm_context"
+selector = "dated_files"
+pattern = "*.json"
+retention_days = 180
+action = "archive"
+
+[[retention.rules]]
+name = "evidence_index"
+description = "Archive evidence indexes; they can be rebuilt from context."
+enabled = true
+path = "db/evidence_index"
+selector = "dated_files"
+pattern = "*.json"
+retention_days = 180
+action = "archive"
+
+[[retention.rules]]
+name = "daily_workspace"
+description = "Archive older daily workspaces while preserving traceability."
+enabled = true
+path = "db/daily_workspace"
+selector = "dated_dirs"
+retention_days = 180
+action = "archive"
+
+[[retention.rules]]
+name = "logs_error"
+description = "Keep failed/provider/LLM logs longer than normal logs."
+enabled = true
+path = "logs"
+selector = "mtime_files"
+pattern = "*"
+retention_days = 90
+action = "delete"
+include_keywords = ["error", "failed", "failure", "exception", "traceback", "llm", "provider", "502", "preflight"]
+
+[[retention.rules]]
+name = "logs_normal"
+description = "Delete old ordinary runtime logs."
+enabled = true
+path = "logs"
+selector = "mtime_files"
+pattern = "*"
+retention_days = 30
+action = "delete"
+exclude_keywords = ["error", "failed", "failure", "exception", "traceback", "llm", "provider", "502", "preflight"]
+
+[[retention.rules]]
+name = "cache"
+description = "Delete old rebuildable cache files."
+enabled = true
+path = "cache"
+selector = "mtime_files"
+pattern = "*"
+retention_days = 14
+action = "delete"
+
+[[retention.rules]]
+name = "temp"
+description = "Delete old temporary files while keeping the latest UI screenshots."
+enabled = true
+path = "temp"
+selector = "mtime_files"
+pattern = "*"
+retention_days = 7
+action = "delete"
+preserve_latest_count = 20
+preserve_latest_patterns = ["*.png", "*.jpg", "*.jpeg", "*screenshot*", "*playwright*", "*ui*"]
+
+[[retention.rules]]
+name = "backups"
+description = "Keep recent backups and monthly checkpoints; retention archives are excluded."
+enabled = true
+path = "backups"
+selector = "backup_snapshots"
+pattern = "*.zip"
+action = "delete"
+keep_latest_count = 5
+keep_monthly_count = 12
+exclude_paths = ["backups/retention"]

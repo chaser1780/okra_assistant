@@ -1,23 +1,121 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_daily_pipeline import add_business_days, due_review_jobs
+from run_daily_pipeline import add_business_days, due_review_jobs, run_rag_shadow, step_output_exists
 from run_realtime_monitor import should_sync_units
 from run_report_window import intraday_report_target
 from helpers import TempAgentHome
 from ui_support import latest_nightly_target_date, load_portfolio_for_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
+from ui_tasks import portfolio_alignment_target_date, should_align_portfolio_on_boot
+from web_api_services import TaskController
 
 
 class PipelineLogicTests(unittest.TestCase):
+    def test_resume_existing_rebuilds_llm_context_when_raw_input_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            for relative in (
+                f"raw/quotes/{report_date}.json",
+                f"raw/news/{report_date}.json",
+                f"raw/fund_profiles/{report_date}.json",
+                f"db/intraday_proxies/{report_date}.json",
+                f"db/estimated_nav/{report_date}.json",
+                f"db/portfolio_state/current.json",
+                "db/long_memory/exports/all_memory.json",
+            ):
+                agent.write_json(relative, {"ok": True})
+            context_path = agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "build_llm_context.py"))
+            os.utime(agent.root / f"raw/news/{report_date}.json", (context_path.stat().st_mtime + 10, context_path.stat().st_mtime + 10))
+
+            self.assertFalse(step_output_exists(agent.root, report_date, "build_llm_context.py"))
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_rebuilds_evidence_index_when_context_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            context_path = agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            index_path = agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "build_evidence_index.py"))
+            os.utime(context_path, (index_path.stat().st_mtime + 10, index_path.stat().st_mtime + 10))
+
+            self.assertFalse(step_output_exists(agent.root, report_date, "build_evidence_index.py"))
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_rebuilds_aggregate_when_evidence_index_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            index_path = agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
+            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            os.utime(index_path, (aggregate_path.stat().st_mtime + 10, aggregate_path.stat().st_mtime + 10))
+
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_rebuilds_aggregate_when_agent_config_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
+            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
+            future = aggregate_path.stat().st_mtime + 1000
+            os.utime(aggregate_path, (future, future))
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            os.utime(agent.root / "config" / "agents.toml", (future + 10, future + 10))
+
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_rebuilds_aggregate_when_rag_config_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
+            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
+            future = aggregate_path.stat().st_mtime + 1000
+            os.utime(aggregate_path, (future, future))
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            rag_config = agent.write_text("config/rag.toml", "[rag]\nenabled = false\n")
+            os.utime(rag_config, (future + 10, future + 10))
+
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+        finally:
+            agent.cleanup()
+
+    def test_snapshot_run_never_resumes(self):
+        agent = TempAgentHome()
+        try:
+            self.assertFalse(step_output_exists(agent.root, "2026-03-11", "snapshot_run.py"))
+        finally:
+            agent.cleanup()
+
     def test_add_business_days_skips_weekend(self):
         self.assertEqual(add_business_days("2026-03-06", 1), "2026-03-09")
         self.assertEqual(add_business_days("2026-03-06", 5), "2026-03-13")
@@ -147,6 +245,110 @@ class PipelineLogicTests(unittest.TestCase):
             fresh_ts = now.timestamp()
             os.utime(snapshot, (fresh_ts, fresh_ts))
             self.assertFalse(should_refresh_realtime_on_boot(agent.root, "2026-04-21", now=now))
+        finally:
+            agent.cleanup()
+
+    def test_startup_portfolio_alignment_decision_tracks_nightly_target(self):
+        agent = TempAgentHome()
+        try:
+            now = __import__("datetime").datetime(2026, 4, 21, 10, 0, 0)
+            agent.write_json(
+                "db/portfolio_state/current.json",
+                {
+                    "portfolio_name": "runtime",
+                    "as_of_date": "2026-04-17",
+                    "funds": [{"fund_code": "EQ1", "fund_name": "fund", "current_value": 100.0}],
+                },
+            )
+
+            self.assertEqual(portfolio_alignment_target_date(agent.root, now=now), "2026-04-20")
+            self.assertTrue(should_align_portfolio_on_boot(agent.root, now=now))
+
+            agent.write_json(
+                "db/portfolio_state/current.json",
+                {
+                    "portfolio_name": "runtime",
+                    "as_of_date": "2026-04-20",
+                    "funds": [{"fund_code": "EQ1", "fund_name": "fund", "current_value": 100.0}],
+                },
+            )
+            self.assertFalse(should_align_portfolio_on_boot(agent.root, now=now))
+        finally:
+            agent.cleanup()
+
+    def test_daily_task_runs_portfolio_alignment_before_today_analysis(self):
+        agent = TempAgentHome()
+        try:
+            calls = []
+
+            class FakeProcess:
+                pid = 12345
+
+            def fake_run(command, **kwargs):
+                calls.append(("run", command))
+                return type("Completed", (), {"returncode": 0})()
+
+            def fake_popen(command, **kwargs):
+                calls.append(("popen", command))
+                workspace = agent.root / "db" / "daily_workspace" / "2026-04-21"
+                workspace.mkdir(parents=True, exist_ok=True)
+                (workspace / "today_analysis_runtime.json").write_text(
+                    json.dumps({"runId": "run-1", "status": "running", "pid": FakeProcess.pid}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                return FakeProcess()
+
+            with (
+                patch("web_api_services.today_str", return_value="2026-04-21"),
+                patch("web_api_services.should_align_portfolio_on_boot", return_value=True),
+                patch("web_api_services.portfolio_alignment_target_date", return_value="2026-04-20"),
+                patch("web_api_services.subprocess.run", side_effect=fake_run),
+                patch("web_api_services.subprocess.Popen", side_effect=fake_popen),
+                patch("web_api_services.get_active_runtime", side_effect=[{}, {"runId": "run-1", "pid": FakeProcess.pid, "status": "running"}]),
+                patch("web_api_services.time.sleep", return_value=None),
+            ):
+                result = TaskController(agent.root).run_task("daily")
+
+            self.assertEqual(result["runId"], "run-1")
+            self.assertEqual(calls[0][0], "run")
+            self.assertTrue(any(str(part).endswith("align_portfolio_on_startup.py") for part in calls[0][1]))
+            self.assertEqual(calls[1][0], "popen")
+            self.assertTrue(any(str(part).endswith("run_today_analysis.py") for part in calls[1][1]))
+        finally:
+            agent.cleanup()
+
+    def test_rag_shadow_runs_ingest_and_eval_without_blocking(self):
+        agent = TempAgentHome()
+        try:
+            calls = []
+
+            def fake_run_step(script_name, agent_home, report_date, demo, extra_args=None, step_label=None, record_step=None):
+                calls.append((script_name, list(extra_args or []), step_label))
+                return 0.1
+
+            with patch("run_daily_pipeline.run_step", side_effect=fake_run_step):
+                timings = run_rag_shadow(agent.root, "2026-05-20")
+
+            self.assertIn("rag_ingest.py", timings)
+            self.assertIn("rag_eval.py", timings)
+            self.assertEqual("rag_ingest.py", calls[0][0])
+            self.assertIn("--write", calls[0][1])
+            self.assertIn("--all", calls[0][1])
+            self.assertEqual("rag_eval.py", calls[1][0])
+            self.assertIn("--compare-legacy", calls[1][1])
+        finally:
+            agent.cleanup()
+
+    def test_rag_shadow_degrades_unless_strict(self):
+        agent = TempAgentHome()
+        try:
+            with patch("run_daily_pipeline.run_step", side_effect=RuntimeError("rag failed")):
+                timings = run_rag_shadow(agent.root, "2026-05-20", strict=False)
+            self.assertIn("rag_shadow_degraded", timings)
+
+            with patch("run_daily_pipeline.run_step", side_effect=RuntimeError("rag failed")):
+                with self.assertRaises(RuntimeError):
+                    run_rag_shadow(agent.root, "2026-05-20", strict=True)
         finally:
             agent.cleanup()
 

@@ -21,6 +21,7 @@ from common import (
     review_result_path,
     validated_advice_path,
 )
+from rag_profile_evidence import build_review_evidence_pack
 from trade_constraints import build_trade_constraints
 
 
@@ -425,6 +426,19 @@ def main() -> None:
         },
         "items": items,
     }
+    if args.source == "advice":
+        try:
+            result["rag_review_evidence"] = build_review_evidence_pack(
+                agent_home,
+                base_date,
+                review_date=review_date,
+                fund_codes=[str(item.get("fund_code", "") or "") for item in items if item.get("fund_code")],
+                diagnostic_labels=[str(item.get("diagnostic_label", "") or "") for item in items if item.get("diagnostic_label")],
+            )
+        except Exception as exc:
+            result["rag_review_evidence"] = {"enabled": True, "profile": "review", "status": "failed", "fallback_reason": str(exc)}
+        if not result["rag_review_evidence"].get("enabled", True):
+            result.pop("rag_review_evidence", None)
 
     path = review_result_path(agent_home, base_date, args.horizon) if args.source == "advice" else execution_review_result_path(agent_home, base_date, args.horizon)
     path.parent.mkdir(parents=True, exist_ok=True)

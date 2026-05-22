@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import threading
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from http.server import ThreadingHTTPServer
 
-from app.web_api import ContractRequestHandler, OkraWebApi
+from app.web_api import ContractRequestHandler, OkraWebApi, cors_origin_value, is_allowed_origin
 from helpers import TempAgentHome
 from long_memory_store import stable_memory_id, upsert_memory_record
 from today_orchestrator import AlreadyRunningError
@@ -138,6 +139,17 @@ class WebApiLongMemoryTests(unittest.TestCase):
         with self.assertRaises(AlreadyRunningError):
             api.run_task("daily", force=True)
 
+    def test_manual_daily_run_uses_manual_trigger(self):
+        api = OkraWebApi(self.agent.root)
+        with patch("app.web_api_services.subprocess.Popen") as popen, patch("app.web_api_services.get_active_runtime", return_value={}):
+            popen.return_value.pid = 12345
+            result = api.run_task("daily", force=True)
+        command = popen.call_args.args[0]
+        self.assertIn("--trigger", command)
+        self.assertIn("manual", command)
+        self.assertIn("--force", command)
+        self.assertEqual(result["pid"], 12345)
+
     def test_fund_detail_exposes_fund_memory(self):
         upsert_memory_record(
             self.agent.root,
@@ -184,6 +196,141 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertIn("selectedDate", payload["data"])
         self.assertIn("dashboard", payload["data"])
 
+    def test_snapshot_endpoint_keeps_legacy_raw_payload(self):
+        payload = self._request_json("/api/snapshot")
+        self.assertIn("selectedDate", payload)
+        self.assertIn("dashboard", payload)
+        self.assertNotIn("ok", payload)
+        self.assertNotIn("data", payload)
+
+    def test_health_endpoint_identifies_okra_api(self):
+        payload = self._request_json("/api/health")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["app"], "okra-assistant")
+        self.assertEqual(payload["meta"]["page"], "health")
+
+    def test_contract_handler_rejects_untrusted_post_origin(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._request_json(
+                "/api/run/realtime",
+                method="POST",
+                body={},
+                headers={"Origin": "https://evil.example"},
+            )
+        self.assertEqual(ctx.exception.code, 403)
+        body = json.loads(ctx.exception.read().decode("utf-8"))
+        self.assertEqual(body["error"]["error_code"], "forbidden_origin")
+
+    def test_contract_handler_allows_tauri_localhost_origin_for_page_data(self):
+        payload = self._request_json("/api/today", headers={"Origin": "http://tauri.localhost"})
+        self.assertTrue(payload["ok"])
+        self.assertIn("dashboard", payload["data"])
+
+    def test_contract_handler_serves_all_workbench_pages_for_tauri_origin(self):
+        expected_keys = {
+            "/api/shell": "summary",
+            "/api/today": "dashboard",
+            "/api/portfolio": "portfolio",
+            "/api/execution": "executionSync",
+            "/api/research": "research",
+            "/api/intelligence": "intelligence",
+            "/api/realtime": "realtime",
+            "/api/review": "review",
+            "/api/system": "system",
+        }
+        for path, data_key in expected_keys.items():
+            with self.subTest(path=path):
+                payload, headers = self._request_json_with_headers(path, headers={"Origin": "http://tauri.localhost"})
+                self.assertTrue(payload["ok"])
+                self.assertIn(data_key, payload["data"])
+                self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://tauri.localhost")
+
+    def test_contract_handler_keeps_legacy_workbench_routes_compatible(self):
+        expected_keys = {
+            "/api/workbench/today": ("today", "dashboard"),
+            "/api/workbench/system": ("system", "system"),
+        }
+        for path, (page, data_key) in expected_keys.items():
+            with self.subTest(path=path):
+                payload = self._request_json(path, headers={"Origin": "http://tauri.localhost"})
+                self.assertTrue(payload["ok"])
+                self.assertEqual(page, payload["meta"]["page"])
+                self.assertIn(data_key, payload["data"])
+
+    def test_cors_origin_accepts_tauri_and_local_dev_hosts(self):
+        self.assertTrue(is_allowed_origin("http://tauri.localhost"))
+        self.assertTrue(is_allowed_origin("https://tauri.localhost"))
+        self.assertTrue(is_allowed_origin("http://127.0.0.1:5173"))
+        self.assertTrue(is_allowed_origin("http://localhost:4173"))
+        self.assertEqual(cors_origin_value("http://tauri.localhost"), "http://tauri.localhost")
+        self.assertFalse(is_allowed_origin("https://evil.example"))
+
+    def test_execution_trade_rejects_empty_trade_payload(self):
+        api = OkraWebApi(self.agent.root)
+        with self.assertRaises(ValueError):
+            api.execution_trade({"operation_type": "buy", "amount": 0})
+
+    def test_execution_conversion_requires_distinct_funds(self):
+        api = OkraWebApi(self.agent.root)
+        with self.assertRaises(ValueError):
+            api.execution_conversion({"out_fund_code": "F1", "in_fund_code": "F1", "out_amount": 100})
+
+    def test_intelligence_tolerates_non_numeric_heat_score(self):
+        report_date = "2026-05-15"
+        self.agent.write_json(
+            f"raw/news/{report_date}.json",
+            {
+                "items": [
+                    {
+                        "code": "F1",
+                        "title": "测试新闻",
+                        "summary": "测试摘要",
+                        "provider": "rss:test",
+                        "source_role": "theme_news",
+                        "published_at": "2026-05-15T10:00:00+08:00",
+                        "heat_score": "N/A",
+                        "risk_level": "low",
+                    }
+                ],
+                "dedup_summary": {"unique_item_count": 1, "mapped_item_count": 1},
+                "source_health": [],
+            },
+        )
+        api = OkraWebApi(self.agent.root)
+        payload = api.intelligence_page(report_date)
+        self.assertEqual(payload["intelligence"]["metrics"]["unique_news_count"], 1)
+        self.assertEqual(payload["intelligence"]["related_news_by_fund"]["F1"][0]["title"], "测试新闻")
+        self.assertTrue(payload["intelligence"]["related_news_by_fund"]["F1"][0]["news_id"].startswith("news_"))
+
+    def test_intelligence_news_id_is_stable_for_same_news(self):
+        report_date = "2026-05-15"
+        item = {
+            "code": "F1",
+            "title": "稳定资讯",
+            "summary": "相同内容应生成相同 news_id",
+            "provider": "rss:test",
+            "source_url": "https://example.test/news/1",
+            "published_at": "2026-05-15T10:00:00+08:00",
+            "heat_score": 0.8,
+        }
+        self.agent.write_json(f"raw/news/{report_date}.json", {"items": [item], "source_health": []})
+        api = OkraWebApi(self.agent.root)
+        first = api.intelligence_page(report_date)["intelligence"]["important_news"][0]["news_id"]
+        second = api.intelligence_page(report_date)["intelligence"]["important_news"][0]["news_id"]
+        self.assertEqual(first, second)
+
+    def test_open_url_uses_system_browser_for_http_urls(self):
+        api = OkraWebApi(self.agent.root)
+        with patch("app.web_api.webbrowser.open", return_value=True) as open_browser:
+            payload = api.open_url({"url": "https://example.test/news/1"})
+        self.assertTrue(payload["ok"])
+        open_browser.assert_called_once_with("https://example.test/news/1", new=2, autoraise=True)
+
+    def test_open_url_rejects_non_http_urls(self):
+        api = OkraWebApi(self.agent.root)
+        with self.assertRaises(ValueError):
+            api.open_url({"url": "file:///C:/Windows/win.ini"})
+
     def test_contract_handler_uses_api_error_contract(self):
         with self.assertRaises(HTTPError) as ctx:
             self._request_json("/api/unknown")
@@ -193,16 +340,30 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertIn("Unknown GET endpoint", body["error"]["error_message"])
         self.assertTrue(str(body["meta"]["generated_at"]).startswith("20"))
 
-    def _request_json(self, path: str) -> dict:
+    def _request_json(self, path: str, *, method: str = "GET", body: dict | None = None, headers: dict[str, str] | None = None) -> dict:
+        payload, _ = self._request_json_with_headers(path, method=method, body=body, headers=headers)
+        return payload
+
+    def _request_json_with_headers(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[dict, dict]:
         server = ThreadingHTTPServer(("127.0.0.1", 0), ContractRequestHandler)
         ContractRequestHandler.api = OkraWebApi(self.agent.root)
         thread = threading.Thread(target=server.handle_request, daemon=True)
         thread.start()
         try:
             port = server.server_address[1]
-            request = Request(f"http://127.0.0.1:{port}{path}")
+            data = json.dumps(body or {}).encode("utf-8") if method != "GET" else None
+            request = Request(f"http://127.0.0.1:{port}{path}", data=data, method=method, headers=headers or {})
+            if data is not None:
+                request.add_header("Content-Type", "application/json")
             with urlopen(request, timeout=5) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return json.loads(response.read().decode("utf-8")), dict(response.headers.items())
         finally:
             thread.join(timeout=5)
             server.server_close()

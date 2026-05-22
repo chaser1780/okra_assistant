@@ -363,6 +363,7 @@ def load_state(home: Path, selected: str | None = None) -> dict:
         "live_realtime": live_realtime_payload,
         "live_realtime_date": live_realtime_date,
         "aggregate": read_json(home / "db" / "agent_outputs" / selected / "aggregate.json", {}),
+        "llm_context": read_json(home / "db" / "llm_context" / f"{selected}.json", {}),
         "llm_raw": read_json(home / "db" / "llm_raw" / f"{selected}.json", {}),
         "review_result": read_json(home / "db" / "review_results" / f"{selected}_T0.json", {}),
         "review_results_for_date": load_review_results_for_date(home, selected),

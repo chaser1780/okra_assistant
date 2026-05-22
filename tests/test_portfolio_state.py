@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from helpers import TempAgentHome
-from portfolio_state import save_portfolio_state
+from common import lock_path
+from portfolio_state import save_portfolio_state, upsert_execution_status
 
 
 class PortfolioStateTests(unittest.TestCase):
@@ -80,6 +81,32 @@ class PortfolioStateTests(unittest.TestCase):
         self.assertEqual(snapshot_path.name, "2026-05-08.json")
         current = json.loads(current_path.read_text(encoding="utf-8"))
         self.assertIn("event_journal_path", current["state_metadata"])
+        self.assertFalse(lock_path(self.agent.root, "portfolio_state").exists())
+
+    def test_upsert_execution_status_releases_lock(self):
+        upsert_execution_status(
+            self.agent.root,
+            "2026-03-11",
+            {
+                "suggestion_id": "s1",
+                "fund_code": "F1",
+                "trade_amount": 100.0,
+                "linked_trade_date": "2026-03-11",
+            },
+        )
+        upsert_execution_status(
+            self.agent.root,
+            "2026-03-11",
+            {
+                "suggestion_id": "s1",
+                "fund_code": "F1",
+                "trade_amount": 50.0,
+                "linked_trade_date": "2026-03-12",
+            },
+        )
+        payload = json.loads((self.agent.root / "db/execution_status/2026-03-11.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["items"][0]["trade_amount"], 150.0)
+        self.assertFalse(lock_path(self.agent.root, "execution_status_2026-03-11").exists())
 
 
 if __name__ == "__main__":

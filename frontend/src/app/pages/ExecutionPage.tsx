@@ -9,6 +9,7 @@ import {
 } from "../../lib/api";
 import type { ExecutionSyncPayload, PortfolioItem, PortfolioPayload } from "../../lib/types";
 import { asNumber, signedMoney, text } from "../../lib/format";
+import { asList, cleanPayload, extractPreviewRows, fileToDataUrl, operationText, statusText, tradeTitle } from "../../lib/executionSync";
 import { Badge, Button, Card, SectionTitle } from "../../components/ui";
 
 type Props = {
@@ -58,6 +59,15 @@ const tradeLabels: Record<TradeKind, string> = {
   convert: "转换"
 };
 
+function positiveInput(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "Request failed");
+}
+
 export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   const today = new Date().toLocaleDateString("sv-SE");
   const firstFund = portfolio.items[0];
@@ -101,6 +111,29 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   const recognizedRows = useMemo(() => extractPreviewRows(screenshotPreview), [screenshotPreview]);
 
   async function submitTrade() {
+    if (tradeKind === "convert") {
+      if (!conversion.out_fund_code || !conversion.in_fund_code) {
+        setMessage("请选择转出和转入基金。");
+        return;
+      }
+      if (conversion.out_fund_code === conversion.in_fund_code) {
+        setMessage("转出基金和转入基金不能相同。");
+        return;
+      }
+      if (!positiveInput(conversion.out_amount) && !positiveInput(conversion.out_units)) {
+        setMessage("转换需要填写大于 0 的转出金额或转出份额。");
+        return;
+      }
+    } else {
+      if (!trade.fund_code) {
+        setMessage("请选择基金后再记录交易。");
+        return;
+      }
+      if (!positiveInput(trade.amount) && !positiveInput(trade.units)) {
+        setMessage("交易需要填写大于 0 的金额或份额。");
+        return;
+      }
+    }
     setBusy(true);
     setMessage(`正在记录${tradeLabels[tradeKind]}...`);
     try {
@@ -112,6 +145,8 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
         setMessage(`${tradeLabels[tradeKind]}已记录；未确认前进入待确认列表，到期后自动更新真实仓位。`);
       }
       onRefresh();
+    } catch (error) {
+      setMessage(`操作失败：${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -130,7 +165,19 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       );
       const result = await parseAlipayScreenshots({ snapshot_date: today, files: encoded });
       setScreenshotPreview(result);
-      setMessage("截图已识别，请核对识别结果，然后选择“更新”或“全部替换”。");
+      const rows = extractPreviewRows(result);
+      const autoParseAttempted = Boolean(result.auto_parse_attempted);
+      const autoParseOk = Boolean(result.auto_parse_ok);
+      const autoParseError = text(result.auto_parse_error);
+      if (autoParseAttempted && !autoParseOk) {
+        setMessage(`截图已保存，但自动识别失败：${autoParseError || "LLM 视觉接口未返回可用结果"}`);
+      } else if (rows.length) {
+        setMessage("截图已识别，请核对识别结果，然后选择“更新”或“全部替换”。");
+      } else {
+        setMessage("截图已保存，但没有识别到可同步的持仓。");
+      }
+    } catch (error) {
+      setMessage(`截图识别失败：${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -145,6 +192,8 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       setScreenshotPreview(null);
       setMessage(mode === "replace" ? "真实仓位已完全按截图替换。" : "真实仓位已按截图更新，未出现在截图中的持仓已保留。");
       onRefresh();
+    } catch (error) {
+      setMessage(`仓位同步失败：${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -156,6 +205,8 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       const result = await updateExecutionConfirmations({ date: today });
       setMessage(`待确认状态已刷新，落入真实仓位 ${text(result.portfolio_applied_count, "0")} 笔。`);
       onRefresh();
+    } catch (error) {
+      setMessage(`确认状态刷新失败：${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -443,58 +494,3 @@ function FundSelect({
 }
 
 const inputClass = "h-10 w-full rounded-md border border-slate-800 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-500/70";
-
-function cleanPayload(source: Record<string, string>) {
-  return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== ""));
-}
-
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-function extractPreviewRows(preview: Record<string, unknown> | null) {
-  if (!preview) return [];
-  const rows = asList(preview.matched_items).concat(asList(preview.new_items));
-  if (rows.length) return rows;
-  return asList(preview.detected_holdings).filter((row) => row.fund_code || row.matched_fund_code);
-}
-
-function asList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
-}
-
-function tradeTitle(item: Record<string, unknown>) {
-  if (item.operation_type === "convert") {
-    return `${text(item.out_fund_name ?? item.out_fund_code)} -> ${text(item.in_fund_name ?? item.in_fund_code)}`;
-  }
-  return text(item.fund_name ?? item.fund_code ?? item.trade_id, "真实操作");
-}
-
-function operationText(value: unknown) {
-  const map: Record<string, string> = {
-    buy: "买入",
-    sell: "卖出",
-    convert: "转换",
-    dca: "定投",
-    dividend: "分红",
-    fee: "费用",
-    cancel: "撤单"
-  };
-  return map[String(value ?? "")] ?? "操作";
-}
-
-function statusText(value: unknown) {
-  const map: Record<string, string> = {
-    submitted: "待确认",
-    confirmed: "已确认待到账",
-    settled: "已完成",
-    canceled: "已撤单",
-    failed: "失败"
-  };
-  return map[String(value ?? "")] ?? "待确认";
-}

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -8,6 +8,7 @@ from typing import Any
 from common import (
     agent_output_dir,
     decision_ledger_path,
+    decision_latest_path,
     decisions_path,
     dump_json,
     fund_profile_path,
@@ -33,8 +34,17 @@ def amount_hash(amount: float | int | str) -> str:
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:8]
 
 
-def make_decision_id(report_date: str, fund_code: str, action: str, amount: float | int | str) -> str:
-    return f"{report_date}:{fund_code}:{action}:{amount_hash(amount)}"
+def make_decision_id(
+    report_date: str,
+    fund_code: str,
+    action: str,
+    amount: float | int | str,
+    suggestion_id: str = "",
+    action_section: str = "",
+) -> str:
+    suffix = str(suggestion_id or action_section or "action")
+    safe_suffix = suffix.replace("/", "_").replace("\\", "_").replace(":", "_")
+    return f"{report_date}:{fund_code}:{safe_suffix}:{action}:{amount_hash(amount)}"
 
 
 def _portfolio_positions(portfolio: dict) -> dict[str, dict]:
@@ -118,7 +128,15 @@ def build_decisions_from_validated(agent_home, report_date: str) -> dict:
         decisions.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "decision_id": make_decision_id(report_date, fund_code, validated_action, validated_amount),
+                "decision_id": make_decision_id(
+                    report_date,
+                    fund_code,
+                    validated_action,
+                    validated_amount,
+                    str(action.get("suggestion_id", "") or ""),
+                    str(action.get("action_section", "") or ""),
+                ),
+                "suggestion_id": action.get("suggestion_id", ""),
                 "report_date": report_date,
                 "fund_code": fund_code,
                 "fund_name": action.get("fund_name", ""),
@@ -146,7 +164,9 @@ def build_decisions_from_validated(agent_home, report_date: str) -> dict:
 
 def write_daily_decisions(agent_home, report_date: str, decisions: dict) -> Path:
     agent_home = resolve_agent_home(agent_home)
-    return dump_json(decisions_path(agent_home, report_date), decisions)
+    path = dump_json(decisions_path(agent_home, report_date), decisions)
+    write_decision_latest(agent_home, decisions)
+    return path
 
 
 def append_decision_ledger(agent_home, decisions: dict) -> list[Path]:
@@ -170,6 +190,87 @@ def append_decision_ledger(agent_home, decisions: dict) -> list[Path]:
                 handle.write(json.dumps(decision, ensure_ascii=False, sort_keys=True) + "\n")
         written.append(path)
     return written
+
+
+def append_decision_outcome_events(agent_home, decisions: dict) -> list[Path]:
+    agent_home = resolve_agent_home(agent_home)
+    written: list[Path] = []
+    updated_at = str(decisions.get("outcomes_updated_at") or timestamp_now())
+    for decision in decisions.get("decisions", []) or []:
+        fund_code = str(decision.get("fund_code", ""))
+        decision_id = str(decision.get("decision_id", ""))
+        if not fund_code or not decision_id:
+            continue
+        path = decision_ledger_path(agent_home, fund_code)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event_id = f"{decision_id}:outcome:{updated_at}"
+        exists = False
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    if str(json.loads(line).get("event_id", "")) == event_id:
+                        exists = True
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if not exists:
+            event = {
+                "schema_version": SCHEMA_VERSION,
+                "event_type": "outcome_update",
+                "event_id": event_id,
+                "decision_id": decision_id,
+                "fund_code": fund_code,
+                "report_date": decision.get("report_date", decisions.get("report_date", "")),
+                "outcomes": decision.get("outcomes", {}),
+                "attribution": decision.get("attribution", {}),
+                "updated_at": updated_at,
+            }
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        written.append(path)
+    return written
+
+
+def write_decision_latest(agent_home, decisions: dict) -> list[Path]:
+    agent_home = resolve_agent_home(agent_home)
+    grouped: dict[str, list[dict]] = {}
+    for decision in decisions.get("decisions", []) or []:
+        fund_code = str(decision.get("fund_code", ""))
+        if not fund_code:
+            continue
+        grouped.setdefault(fund_code, []).append(decision)
+
+    written: list[Path] = []
+    for fund_code, fund_decisions in grouped.items():
+        latest_date = max(str(item.get("report_date", "")) for item in fund_decisions)
+        path = decision_latest_path(agent_home, fund_code)
+        if path.exists():
+            existing = load_json(path)
+            if isinstance(existing, dict) and str(existing.get("report_date", "")) > latest_date:
+                continue
+        latest_decisions = [item for item in fund_decisions if str(item.get("report_date", "")) == latest_date]
+        latest_decisions.sort(key=lambda item: str(item.get("decision_id", "")))
+        decision = latest_decisions[-1] if latest_decisions else {}
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "fund_code": fund_code,
+            "report_date": latest_date,
+            "updated_at": timestamp_now(),
+            "decision": decision,
+            "decisions": latest_decisions,
+        }
+        dump_json(path, payload)
+        written.append(path)
+    return written
+
+
+def load_decision_latest(agent_home, fund_code: str) -> dict:
+    agent_home = resolve_agent_home(agent_home)
+    path = decision_latest_path(agent_home, fund_code)
+    if not path.exists():
+        return {}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {}
 
 
 def load_decisions(agent_home, report_date: str) -> dict:

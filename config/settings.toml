@@ -47,7 +47,20 @@ timeout_seconds = 15
 lookback_hours = 72
 source_role = "market_news"
 
+[providers.query_news]
+enabled = true
+primary = "eastmoney_search_api"
+fallbacks = []
+timeout_seconds = 12
+include_direct_queries = true
+max_queries = 10
+max_queries_per_bucket = 5
+results_per_query = 3
+dedup_window_hours = 12
+source_role = "theme_news"
+
 [providers.sentiment_news]
+enabled = false
 primary = "xueqiu_web"
 fallbacks = ["douyin_web"]
 timeout_seconds = 20
@@ -66,6 +79,40 @@ xueqiu_profile_path = ""
 douyin_browser = "edge"
 douyin_profile = "Default"
 douyin_profile_path = ""
+
+[providers.news_classification]
+enabled = true
+mode = "llm_first"
+batch_size = 20
+timeout_seconds = 45
+fallback = "rule"
+model = ""
+
+[providers.rss_news]
+enabled = true
+timeout_seconds = 12
+feeds = [
+  { name = "sina_fund", url = "https://rss.sina.com.cn/finance/fund.xml", provider = "rss:sina_fund", source_role = "theme_news", source_tier = "financial_media", enabled = true },
+  { name = "chinanews_finance", url = "https://www.chinanews.com.cn/rss/finance.xml", provider = "rss:chinanews_finance", source_role = "market_news", source_tier = "mainstream_media", enabled = true },
+  { name = "chinanews_importnews", url = "https://www.chinanews.com.cn/rss/importnews.xml", provider = "rss:chinanews_importnews", source_role = "market_news", source_tier = "mainstream_media", enabled = true },
+  { name = "xinhuanet_fortune", url = "http://www.xinhuanet.com/fortune/news_fortune.xml", provider = "rss:xinhuanet_fortune", source_role = "market_news", source_tier = "state_media", enabled = true },
+  { name = "ifeng_fund", url = "http://finance.ifeng.com/rss/fundnews.xml", provider = "rss:ifeng_fund", source_role = "theme_news", source_tier = "financial_media", enabled = true },
+  { name = "ifeng_stock", url = "http://finance.ifeng.com/rss/stocknews.xml", provider = "rss:ifeng_stock", source_role = "market_news", source_tier = "market_media", enabled = true },
+  { name = "ifeng_headnews", url = "http://finance.ifeng.com/rss/headnews.xml", provider = "rss:ifeng_headnews", source_role = "market_news", source_tier = "market_media", enabled = true },
+  { name = "ifeng_money", url = "http://finance.ifeng.com/rss/moneynews.xml", provider = "rss:ifeng_money", source_role = "theme_news", source_tier = "financial_media", enabled = true }
+]
+
+[providers.regulatory_news]
+enabled = true
+timeout_seconds = 15
+feeds = [
+  { name = "sse_general_announcements", url = "https://www.sse.com.cn/disclosure/announcement/general/", provider = "reg:sse_general", source_role = "regulatory_news", source_tier = "official_policy", enabled = true },
+  { name = "amac_notice_board", url = "https://www.amac.org.cn/xwfb/tzgg/", provider = "reg:amac_notice", source_role = "regulatory_news", source_tier = "official_policy", enabled = true },
+  { name = "szse_listed_notices", url = "https://www.szse.cn/disclosure/listed/notice/index.html", provider = "reg:szse_listed_notice", source_role = "regulatory_news", source_tier = "official_policy", enabled = true },
+  { name = "szse_inquiries", url = "https://www.szse.cn/disclosure/supervision/inquire/index.html", provider = "reg:szse_inquiry", source_role = "regulatory_news", source_tier = "official_policy", enabled = true },
+  { name = "szse_supervision_measure", url = "https://www.szse.cn/disclosure/supervision/measure/measure/index.html", provider = "reg:szse_supervision_measure", source_role = "regulatory_news", source_tier = "official_policy", enabled = true },
+  { name = "szse_disciplinary_action", url = "https://www.szse.cn/disclosure/supervision/measure/pushish/index.html", provider = "reg:szse_disciplinary_action", source_role = "regulatory_news", source_tier = "official_policy", enabled = true }
+]
 
 [providers.intraday_proxy]
 name = "sina_hq_proxy"

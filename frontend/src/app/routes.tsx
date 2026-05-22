@@ -1,14 +1,14 @@
 import { AlertTriangle, RefreshCcw } from "lucide-react";
 import type { ReactNode } from "react";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { WorkbenchLayout, type PageKey } from "../components/okra/WorkbenchLayout";
 import { Button, Card, EmptyState } from "../components/ui";
-import { ApiError, runLongMemoryAction, runTask } from "../lib/api";
-import { getTodayAnalysisRuntime, hasTodayAnalysisResult, isTodayAnalysisRunComplete } from "../lib/todayAnalysis";
+import { runLongMemoryAction, runTask } from "../lib/api";
 import {
   useExecutionPageQuery,
+  useIntelligencePageQuery,
   usePortfolioPageQuery,
   useRealtimePageQuery,
   useResearchPageQuery,
@@ -18,11 +18,14 @@ import {
   useTodayPageQuery,
   workbenchQueryKeys
 } from "../lib/workbenchQuery";
+import { fundHref, pageKeyFromPath, pageTitles, routeForPage } from "./routeMeta";
+import { useTodayAnalysisRunner } from "./useTodayAnalysisRunner";
 
 const TodayPage = lazy(async () => ({ default: (await import("./pages/TodayPage")).TodayPage }));
 const PortfolioPage = lazy(async () => ({ default: (await import("./pages/PortfolioPage")).PortfolioPage }));
 const ExecutionPage = lazy(async () => ({ default: (await import("./pages/ExecutionPage")).ExecutionPage }));
 const ResearchPage = lazy(async () => ({ default: (await import("./pages/ResearchPage")).ResearchPage }));
+const IntelligencePage = lazy(async () => ({ default: (await import("./pages/IntelligencePage")).IntelligencePage }));
 const RealtimePage = lazy(async () => ({ default: (await import("./pages/RealtimePage")).RealtimePage }));
 const ReviewPage = lazy(async () => ({ default: (await import("./pages/ReviewPage")).ReviewPage }));
 const SystemPage = lazy(async () => ({ default: (await import("./pages/SystemPage")).SystemPage }));
@@ -31,17 +34,6 @@ const FundDetailPage = lazy(async () => ({ default: (await import("./pages/FundD
 type WorkbenchRouteContext = {
   selectedDate: string;
   refreshAll: () => Promise<void>;
-};
-
-const pageTitles: Record<PageKey, { eyebrow: string; title: string }> = {
-  today: { eyebrow: "OKRA", title: "长期记忆投资工作台" },
-  portfolio: { eyebrow: "Portfolio", title: "组合与持仓" },
-  execution: { eyebrow: "Execution", title: "实际执行同步" },
-  research: { eyebrow: "Research", title: "研究建议看板" },
-  realtime: { eyebrow: "Realtime", title: "实时估值监控" },
-  review: { eyebrow: "Memory", title: "长期记忆与复盘" },
-  system: { eyebrow: "System", title: "系统运行状态" },
-  fundDetail: { eyebrow: "Fund", title: "基金详情" }
 };
 
 export function AppRoutes() {
@@ -53,6 +45,7 @@ export function AppRoutes() {
         <Route path="/portfolio" element={<PortfolioRoute />} />
         <Route path="/execution" element={<ExecutionRoute />} />
         <Route path="/research" element={<ResearchRoute />} />
+        <Route path="/intelligence" element={<IntelligenceRoute />} />
         <Route path="/realtime" element={<RealtimeRoute />} />
         <Route path="/review" element={<ReviewRoute />} />
         <Route path="/system" element={<SystemRoute />} />
@@ -66,15 +59,11 @@ export function AppRoutes() {
 function WorkbenchShell() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [dailyRunning, setDailyRunning] = useState(false);
   const [realtimeRunning, setRealtimeRunning] = useState(false);
-  const [error, setError] = useState("");
-  const [activeDailyRunId, setActiveDailyRunId] = useState("");
+  const [realtimeError, setRealtimeError] = useState("");
   const queryClient = useQueryClient();
   const requestedDate = searchParams.get("date") ?? "";
   const pageKey = pageKeyFromPath(location.pathname);
-  const autoDailyStarted = useRef("");
-  const dailyPollRef = useRef<number | null>(null);
 
   const shellQuery = useShellQuery(requestedDate || undefined);
   const selectedDate = requestedDate || shellQuery.data?.selectedDate || "";
@@ -84,6 +73,8 @@ function WorkbenchShell() {
   const refreshAll = async () => {
     await queryClient.invalidateQueries({ queryKey: workbenchQueryKeys.root });
   };
+  const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({ todayQuery, refreshAll });
+  const error = dailyError || realtimeError;
 
   useEffect(() => {
     if (!shellQuery.data?.selectedDate || requestedDate) return;
@@ -97,104 +88,9 @@ function WorkbenchShell() {
     );
   }, [requestedDate, setSearchParams, shellQuery.data?.selectedDate]);
 
-  useEffect(() => {
-    return () => {
-      if (dailyPollRef.current !== null) {
-        window.clearInterval(dailyPollRef.current);
-        dailyPollRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const data = todayQuery.data;
-    if (!data || dailyRunning) return;
-    const today = localDateString();
-    if (data.selectedDate !== today) return;
-    const runtime = getTodayAnalysisRuntime(data.system);
-    if (String(runtime?.status ?? "").toLowerCase() === "running" && String(runtime?.runId ?? "")) {
-      setDailyRunning(true);
-      setActiveDailyRunId(String(runtime?.runId ?? ""));
-      void pollDailyResult(String(runtime?.runId ?? ""));
-      return;
-    }
-    if (autoDailyStarted.current === today) return;
-    if (hasTodayAnalysisResult(data)) return;
-    autoDailyStarted.current = today;
-    void triggerDaily(true);
-  }, [dailyRunning, todayQuery.data]);
-
-  async function pollDailyResult(runId: string) {
-    if (!runId) return;
-    if (dailyPollRef.current !== null) {
-      window.clearInterval(dailyPollRef.current);
-    }
-    let attempts = 0;
-    const startedAt = Date.now();
-    dailyPollRef.current = window.setInterval(() => {
-      attempts += 1;
-      void todayQuery
-        .refetch()
-        .then((result) => {
-          const data = result.data;
-          const runtime = getTodayAnalysisRuntime(data?.system);
-          const timedOut = attempts >= 240 || Date.now() - startedAt > 1_200_000;
-          if (!data || isTodayAnalysisRunComplete(runtime, runId) || timedOut) {
-            if (dailyPollRef.current !== null) {
-              window.clearInterval(dailyPollRef.current);
-              dailyPollRef.current = null;
-            }
-            setDailyRunning(false);
-            setActiveDailyRunId("");
-            void refreshAll();
-          }
-        })
-        .catch((err) => {
-          if (dailyPollRef.current !== null) {
-            window.clearInterval(dailyPollRef.current);
-            dailyPollRef.current = null;
-          }
-          setDailyRunning(false);
-          setActiveDailyRunId("");
-          setError(err instanceof Error ? err.message : "刷新今日分析结果失败。");
-        });
-    }, 5000);
-  }
-
-  async function triggerDaily(automatic = false) {
-    setError("");
-    setDailyRunning(true);
-    try {
-      const result = await runTask("daily", { force: !automatic });
-      const runId = String(result.runId ?? "");
-      setActiveDailyRunId(runId);
-      await refreshAll();
-      if (runId) {
-        await pollDailyResult(runId);
-      } else {
-        setDailyRunning(false);
-        setActiveDailyRunId("");
-      }
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.code === "already_running") {
-        const runId = String(err.details?.runId ?? "");
-        setError("");
-        setDailyRunning(true);
-        setActiveDailyRunId(runId);
-        await refreshAll();
-        if (runId) {
-          await pollDailyResult(runId);
-          return;
-        }
-      }
-      setDailyRunning(false);
-      setActiveDailyRunId("");
-      setError(err instanceof Error ? err.message : "今日分析启动失败。");
-    }
-  }
 
   async function triggerRealtime() {
-    setError("");
+    setRealtimeError("");
     setRealtimeRunning(true);
     try {
       await runTask("realtime");
@@ -204,7 +100,7 @@ function WorkbenchShell() {
       }, 900);
     } catch (err) {
       setRealtimeRunning(false);
-      setError(err instanceof Error ? err.message : "实时刷新启动失败。");
+      setRealtimeError(err instanceof Error ? err.message : "实时刷新启动失败。");
     }
   }
 
@@ -230,7 +126,7 @@ function WorkbenchShell() {
       fundCode={pageKey === "fundDetail" ? location.pathname.split("/").pop() : undefined}
     >
       {pageKey !== "fundDetail" ? (
-        <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center sm:gap-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-normal text-cyan-300">{title.eyebrow}</div>
             <h1 className="mt-1 text-2xl font-black text-slate-50">{title.title}</h1>
@@ -300,6 +196,19 @@ function ResearchRoute() {
     <RouteSuspense>
       <QueryBoundary query={query}>
         {(data) => <ResearchPage research={data.research} onOpenFundDetail={(code) => navigate(fundHref(code, selectedDate, "research"))} />}
+      </QueryBoundary>
+    </RouteSuspense>
+  );
+}
+
+function IntelligenceRoute() {
+  const { selectedDate } = useWorkbenchContext();
+  const navigate = useNavigate();
+  const query = useIntelligencePageQuery(selectedDate || undefined, { enabled: Boolean(selectedDate) });
+  return (
+    <RouteSuspense>
+      <QueryBoundary query={query}>
+        {(data) => <IntelligencePage intelligence={data.intelligence} onOpenFundDetail={(code) => navigate(fundHref(code, selectedDate, "intelligence"))} />}
       </QueryBoundary>
     </RouteSuspense>
   );
@@ -395,53 +304,6 @@ function QueryBoundary<T>({
   }
 
   return <>{children(query.data)}</>;
-}
-
-function pageKeyFromPath(pathname: string): PageKey {
-  if (pathname.startsWith("/portfolio")) return "portfolio";
-  if (pathname.startsWith("/execution")) return "execution";
-  if (pathname.startsWith("/research")) return "research";
-  if (pathname.startsWith("/realtime")) return "realtime";
-  if (pathname.startsWith("/review")) return "review";
-  if (pathname.startsWith("/system")) return "system";
-  if (pathname.startsWith("/fund/")) return "fundDetail";
-  return "today";
-}
-
-function routeForPage(page: PageKey, selectedDate: string) {
-  const path =
-    page === "today"
-      ? "/today"
-      : page === "portfolio"
-        ? "/portfolio"
-        : page === "execution"
-          ? "/execution"
-          : page === "research"
-            ? "/research"
-            : page === "realtime"
-              ? "/realtime"
-              : page === "review"
-                ? "/review"
-                : page === "system"
-                  ? "/system"
-                  : "/today";
-  return selectedDate ? `${path}?date=${encodeURIComponent(selectedDate)}` : path;
-}
-
-function fundHref(fundCode: string, selectedDate: string, from: Exclude<PageKey, "fundDetail">) {
-  const params = new URLSearchParams();
-  if (selectedDate) params.set("date", selectedDate);
-  params.set("from", from);
-  const query = params.toString();
-  return `/fund/${encodeURIComponent(fundCode)}${query ? `?${query}` : ""}`;
-}
-
-function localDateString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function useWorkbenchContext() {

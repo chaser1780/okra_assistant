@@ -336,6 +336,7 @@ def build_source_health_item(
     notes: list[str] | None = None,
     error_count: int = 0,
     warning_count: int = 0,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     items = items or []
     stale_count = sum(1 for item in items if bool(item.get("stale", False)))
@@ -354,6 +355,7 @@ def build_source_health_item(
         "latest_as_of": latest_as_of,
         "latest_retrieved_at": latest_retrieved_at,
         "notes": list(notes or []),
+        "metrics": dict(metrics or {}),
     }
 
 

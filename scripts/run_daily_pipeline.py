@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,14 +16,18 @@ from common import actual_trade_dir, load_review_config, resolve_agent_home, res
 from common import (
     agent_output_dir,
     committee_advice_path,
+    committee_decision_bundle_path,
     evidence_index_path,
     estimated_nav_path,
     fund_profile_path,
     intraday_proxy_path,
     learning_report_path,
+    legacy_portfolio_path,
     llm_advice_path,
     llm_context_path,
+    long_memory_export_path,
     news_path,
+    portfolio_state_current_path,
     portfolio_report_path,
     quote_path,
     recommendation_delta_path,
@@ -31,9 +38,89 @@ from common import (
     validated_advice_path,
 )
 from preflight_check import perform_preflight
+from rag_config import rag_agent_shadow_settings, rag_db_path
+from rag_index_store import connect_store
 from run_manifest_utils import begin_step, finalize_manifest, finish_step, new_run_manifest, write_manifest
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class PipelineStep:
+    script_name: str
+    outputs: tuple = field(default_factory=tuple)
+    inputs: tuple = field(default_factory=tuple)
+    can_resume: bool = True
+    stale_policy: str = "outputs_newer_than_inputs"
+
+    def output_paths(self, agent_home: Path, report_date: str) -> list[Path]:
+        return [builder(agent_home, report_date) for builder in self.outputs]
+
+    def input_paths(self, agent_home: Path, report_date: str) -> list[Path]:
+        return [builder(agent_home, report_date) for builder in self.inputs]
+
+    def is_fresh(self, agent_home: Path, report_date: str) -> bool:
+        if not self.can_resume:
+            return False
+        outputs = self.output_paths(agent_home, report_date)
+        if not outputs or any(not path.exists() for path in outputs):
+            return False
+        inputs = [path for path in self.input_paths(agent_home, report_date) if path.exists()]
+        if not inputs:
+            return True
+        oldest_output_mtime = min(path.stat().st_mtime for path in outputs)
+        newest_input_mtime = max(path.stat().st_mtime for path in inputs)
+        return oldest_output_mtime >= newest_input_mtime
+
+
+def _dated_path(builder):
+    return lambda agent_home, report_date: builder(agent_home, report_date)
+
+
+def _fixed_path(builder):
+    return lambda agent_home, report_date: builder(agent_home)
+
+
+def _config_path(name: str):
+    return lambda agent_home, report_date: agent_home / "config" / name
+
+
+def _project_path(*parts: str):
+    return lambda agent_home, report_date: SCRIPT_DIR.parent.joinpath(*parts)
+
+
+def _stable_digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _rag_manifest_freshness_marker(agent_home: Path, report_date: str) -> Path:
+    marker = agent_home / "db" / "rag" / "active_manifest_set.sha256"
+    try:
+        db_path = rag_db_path(agent_home)
+        if not db_path.exists():
+            return marker
+        manifest_rows = []
+        with connect_store(agent_home) as conn:
+            manifest_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT scope_key, manifest_id, activated_at
+                    FROM active_manifests
+                    ORDER BY scope_key
+                    """
+                ).fetchall()
+            ]
+        if not manifest_rows and not marker.exists():
+            return marker
+        digest = _stable_digest(manifest_rows)
+        previous = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
+        if digest != previous:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(digest, encoding="utf-8")
+    except Exception:
+        pass
+    return marker
 
 
 def _is_up_to_date(target: Path, dependency: Path | None = None) -> bool:
@@ -48,35 +135,121 @@ def _aggregate_path(agent_home: Path, report_date: str) -> Path:
     return agent_output_dir(agent_home, report_date) / "aggregate.json"
 
 
-def _simple_output_exists(path_builder):
-    return lambda agent_home, report_date: path_builder(agent_home, report_date).exists()
-
-
 STEP_OUTPUT_CHECKS = {
-    "fetch_fund_quotes.py": _simple_output_exists(quote_path),
-    "fetch_fund_news.py": _simple_output_exists(news_path),
-    "fetch_fund_profiles.py": _simple_output_exists(fund_profile_path),
-    "score_funds.py": _simple_output_exists(score_path),
-    "fetch_intraday_proxies.py": _simple_output_exists(intraday_proxy_path),
-    "fetch_realtime_estimate.py": _simple_output_exists(estimated_nav_path),
-    "build_llm_context.py": _simple_output_exists(llm_context_path),
-    "build_evidence_index.py": _simple_output_exists(evidence_index_path),
-    "build_source_health_snapshot.py": _simple_output_exists(source_health_path),
-    "run_learning_cycle.py": _simple_output_exists(learning_report_path),
-    "run_multiagent_research.py": lambda agent_home, report_date: _aggregate_path(agent_home, report_date).exists(),
-    "build_recommendation_delta.py": _simple_output_exists(recommendation_delta_path),
-    "build_evaluation_snapshot.py": _simple_output_exists(evaluation_snapshot_path),
-    "build_daily_report.py": lambda agent_home, report_date: _is_up_to_date(report_path(agent_home, report_date), validated_advice_path(agent_home, report_date)),
-    "generate_llm_advice.py": lambda agent_home, report_date: _is_up_to_date(llm_advice_path(agent_home, report_date), _aggregate_path(agent_home, report_date))
-    and _is_up_to_date(committee_advice_path(agent_home, report_date), _aggregate_path(agent_home, report_date)),
-    "validate_llm_advice.py": lambda agent_home, report_date: _is_up_to_date(validated_advice_path(agent_home, report_date), llm_advice_path(agent_home, report_date)),
-    "build_portfolio_report.py": lambda agent_home, report_date: _is_up_to_date(portfolio_report_path(agent_home, report_date), validated_advice_path(agent_home, report_date)),
+    "fetch_fund_quotes.py": PipelineStep("fetch_fund_quotes.py", outputs=(_dated_path(quote_path),)),
+    "fetch_fund_news.py": PipelineStep("fetch_fund_news.py", outputs=(_dated_path(news_path),)),
+    "fetch_fund_profiles.py": PipelineStep("fetch_fund_profiles.py", outputs=(_dated_path(fund_profile_path),)),
+    "score_funds.py": PipelineStep(
+        "score_funds.py",
+        outputs=(_dated_path(score_path),),
+        inputs=(_dated_path(quote_path), _dated_path(news_path)),
+    ),
+    "fetch_intraday_proxies.py": PipelineStep("fetch_intraday_proxies.py", outputs=(_dated_path(intraday_proxy_path),)),
+    "fetch_realtime_estimate.py": PipelineStep(
+        "fetch_realtime_estimate.py",
+        outputs=(_dated_path(estimated_nav_path),),
+        inputs=(_dated_path(quote_path),),
+    ),
+    "build_llm_context.py": PipelineStep(
+        "build_llm_context.py",
+        outputs=(_dated_path(llm_context_path),),
+        inputs=(
+            _dated_path(quote_path),
+            _dated_path(news_path),
+            _dated_path(fund_profile_path),
+            _dated_path(intraday_proxy_path),
+            _dated_path(estimated_nav_path),
+            _fixed_path(portfolio_state_current_path),
+            _fixed_path(legacy_portfolio_path),
+            _fixed_path(long_memory_export_path),
+        ),
+    ),
+    "build_evidence_index.py": PipelineStep(
+        "build_evidence_index.py",
+        outputs=(_dated_path(evidence_index_path),),
+        inputs=(_dated_path(llm_context_path),),
+    ),
+    "build_source_health_snapshot.py": PipelineStep(
+        "build_source_health_snapshot.py",
+        outputs=(_dated_path(source_health_path),),
+        inputs=(_dated_path(llm_context_path), _dated_path(quote_path), _dated_path(news_path), _dated_path(intraday_proxy_path), _dated_path(estimated_nav_path)),
+    ),
+    "run_learning_cycle.py": PipelineStep(
+        "run_learning_cycle.py",
+        outputs=(_dated_path(learning_report_path),),
+        inputs=(_dated_path(validated_advice_path),),
+    ),
+    "run_multiagent_research.py": PipelineStep(
+        "run_multiagent_research.py",
+        outputs=(lambda agent_home, report_date: _aggregate_path(agent_home, report_date),),
+        inputs=(
+            _dated_path(llm_context_path),
+            _dated_path(evidence_index_path),
+            _config_path("agents.toml"),
+            _config_path("llm.toml"),
+            _config_path("rag.toml"),
+            _project_path("scripts", "run_multiagent_research.py"),
+            _project_path("scripts", "agent_inputs.py"),
+            _project_path("scripts", "rag_index_store.py"),
+            _project_path("scripts", "rag_ingest.py"),
+            _project_path("scripts", "rag_retriever.py"),
+            _project_path("scripts", "rag_query_planner.py"),
+            _project_path("scripts", "run_multiagent_constants.py"),
+            _project_path("scripts", "committee_synthesis.py"),
+            _rag_manifest_freshness_marker,
+        ),
+    ),
+    "generate_llm_advice.py": PipelineStep(
+        "generate_llm_advice.py",
+        outputs=(_dated_path(llm_advice_path), _dated_path(committee_advice_path), _dated_path(committee_decision_bundle_path)),
+        inputs=(
+            lambda agent_home, report_date: _aggregate_path(agent_home, report_date),
+            _dated_path(llm_context_path),
+            _config_path("llm.toml"),
+            _project_path("scripts", "generate_llm_advice.py"),
+            _project_path("scripts", "committee_synthesis.py"),
+        ),
+    ),
+    "validate_llm_advice.py": PipelineStep(
+        "validate_llm_advice.py",
+        outputs=(_dated_path(validated_advice_path),),
+        inputs=(
+            _dated_path(llm_advice_path),
+            _dated_path(committee_advice_path),
+            _dated_path(committee_decision_bundle_path),
+            _fixed_path(portfolio_state_current_path),
+            _fixed_path(legacy_portfolio_path),
+        ),
+    ),
+    "build_recommendation_delta.py": PipelineStep(
+        "build_recommendation_delta.py",
+        outputs=(_dated_path(recommendation_delta_path),),
+        inputs=(_dated_path(validated_advice_path),),
+    ),
+    "build_evaluation_snapshot.py": PipelineStep(
+        "build_evaluation_snapshot.py",
+        outputs=(_dated_path(evaluation_snapshot_path),),
+        inputs=(_dated_path(validated_advice_path),),
+    ),
+    "build_daily_report.py": PipelineStep(
+        "build_daily_report.py",
+        outputs=(_dated_path(report_path),),
+        inputs=(_dated_path(validated_advice_path), _dated_path(llm_context_path)),
+    ),
+    "build_portfolio_report.py": PipelineStep(
+        "build_portfolio_report.py",
+        outputs=(_dated_path(portfolio_report_path),),
+        inputs=(_dated_path(validated_advice_path), _fixed_path(portfolio_state_current_path), _fixed_path(legacy_portfolio_path)),
+    ),
+    "snapshot_run.py": PipelineStep("snapshot_run.py", can_resume=False),
+    "rag_ingest.py": PipelineStep("rag_ingest.py", can_resume=False),
+    "rag_eval.py": PipelineStep("rag_eval.py", can_resume=False),
 }
 
 
 def step_output_exists(agent_home: Path, report_date: str, script_name: str, extra_args: list[str] | None = None) -> bool:
-    checker = STEP_OUTPUT_CHECKS.get(script_name)
-    return bool(checker and checker(agent_home, report_date))
+    step = STEP_OUTPUT_CHECKS.get(script_name)
+    return bool(step and step.is_fresh(agent_home, report_date))
 
 
 def run_step(
@@ -166,7 +339,47 @@ def maybe_run_step(
     return run_step(script_name, agent_home, report_date, demo, extra_args, step_label, record_step=record_step)
 
 
-def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool, resume_existing: bool, record_step=None) -> dict[str, float]:
+def _rag_shadow_enabled(agent_home: Path, cli_enabled: bool = False) -> bool:
+    settings = rag_agent_shadow_settings(agent_home)
+    return bool(cli_enabled or settings.get("enabled", False))
+
+
+def run_rag_shadow(agent_home: Path, report_date: str, *, strict: bool = False, record_step=None) -> dict[str, float]:
+    settings = rag_agent_shadow_settings(agent_home)
+    timings: dict[str, float] = {}
+    failures: list[str] = []
+
+    def run_optional(script_name: str, extra_args: list[str], label: str) -> None:
+        try:
+            timings[script_name] = run_step(
+                script_name,
+                agent_home,
+                report_date,
+                False,
+                extra_args=extra_args,
+                step_label=label,
+                record_step=record_step,
+            )
+        except Exception as exc:
+            message = f"{script_name}: {exc}"
+            failures.append(message)
+            print(f">>> RAG_SHADOW_DEGRADED {message}", flush=True)
+
+    run_optional("rag_ingest.py", ["--write", "--all"], "rag_shadow_ingest")
+    if settings.get("compare_legacy", True):
+        eval_args = ["--compare-legacy"]
+        if not settings.get("write_trace", True):
+            eval_args.append("--no-trace")
+        run_optional("rag_eval.py", eval_args, "rag_shadow_eval")
+
+    if failures and strict:
+        raise RuntimeError("; ".join(failures))
+    if failures:
+        timings["rag_shadow_degraded"] = 0.0
+    return timings
+
+
+def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool, resume_existing: bool, record_step=None, rag_shadow: bool = False, rag_strict: bool = False) -> dict[str, float]:
     timings: dict[str, float] = {}
     timings.update(
         run_parallel_steps(
@@ -241,6 +454,8 @@ def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool,
     timings["build_evaluation_snapshot.py"] = maybe_run_step("build_evaluation_snapshot.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_daily_report.py"] = maybe_run_step("build_daily_report.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_portfolio_report.py"] = maybe_run_step("build_portfolio_report.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
+    if _rag_shadow_enabled(agent_home, rag_shadow):
+        timings.update(run_rag_shadow(agent_home, report_date, strict=rag_strict, record_step=record_step))
     timings["snapshot_run.py"] = run_step("snapshot_run.py", agent_home, report_date, False, record_step=record_step)
     return timings
 
@@ -349,6 +564,8 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="Run the pipeline with deterministic mock data.")
     parser.add_argument("--llm-mock", action="store_true", help="Run the LLM stage in mock mode without calling the remote API.")
     parser.add_argument("--resume-existing", action="store_true", help="Resume from existing step outputs where safe.")
+    parser.add_argument("--rag-shadow", action="store_true", help="Run optional RAG shadow ingest/eval without changing final advice.")
+    parser.add_argument("--rag-strict", action="store_true", help="Fail the pipeline if RAG shadow ingest/eval fails.")
     args = parser.parse_args()
 
     agent_home = resolve_agent_home(args.agent_home)
@@ -390,7 +607,16 @@ def main() -> None:
         if preflight["status"] == "failed":
             raise RuntimeError("Preflight failed. See db/preflight/latest.json for details.")
         if selected_mode == "intraday":
-            timings = run_intraday(agent_home, report_date, args.demo, args.llm_mock, args.resume_existing, record_step=record_step)
+            timings = run_intraday(
+                agent_home,
+                report_date,
+                args.demo,
+                args.llm_mock,
+                args.resume_existing,
+                record_step=record_step,
+                rag_shadow=bool(args.rag_shadow),
+                rag_strict=bool(args.rag_strict),
+            )
         else:
             timings = run_nightly(agent_home, report_date, args.demo, args.resume_existing, record_step=record_step)
         finalize_manifest(

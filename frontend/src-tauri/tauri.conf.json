@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OKRA 长期记忆投资工作台",
+  "productName": "OKRA \u957f\u671f\u8bb0\u5fc6\u6295\u8d44\u5de5\u4f5c\u53f0",
   "version": "0.1.0",
   "identifier": "com.okra.workbench",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OKRA 长期记忆投资工作台",
+        "title": "OKRA \u957f\u671f\u8bb0\u5fc6\u6295\u8d44\u5de5\u4f5c\u53f0",
         "width": 1560,
         "height": 980,
         "minWidth": 1280,

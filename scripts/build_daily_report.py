@@ -15,7 +15,22 @@ def related_news(news_lookup: dict[str, list[dict]], fund_code: str, limit: int 
     items = news_lookup.get(fund_code, [])[:limit]
     if not items:
         return ["- 今日未抓到直接相关的新增新闻"]
-    return [f"- [{item['title']}]({item['url']})（{item['source_name']}，{item['published_at']}，{item['impact']}）" for item in items]
+    lines = []
+    for item in items:
+        impact = str(item.get("impact", "") or "")
+        if not impact:
+            sentiment_score = float(item.get("sentiment_score", 0.0) or 0.0)
+            if sentiment_score > 0.15:
+                impact = "positive"
+            elif sentiment_score < -0.15:
+                impact = "negative"
+            else:
+                impact = "neutral"
+        lines.append(
+            f"- [{item.get('title', '未命名新闻')}]({item.get('url', '')})"
+            f"（{item.get('source_name', item.get('provider', 'unknown'))}，{item.get('published_at', '')}，{impact}）"
+        )
+    return lines
 
 
 def render_action_summary(advice: dict) -> str:

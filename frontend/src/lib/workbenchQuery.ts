@@ -2,6 +2,7 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import {
   getExecutionPage,
   getFundDetailPage,
+  getIntelligencePage,
   getPortfolioPage,
   getRealtimePage,
   getResearchPage,
@@ -13,6 +14,7 @@ import {
 import type {
   ExecutionPagePayload,
   FundDetailPayload,
+  IntelligencePagePayload,
   PortfolioPagePayload,
   RealtimePagePayload,
   ResearchPagePayload,
@@ -29,6 +31,7 @@ export const workbenchQueryKeys = {
   portfolio: (date?: string) => ["workbench", "portfolio", date ?? "latest"] as const,
   execution: (date?: string) => ["workbench", "execution", date ?? "latest"] as const,
   research: (date?: string) => ["workbench", "research", date ?? "latest"] as const,
+  intelligence: (date?: string) => ["workbench", "intelligence", date ?? "latest"] as const,
   realtime: (date?: string) => ["workbench", "realtime", date ?? "latest"] as const,
   review: (date?: string) => ["workbench", "review", date ?? "latest"] as const,
   system: (date?: string) => ["workbench", "system", date ?? "latest"] as const,
@@ -77,6 +80,15 @@ export function useResearchPageQuery(date?: string, options?: QueryOverride<Rese
   return useQuery({
     queryKey: workbenchQueryKeys.research(date),
     queryFn: () => getResearchPage(date),
+    staleTime: 30_000,
+    ...options
+  });
+}
+
+export function useIntelligencePageQuery(date?: string, options?: QueryOverride<IntelligencePagePayload>) {
+  return useQuery({
+    queryKey: workbenchQueryKeys.intelligence(date),
+    queryFn: () => getIntelligencePage(date),
     staleTime: 30_000,
     ...options
   });

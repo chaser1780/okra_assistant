@@ -3,6 +3,7 @@ import { ApiError, getFundDetail, getSnapshot, request } from "./api";
 import {
   executionPageSchema,
   fundDetailSchema,
+  intelligencePageSchema,
   portfolioPageSchema,
   realtimePageSchema,
   researchPageSchema,
@@ -14,6 +15,7 @@ import {
 import type {
   ExecutionPagePayload,
   FundDetailPayload,
+  IntelligencePagePayload,
   PortfolioPagePayload,
   RealtimePagePayload,
   ResearchPagePayload,
@@ -88,6 +90,25 @@ export function getResearchPage(date?: string): Promise<ResearchPagePayload> {
   return withSnapshotFallback(`/api/research${buildDateQuery(date)}`, researchPageSchema, (snapshot) => ({
     selectedDate: snapshot.selectedDate,
     research: snapshot.research
+  }), date);
+}
+
+export function getIntelligencePage(date?: string): Promise<IntelligencePagePayload> {
+  return withSnapshotFallback(`/api/intelligence${buildDateQuery(date)}`, intelligencePageSchema, (snapshot) => ({
+    selectedDate: snapshot.selectedDate,
+    intelligence:
+      snapshot.intelligence ?? {
+        metrics: {},
+        source_health: snapshot.research.source_health ?? {},
+        news_digest: snapshot.research.news_digest ?? {},
+        sentiment_digest: snapshot.research.sentiment_digest ?? {},
+        important_news: snapshot.research.news_digest?.top_heat_items ?? [],
+        regulatory_items: snapshot.research.event_risks ?? [],
+        szse_items: [],
+        related_news_by_fund: {},
+        source_breakdown: snapshot.research.news_digest?.source_breakdown ?? {},
+        event_risks: snapshot.research.event_risks ?? []
+      }
   }), date);
 }
 

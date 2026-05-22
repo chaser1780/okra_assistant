@@ -3,6 +3,7 @@ import { z } from "zod";
 const toneSchema = z.enum(["neutral", "accent", "success", "warning", "danger", "info", "purple", "magenta", "amber"]);
 
 const unknownRecordSchema = z.record(z.string(), z.unknown());
+const numberRecordSchema = z.record(z.string(), z.coerce.number().catch(0)).catch({});
 const apiErrorSchema = z.object({
   error_code: z.string(),
   error_message: z.string(),
@@ -244,6 +245,31 @@ export const dailyFirstOpenSchema = z.object({
   memoryEligible: z.union([z.string(), z.boolean(), z.number()]).optional()
 }).passthrough();
 
+const ragRuntimeSettingsSchema = unknownRecordSchema.catch({});
+
+export const ragRuntimeSchema = z.object({
+  generatedAt: z.string().catch(""),
+  enabled: z.boolean().catch(false),
+  defaultProfile: z.string().catch(""),
+  fallbackToLegacy: z.boolean().catch(true),
+  traceEnabled: z.boolean().catch(false),
+  dbPath: z.string().catch(""),
+  dbExists: z.boolean().catch(false),
+  statusError: z.string().optional(),
+  counts: numberRecordSchema,
+  sourceCounts: numberRecordSchema,
+  embeddingStatus: numberRecordSchema,
+  agentShadow: ragRuntimeSettingsSchema,
+  agentDefault: ragRuntimeSettingsSchema,
+  profileEvidence: ragRuntimeSettingsSchema,
+  embedding: ragRuntimeSettingsSchema,
+  vectorStore: ragRuntimeSettingsSchema,
+  latestEval: unknownRecordSchema.catch({}),
+  latestTraces: z.array(unknownRecordSchema).catch([]),
+  latestIngestRuns: z.array(unknownRecordSchema).catch([]),
+  activeManifests: z.array(unknownRecordSchema).catch([])
+}).passthrough();
+
 export const systemSchema = z.object({
   sourceHealth: unknownRecordSchema.optional(),
   preflightStatus: z.string().optional(),
@@ -252,6 +278,8 @@ export const systemSchema = z.object({
   todayAnalysisRuntime: unknownRecordSchema.optional(),
   longMemoryRuntime: unknownRecordSchema.optional(),
   agentRuntime: unknownRecordSchema.optional(),
+  ragRuntime: ragRuntimeSchema.optional(),
+  rag: ragRuntimeSchema.optional(),
   todayAnalysis: unknownRecordSchema.optional(),
   dailyFirstOpen: unknownRecordSchema.optional()
 }).passthrough();
@@ -303,6 +331,24 @@ export const researchPageSchema = z.object({
   research: researchSchema
 }).passthrough();
 
+export const intelligenceSchema = z.object({
+  metrics: unknownRecordSchema.optional(),
+  source_health: unknownRecordSchema.optional(),
+  news_digest: unknownRecordSchema.optional(),
+  sentiment_digest: unknownRecordSchema.optional(),
+  important_news: z.array(unknownRecordSchema).optional(),
+  regulatory_items: z.array(unknownRecordSchema).optional(),
+  szse_items: z.array(unknownRecordSchema).optional(),
+  related_news_by_fund: z.record(z.string(), z.array(unknownRecordSchema)).optional(),
+  source_breakdown: z.union([unknownRecordSchema, z.array(unknownRecordSchema)]).optional(),
+  event_risks: z.array(unknownRecordSchema).optional()
+}).passthrough();
+
+export const intelligencePageSchema = z.object({
+  selectedDate: z.string(),
+  intelligence: intelligenceSchema
+}).passthrough();
+
 export const realtimePageSchema = z.object({
   selectedDate: z.string(),
   realtime: realtimeSchema
@@ -318,6 +364,42 @@ export const systemPageSchema = z.object({
   selectedDate: z.string(),
   summary: unknownRecordSchema,
   system: systemSchema
+}).passthrough();
+
+export const copilotCitationSchema = z.object({
+  id: z.string().catch(""),
+  docId: z.string().optional(),
+  chunkId: z.string().optional(),
+  sourceKind: z.string().optional(),
+  sourceRecordId: z.string().optional(),
+  sourcePath: z.string().optional(),
+  sourceTier: z.string().optional(),
+  title: z.string().optional(),
+  summary: z.string().optional(),
+  asOfDate: z.string().optional(),
+  availableFrom: z.string().optional(),
+  publishedAt: z.string().optional(),
+  domain: z.string().optional(),
+  entityId: z.string().optional(),
+  fundCodes: z.array(z.string()).catch([]),
+  score: z.coerce.number().optional(),
+  stale: z.boolean().optional(),
+  freshnessStatus: z.string().optional(),
+  visibility: z.string().optional(),
+  status: z.string().optional(),
+  url: z.string().optional()
+}).passthrough();
+
+export const copilotResponseSchema = z.object({
+  answer: z.string().catch(""),
+  mode: z.string().optional(),
+  sourceDate: z.string().optional(),
+  traceId: z.string().optional(),
+  citations: z.array(copilotCitationSchema).catch([]),
+  retrieval: unknownRecordSchema.catch({}),
+  traceSummary: unknownRecordSchema.catch({}),
+  fallbackReason: z.string().optional(),
+  ragFallbackReason: z.string().optional()
 }).passthrough();
 
 export function apiEnvelopeSchema<T extends z.ZodTypeAny>(dataSchema: T) {

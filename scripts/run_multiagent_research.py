@@ -3,36 +3,35 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from contextlib import suppress
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from pathlib import Path
 
-from common import agent_output_dir, agent_snapshot_root, committee_decision_bundle_path, daily_workspace_dir, dump_json, ensure_layout, evidence_index_path, llm_context_path, load_agents_config, load_json, resolve_agent_home, resolve_date, timestamp_now, today_analysis_runtime_path
+import agent_inputs
+import committee_synthesis
+from common import agent_output_dir, agent_snapshot_root, committee_decision_bundle_path, daily_workspace_dir, dump_json, ensure_layout, evidence_index_path, llm_context_path, load_agents_config, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now, today_analysis_runtime_path
 from evidence_index import build_evidence_index_payload, retrieve_agent_evidence
 from models import CommitteeDecisionBundle
 from multiagent_utils import call_json_agent
+from rag_config import rag_agent_default_settings, rag_agent_shadow_settings, rag_db_path
+from run_multiagent_constants import DEFAULT_ANALYST_ORDER, DEFAULT_MANAGER_ORDER, DEFAULT_RESEARCHER_ORDER
 
-DEFAULT_ANALYST_ORDER = [
-    "market_analyst",
-    "theme_analyst",
-    "fund_structure_analyst",
-    "fund_quality_analyst",
-    "news_analyst",
-    "sentiment_analyst",
-]
-DEFAULT_RESEARCHER_ORDER = ["bull_researcher", "bear_researcher"]
-DEFAULT_MANAGER_ORDER = ["research_manager", "risk_manager", "portfolio_trader"]
+TODAY_RUNTIME_LOCK = threading.Lock()
 
 
 def _update_today_runtime(agent_home: Path, report_date: str, mutate) -> None:
-    path = today_analysis_runtime_path(agent_home, report_date)
-    if not path.exists():
-        return
-    payload = load_json(path)
-    if not isinstance(payload, dict):
-        return
-    mutate(payload)
-    dump_json(path, payload)
+    with TODAY_RUNTIME_LOCK:
+        path = today_analysis_runtime_path(agent_home, report_date)
+        if not path.exists():
+            return
+        payload = load_json(path)
+        if not isinstance(payload, dict):
+            return
+        mutate(payload)
+        dump_json(path, payload)
 
 
 def compose_prompt(role: str, mission: list[str], input_focus: list[str], method: list[str], output_rules: list[str], do_not: list[str]) -> str:
@@ -406,6 +405,74 @@ def prompt_bundle_metadata(agent_names: list[str]) -> dict:
     }
 
 
+def agent_execution_config(agent_name: str) -> dict:
+    return {
+        "attempts": AGENT_ATTEMPTS.get(agent_name, 3),
+        "reasoning_effort": AGENT_EFFORTS.get(agent_name, "medium"),
+        "text_verbosity": AGENT_VERBOSITY.get(agent_name),
+        "max_output_tokens": AGENT_MAX_OUTPUT_TOKENS.get(agent_name),
+    }
+
+
+def _llm_config_fingerprint(config: dict) -> dict:
+    sanitized = deepcopy(config or {})
+    # Never persist accidental inline secrets in agent artifacts.
+    sanitized.pop("api_key", None)
+    for provider in (sanitized.get("model_providers", {}) or {}).values():
+        if isinstance(provider, dict):
+            provider.pop("api_key", None)
+    return sanitized
+
+
+def build_agent_reuse_metadata(
+    agent_home: Path,
+    agent_name: str,
+    agent_input: dict,
+    user_prompt: str,
+    *,
+    use_mock: bool,
+    agents_config: dict | None = None,
+    llm_config: dict | None = None,
+) -> dict:
+    llm_payload = _llm_config_fingerprint(llm_config if llm_config is not None else load_llm_config(agent_home))
+    agents_payload = agents_config if agents_config is not None else load_agents_config(agent_home)
+    return {
+        "workflow_version": WORKFLOW_VERSION,
+        "agent_input_contract_version": AGENT_INPUT_CONTRACT_VERSION,
+        "prompt_bundle_version": PROMPT_BUNDLE_VERSION,
+        "agent_name": agent_name,
+        "use_mock": bool(use_mock),
+        "model_provider": str(llm_payload.get("model_provider", "")),
+        "model": str(llm_payload.get("model", "")),
+        "prompt_sha256": stable_digest(AGENT_PROMPTS.get(agent_name, "")),
+        "user_prompt_sha256": stable_digest(user_prompt),
+        "agent_input_sha256": stable_digest(agent_input),
+        "execution_config_sha256": stable_digest(agent_execution_config(agent_name)),
+        "llm_config_sha256": stable_digest(llm_payload),
+        "agents_config_sha256": stable_digest(agents_payload),
+    }
+
+
+def record_reuse_metadata(record: dict, metadata: dict) -> dict:
+    updated = dict(record)
+    record_meta = dict(updated.get("metadata", {}) or {})
+    record_meta["reuse_fingerprint"] = metadata
+    updated["metadata"] = record_meta
+    return updated
+
+
+def record_reuse_metadata_value(record: dict) -> dict:
+    metadata = record.get("metadata", {}) if isinstance(record, dict) else {}
+    if isinstance(metadata, dict) and isinstance(metadata.get("reuse_fingerprint"), dict):
+        return metadata["reuse_fingerprint"]
+    legacy = record.get("reuse_fingerprint", {}) if isinstance(record, dict) else {}
+    return legacy if isinstance(legacy, dict) else {}
+
+
+def can_reuse_agent_record(record: dict, expected_metadata: dict) -> bool:
+    return record.get("status") == "ok" and record_reuse_metadata_value(record) == expected_metadata
+
+
 def retrieval_summary(agent_input: dict) -> dict:
     retrieval = agent_input.get("retrieved_evidence", {}) or {}
     portfolio_items = list(retrieval.get("portfolio", []) or [])
@@ -413,11 +480,36 @@ def retrieval_summary(agent_input: dict) -> dict:
     fund_counts = {fund_code: len(items or []) for fund_code, items in fund_items.items()}
     stale_count = sum(1 for item in portfolio_items if bool(item.get("stale", False)))
     stale_count += sum(1 for items in fund_items.values() for item in (items or []) if bool(item.get("stale", False)))
+    rag_diff = agent_input.get("rag_legacy_diff", {}) or {}
     return {
         "portfolio_item_count": len(portfolio_items),
         "fund_item_count": sum(fund_counts.values()),
         "fund_counts": fund_counts,
         "stale_item_count": stale_count,
+        "rag_trace_id": agent_input.get("rag_retrieval_trace_id", ""),
+        "rag_default_trace_id": agent_input.get("rag_default_trace_id", ""),
+        "rag_hit_count": rag_diff.get("rag_hit_count", 0),
+        "rag_injected": bool(rag_diff.get("inject_into_prompt", False)),
+        "rag_fallback_reason": rag_diff.get("fallback_reason", ""),
+        "retrieval_backend": agent_input.get("retrieval_backend", "legacy"),
+        "rag_default_hit_count": agent_input.get("rag_default_hit_count", 0),
+        "rag_default_fallback_reason": agent_input.get("rag_default_fallback_reason", ""),
+    }
+
+
+def active_rag_manifest_metadata(agent_home: Path) -> dict:
+    db_path = rag_db_path(agent_home)
+    manifest_ids: list[str] = []
+    if db_path.exists():
+        with suppress(Exception):
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute("SELECT manifest_id FROM active_manifests ORDER BY scope_key").fetchall()
+            manifest_ids = [str(row[0]) for row in rows]
+    return {
+        "active_manifest_ids": manifest_ids,
+        "manifest_set_sha256": stable_digest(manifest_ids) if manifest_ids else "",
     }
 
 
@@ -432,6 +524,9 @@ def workflow_definition(
     use_mock: bool,
     snapshot_enabled: bool,
     evidence_index_source: str,
+    rag_agent_default: dict | None = None,
+    rag_agent_shadow: dict | None = None,
+    rag_manifest_metadata: dict | None = None,
 ) -> dict:
     prompt_bundle = prompt_bundle_metadata(ordered_agents)
     return {
@@ -447,11 +542,18 @@ def workflow_definition(
         "use_mock": bool(use_mock),
         "snapshot_enabled": bool(snapshot_enabled),
         "evidence_index_source": evidence_index_source,
+        "rag": {
+            "retrieval_backend": "rag" if bool((rag_agent_default or {}).get("enabled", False)) else "legacy",
+            "rag_enabled": bool((rag_agent_default or {}).get("enabled", False)),
+            "shadow_enabled": bool((rag_agent_shadow or {}).get("enabled", False)),
+            "fallback_to_legacy": bool((rag_agent_default or {}).get("fallback_to_legacy", True)),
+            **(rag_manifest_metadata or {"active_manifest_ids": [], "manifest_set_sha256": ""}),
+        },
         "prompt_bundle": prompt_bundle,
     }
 
 
-def trace_from_existing(agent_name: str, record: dict, stage: str, dependencies: list[str]) -> dict:
+def trace_from_existing(agent_name: str, record: dict, stage: str, dependencies: list[str], reuse_metadata: dict) -> dict:
     output = dict(record.get("output", {}) or {})
     return {
         "agent_name": agent_name,
@@ -461,9 +563,13 @@ def trace_from_existing(agent_name: str, record: dict, stage: str, dependencies:
         "dependencies": list(dependencies),
         "output_sha256": stable_digest(output),
         "retrieval_summary": {"portfolio_item_count": 0, "fund_item_count": 0, "fund_counts": {}, "stale_item_count": 0},
-        "prompt_sha256": stable_digest(AGENT_PROMPTS.get(agent_name, "")),
-        "agent_input_sha256": "",
-        "user_prompt_sha256": "",
+        "prompt_sha256": reuse_metadata.get("prompt_sha256", ""),
+        "agent_input_sha256": reuse_metadata.get("agent_input_sha256", ""),
+        "user_prompt_sha256": reuse_metadata.get("user_prompt_sha256", ""),
+        "llm_config_sha256": reuse_metadata.get("llm_config_sha256", ""),
+        "agents_config_sha256": reuse_metadata.get("agents_config_sha256", ""),
+        "model_provider": reuse_metadata.get("model_provider", ""),
+        "model": reuse_metadata.get("model", ""),
         "elapsed_seconds": 0.0,
         "started_at": timestamp_now(),
         "finished_at": timestamp_now(),
@@ -1001,6 +1107,9 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
         "constraints": context.get("constraints", {}),
         "memory_digest": context.get("memory_digest", {}),
         "source_health_summary": context.get("source_health_summary", []),
+        "news_digest": context.get("news_digest", {}),
+        "sentiment_digest": context.get("sentiment_digest", {}),
+        "event_risks": context.get("event_risks", []),
     }
     funds = context.get("funds", [])
     tactical_funds = [compact_fund_view(fund) for fund in funds if fund.get("role") == "tactical"]
@@ -1058,6 +1167,7 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
         return attach_retrieved_evidence(agent_name, context, base, fund_payload, funds)
 
     if agent_name == "news_analyst":
+        base["news_query_plan"] = context.get("news_query_plan", {})
         fund_payload = [
             {
                 "fund_code": fund["fund_code"],
@@ -1071,6 +1181,7 @@ def build_agent_input(agent_name: str, context: dict, prior_outputs: dict) -> di
 
     if agent_name == "sentiment_analyst":
         base["external_reference"] = context.get("external_reference", {})
+        base["news_query_plan"] = {"sentiment_queries": (context.get("news_query_plan", {}) or {}).get("sentiment_queries", [])}
         fund_payload = [
             {
                 "fund_code": fund["fund_code"],
@@ -1236,242 +1347,23 @@ def configured_workers(config: dict) -> dict[str, int]:
     }
 
 
-def degradation_summary(aggregate: dict, manager_order: list[str]) -> dict:
-    failed_names = [item.get("agent_name", "") for item in aggregate.get("failed_agents", []) if item.get("agent_name")]
-    degraded_names = list(aggregate.get("degraded_agent_names", []) or [])
-    blocking_failures = [name for name in manager_order if name in failed_names]
-    core_statuses = {name: str(aggregate.get("agents", {}).get(name, {}).get("status", "")).lower() for name in manager_order}
-    committee_ready = all(status == "ok" for status in core_statuses.values())
-    degraded_ok = bool(failed_names or degraded_names) and committee_ready and not blocking_failures
-    core_degraded = [name for name, status in core_statuses.items() if status == "degraded"]
-    if blocking_failures:
-        degradation_mode = "failed"
-    elif core_degraded:
-        degradation_mode = "decision_degraded"
-    elif degraded_names:
-        degradation_mode = "display_degraded"
-    else:
-        degradation_mode = "none"
-    return {
-        "failed_agent_names": failed_names,
-        "degraded_agent_names": degraded_names,
-        "blocking_failures": blocking_failures,
-        "committee_ready": committee_ready,
-        "degraded_ok": degraded_ok,
-        "degradation_mode": degradation_mode,
-        "execution_eligible": degradation_mode in {"none", "display_degraded"} and not failed_names,
-    }
+degradation_summary = committee_synthesis.degradation_summary
+build_committee_summary = committee_synthesis.build_committee_summary
+build_committee_decision_bundle = committee_synthesis.build_committee_decision_bundle
 
 
-def _agent_output(aggregate: dict, agent_name: str) -> dict:
-    return aggregate.get("agents", {}).get(agent_name, {}).get("output", {}) or {}
-
-
-def _case_items(output: dict, *, limit: int = 6) -> list[dict]:
-    items: list[dict] = []
-    for card in output.get("decision_cards", []) or []:
-        items.append(
-            {
-                "fund_code": card.get("fund_code", ""),
-                "action_bias": card.get("action_bias", ""),
-                "thesis": card.get("thesis", card.get("comment", "")),
-                "evidence_refs": card.get("evidence_refs", []) or card.get("supporting_signal_ids", []),
-            }
-        )
-    for view in output.get("fund_views", []) or []:
-        if len(items) >= limit:
-            break
-        items.append(
-            {
-                "fund_code": view.get("fund_code", ""),
-                "action_bias": view.get("action_bias", ""),
-                "thesis": view.get("thesis", view.get("comment", "")),
-                "evidence_refs": view.get("evidence_refs", []),
-            }
-        )
-    return items[:limit]
-
-
-def build_committee_summary(aggregate: dict) -> dict:
-    bull = _agent_output(aggregate, "bull_researcher")
-    bear = _agent_output(aggregate, "bear_researcher")
-    manager = _agent_output(aggregate, "research_manager")
-    risk = _agent_output(aggregate, "risk_manager")
-    failed = aggregate.get("failed_agent_names", []) or [item.get("agent_name", "") for item in aggregate.get("failed_agents", [])]
-    risk_vetoes = []
-    for card in risk.get("decision_cards", []) or []:
-        risk_decision = str(card.get("risk_decision", "") or "").lower()
-        action_bias = str(card.get("action_bias", "") or "").lower()
-        if risk_decision in {"reject", "veto"} or action_bias in {"reject", "avoid", "reduce"} or card.get("downgrade_reason"):
-            risk_vetoes.append(
-                {
-                    "fund_code": card.get("fund_code", ""),
-                    "risk_decision": card.get("risk_decision", ""),
-                    "action_bias": card.get("action_bias", ""),
-                    "reason": card.get("downgrade_reason") or card.get("comment") or card.get("thesis", ""),
-                    "evidence_refs": card.get("evidence_refs", []) or card.get("opposing_signal_ids", []),
-                }
-            )
-    confidence = "high" if aggregate.get("committee_ready") and not failed else "medium" if aggregate.get("degraded_ok") else "low"
-    decision_source = "fallback" if failed and not aggregate.get("committee_ready") else "risk_constrained" if risk_vetoes else "manager_consensus"
-    return {
-        "schema_version": 1,
-        "debate_summary": [item for item in [bull.get("summary", ""), bear.get("summary", ""), manager.get("summary", ""), risk.get("summary", "")] if item][:6],
-        "bull_case": _case_items(bull),
-        "bear_case": _case_items(bear),
-        "risk_vetoes": risk_vetoes,
-        "manager_decision": {
-            "summary": manager.get("summary", ""),
-            "portfolio_view": manager.get("portfolio_view", {}),
-            "decision_cards": (manager.get("decision_cards", []) or [])[:8],
-        },
-        "manager_responses": manager.get("response_to_bear_case", []) or manager.get("key_points", [])[:6],
-        "unresolved_conflicts": bear.get("key_points", [])[:3] if risk_vetoes or failed else [],
-        "committee_confidence": confidence,
-        "decision_source": decision_source,
-    }
-
-
-def _bundle_fund_names(context: dict) -> dict[str, dict]:
-    return {str(item.get("fund_code", "") or ""): item for item in (context.get("funds", []) or []) if item.get("fund_code")}
-
-
-def build_committee_decision_bundle(aggregate: dict, context: dict) -> CommitteeDecisionBundle:
-    manager = _agent_output(aggregate, "research_manager")
-    risk = _agent_output(aggregate, "risk_manager")
-    trader = _agent_output(aggregate, "portfolio_trader")
-    manager_cards = {item.get("fund_code", ""): item for item in (manager.get("decision_cards", []) or []) if item.get("fund_code")}
-    risk_cards = {item.get("fund_code", ""): item for item in (risk.get("decision_cards", []) or []) if item.get("fund_code")}
-    trader_cards = {item.get("fund_code", ""): item for item in (trader.get("decision_cards", []) or []) if item.get("fund_code")}
-    fund_meta = _bundle_fund_names(context)
-    failed_agent_names = list(aggregate.get("failed_agent_names", []) or [])
-    degraded_agent_names = list(aggregate.get("degraded_agent_names", []) or [])
-    degradation_mode = str(aggregate.get("degradation_mode", "none") or "none")
-    execution_eligible = bool(aggregate.get("execution_eligible", False))
-    decision_mode = "canonical"
-    notes: list[str] = []
-    if degradation_mode == "decision_degraded":
-        decision_mode = "hold_only"
-        notes.append("Core committee degraded; bundle forces hold-only output.")
-    elif degradation_mode == "failed":
-        decision_mode = "blocked"
-        notes.append("Blocking committee failure; bundle is not executable.")
-
-    def map_amount_from_bucket(size_bucket: str, role: str) -> float:
-        lowered = str(size_bucket or "").strip().lower()
-        if decision_mode == "hold_only":
-            return 0.0
-        if role == "core_dca":
-            return 0.0
-        if lowered in {"0", "hold", "none", ""}:
-            return 0.0
-        if "300" in lowered or "large" in lowered:
-            return 300.0
-        if "200" in lowered or "medium" in lowered:
-            return 200.0
-        if "100" in lowered or "small" in lowered:
-            return 100.0
-        return 200.0
-
-    fund_decisions = []
-    for fund_code, fund in fund_meta.items():
-        manager_card = manager_cards.get(fund_code, {})
-        risk_card = risk_cards.get(fund_code, {})
-        trader_card = trader_cards.get(fund_code, {})
-        proposed_action = str(
-            trader_card.get("proposed_action")
-            or manager_card.get("proposed_action")
-            or risk_card.get("proposed_action")
-            or "hold"
-        )
-        if decision_mode == "hold_only":
-            proposed_action = "hold"
-        size_bucket = str(trader_card.get("size_bucket") or manager_card.get("size_bucket") or risk_card.get("size_bucket") or "0")
-        confidence = max(
-            float(trader_card.get("confidence", 0.0) or 0.0),
-            float(manager_card.get("confidence", 0.0) or 0.0),
-            float(risk_card.get("confidence", 0.0) or 0.0),
-        )
-        supporting_signal_ids = list(
-            dict.fromkeys(
-                list(trader_card.get("supporting_signal_ids", []) or [])
-                + list(manager_card.get("supporting_signal_ids", []) or [])
-                + list(risk_card.get("supporting_signal_ids", []) or [])
-            )
-        )
-        opposing_signal_ids = list(
-            dict.fromkeys(
-                list(trader_card.get("opposing_signal_ids", []) or [])
-                + list(manager_card.get("opposing_signal_ids", []) or [])
-                + list(risk_card.get("opposing_signal_ids", []) or [])
-            )
-        )
-        original_action = proposed_action
-        risk_decision = str(risk_card.get("risk_decision", "") or "")
-        risk_action = str(risk_card.get("action_bias") or risk_card.get("proposed_action") or "").strip().lower()
-        risk_veto = (
-            risk_decision.strip().lower() in {"reject", "veto", "block", "blocked"}
-            or risk_action in {"avoid", "reject"}
-            or bool(risk_card.get("downgrade_reason"))
-            or original_action in {"avoid", "reject"}
-        )
-        constraint_notes = []
-        if risk_veto:
-            constraint_notes.append(str(risk_card.get("manager_notes") or risk_card.get("why_not_more") or risk_card.get("why_now") or "").strip())
-            proposed_action = "hold"
-            size_bucket = "0"
-            constraint_notes.append(f"Risk veto forced hold; original proposed_action={original_action}.")
-        fund_decisions.append(
-            {
-                "fund_code": fund_code,
-                "fund_name": str(fund.get("fund_name", fund_code) or fund_code),
-                "role": str(fund.get("role", "") or ""),
-                "proposed_action": proposed_action,
-                "size_bucket": size_bucket,
-                "suggest_amount": 0.0 if proposed_action == "hold" or risk_veto else map_amount_from_bucket(size_bucket, str(fund.get("role", "") or "")),
-                "confidence": round(confidence, 4),
-                "thesis": str(
-                    trader_card.get("why_now")
-                    or manager_card.get("why_now")
-                    or manager_card.get("manager_notes")
-                    or trader_card.get("manager_notes")
-                    or risk_card.get("manager_notes")
-                    or ""
-                ).strip(),
-                "supporting_signal_ids": supporting_signal_ids,
-                "opposing_signal_ids": opposing_signal_ids,
-                "decision_card_ids": [item for item in [trader_card.get("decision_id"), manager_card.get("decision_id"), risk_card.get("decision_id")] if item],
-                "risk_veto": risk_veto,
-                "risk_decision": risk_decision,
-                "constraint_notes": [item for item in constraint_notes if item],
-                "execution_eligible": execution_eligible and not risk_veto,
-            }
-        )
-
-    return {
-        "schema_version": 1,
-        "report_date": str(aggregate.get("report_date", "") or ""),
-        "generated_at": timestamp_now(),
-        "decision_mode": decision_mode,
-        "decision_source": str((aggregate.get("committee", {}) or {}).get("decision_source", "") or "committee_canonical"),
-        "degradation_mode": degradation_mode,
-        "execution_eligible": execution_eligible,
-        "committee_confidence": str((aggregate.get("committee", {}) or {}).get("committee_confidence", "") or "low"),
-        "manager_order": [name for name in DEFAULT_MANAGER_ORDER if name in (aggregate.get("ordered_agents", []) or [])],
-        "fund_decisions": fund_decisions,
-        "market_view": dict(trader.get("portfolio_view") or manager.get("portfolio_view") or risk.get("portfolio_view") or {}),
-        "cross_fund_observations": sanitize_string_list(
-            list(trader.get("watchouts", []) or []) + list(risk.get("watchouts", []) or []) + list(manager.get("watchouts", []) or []),
-            limit=8,
-        ),
-        "risk_vetoes": list((aggregate.get("committee", {}) or {}).get("risk_vetoes", []) or []),
-        "failed_agent_names": failed_agent_names,
-        "degraded_agent_names": degraded_agent_names,
-        "notes": notes,
-    }
-
-
-def execute_agent(agent_home: Path, report_date: str, context: dict, prior_outputs: dict, agent_name: str, use_mock: bool, agent_roles: dict[str, str], agent_dependencies: dict[str, list[str]]) -> tuple[str, dict, dict | None, dict]:
+def execute_agent(
+    agent_home: Path,
+    report_date: str,
+    context: dict,
+    prior_outputs: dict,
+    agent_name: str,
+    use_mock: bool,
+    agent_roles: dict[str, str],
+    agent_dependencies: dict[str, list[str]],
+    agents_config: dict | None = None,
+    llm_config: dict | None = None,
+) -> tuple[str, dict, dict | None, dict]:
     started_at = time.perf_counter()
     started_at_text = timestamp_now()
     print(f">>> AGENT_START {agent_name}", flush=True)
@@ -1490,8 +1382,17 @@ def execute_agent(agent_home: Path, report_date: str, context: dict, prior_outpu
             }
         ),
     )
-    agent_input = build_agent_input(agent_name, context, prior_outputs)
+    agent_input = agent_inputs.build_agent_input(agent_name, context, prior_outputs)
     user_prompt = build_user_prompt(agent_name, agent_input)
+    reuse_metadata = build_agent_reuse_metadata(
+        agent_home,
+        agent_name,
+        agent_input,
+        user_prompt,
+        use_mock=use_mock,
+        agents_config=agents_config,
+        llm_config=llm_config,
+    )
     trace = {
         "agent_name": agent_name,
         "stage": agent_roles.get(agent_name, "unknown"),
@@ -1502,9 +1403,13 @@ def execute_agent(agent_home: Path, report_date: str, context: dict, prior_outpu
             name: str(prior_outputs.get(name, {}).get("status", "missing") or "missing")
             for name in agent_dependencies.get(agent_name, [])
         },
-        "prompt_sha256": stable_digest(AGENT_PROMPTS.get(agent_name, "")),
-        "user_prompt_sha256": stable_digest(user_prompt),
-        "agent_input_sha256": stable_digest(agent_input),
+        "prompt_sha256": reuse_metadata["prompt_sha256"],
+        "user_prompt_sha256": reuse_metadata["user_prompt_sha256"],
+        "agent_input_sha256": reuse_metadata["agent_input_sha256"],
+        "llm_config_sha256": reuse_metadata["llm_config_sha256"],
+        "agents_config_sha256": reuse_metadata["agents_config_sha256"],
+        "model_provider": reuse_metadata["model_provider"],
+        "model": reuse_metadata["model"],
         "retrieval_summary": retrieval_summary(agent_input),
         "started_at": started_at_text,
         "finished_at": "",
@@ -1556,7 +1461,7 @@ def execute_agent(agent_home: Path, report_date: str, context: dict, prior_outpu
             ),
         )
         print(f">>> AGENT_DONE {agent_name} ({elapsed:.1f}s)", flush=True)
-        return agent_name, {"status": "ok", "output": output}, None, trace
+        return agent_name, record_reuse_metadata({"status": "ok", "output": output}, reuse_metadata), None, trace
     except Exception as exc:
         error_text = str(exc)
         if not use_mock and is_infrastructure_error(error_text):
@@ -1645,13 +1550,27 @@ def run_agent_group(
     agent_names: list[str],
     use_mock: bool,
     max_workers: int,
+    agents_config: dict | None = None,
+    llm_config: dict | None = None,
 ) -> None:
     if not agent_names:
         return
     prior_outputs = dict(aggregate["agents"])
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(agent_names)))) as executor:
         futures = {
-            executor.submit(execute_agent, agent_home, aggregate.get("report_date", ""), context, prior_outputs, agent_name, use_mock, aggregate.get("agent_roles", {}), aggregate.get("agent_dependencies", {})): agent_name
+            executor.submit(
+                execute_agent,
+                agent_home,
+                aggregate.get("report_date", ""),
+                context,
+                prior_outputs,
+                agent_name,
+                use_mock,
+                aggregate.get("agent_roles", {}),
+                aggregate.get("agent_dependencies", {}),
+                agents_config,
+                llm_config,
+            ): agent_name
             for agent_name in agent_names
         }
         for future in as_completed(futures):
@@ -1685,6 +1604,9 @@ def main() -> None:
     ensure_layout(agent_home)
     report_date = resolve_date(args.date)
     context = load_json(llm_context_path(agent_home, report_date))
+    context["_agent_home"] = str(agent_home)
+    context["_rag_agent_shadow"] = rag_agent_shadow_settings(agent_home)
+    context["_rag_agent_default"] = rag_agent_default_settings(agent_home)
     evidence_path = evidence_index_path(agent_home, report_date)
     evidence_index_source = "disk"
     if evidence_path.exists():
@@ -1703,6 +1625,7 @@ def main() -> None:
     ordered_agents = analyst_order + researcher_order + manager_order
     if args.only:
         ordered_agents = [name for name in ordered_agents if name in set(args.only)]
+    llm_config = load_llm_config(agent_home)
     agent_roles = build_agent_roles(analyst_order, researcher_order, manager_order, ordered_agents)
     agent_groups = {
         "analyst": [name for name in analyst_order if name in ordered_agents],
@@ -1720,6 +1643,9 @@ def main() -> None:
         use_mock=bool(args.mock),
         snapshot_enabled=snapshot_enabled,
         evidence_index_source=evidence_index_source,
+        rag_agent_default=context["_rag_agent_default"],
+        rag_agent_shadow=context["_rag_agent_shadow"],
+        rag_manifest_metadata=active_rag_manifest_metadata(agent_home),
     )
 
     aggregate = {
@@ -1752,28 +1678,29 @@ def main() -> None:
         dump_json(snapshot_dir / "context.json", context)
     write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
 
-    if args.use_existing:
-        for path in sorted(output_dir.glob("*.json")):
-            if path.name in {"aggregate.json", "workflow_definition.json", "workflow_trace.json"}:
-                continue
-            try:
-                existing = load_json(path)
-            except Exception:
-                continue
-            if existing.get("status") == "ok":
-                aggregate["agents"][path.stem] = existing
-
-    for agent_name in ordered_agents:
+    for agent_name in [name for name in analyst_order if name in ordered_agents]:
         existing_path = output_dir / f"{agent_name}.json"
         if args.use_existing and existing_path.exists():
             existing = load_json(existing_path)
-            if existing.get("status") == "ok":
+            agent_input = agent_inputs.build_agent_input(agent_name, context, dict(aggregate["agents"]))
+            user_prompt = build_user_prompt(agent_name, agent_input)
+            reuse_metadata = build_agent_reuse_metadata(
+                agent_home,
+                agent_name,
+                agent_input,
+                user_prompt,
+                use_mock=args.mock,
+                agents_config=agents_config,
+                llm_config=llm_config,
+            )
+            if can_reuse_agent_record(existing, reuse_metadata):
                 aggregate["agents"][agent_name] = existing
                 aggregate["workflow_trace"][agent_name] = trace_from_existing(
                     agent_name,
                     existing,
                     agent_roles.get(agent_name, "unknown"),
                     agent_dependencies.get(agent_name, []),
+                    reuse_metadata,
                 )
                 if snapshot_dir is not None:
                     dump_json(snapshot_dir / f"{agent_name}.json", existing)
@@ -1790,7 +1717,35 @@ def main() -> None:
         pending(analyst_order),
         args.mock,
         worker_caps["analyst"],
+        agents_config,
+        llm_config,
     )
+    for agent_name in [name for name in researcher_order if name in ordered_agents]:
+        existing_path = output_dir / f"{agent_name}.json"
+        if args.use_existing and existing_path.exists():
+            existing = load_json(existing_path)
+            agent_input = agent_inputs.build_agent_input(agent_name, context, dict(aggregate["agents"]))
+            user_prompt = build_user_prompt(agent_name, agent_input)
+            reuse_metadata = build_agent_reuse_metadata(
+                agent_home,
+                agent_name,
+                agent_input,
+                user_prompt,
+                use_mock=args.mock,
+                agents_config=agents_config,
+                llm_config=llm_config,
+            )
+            if can_reuse_agent_record(existing, reuse_metadata):
+                aggregate["agents"][agent_name] = existing
+                aggregate["workflow_trace"][agent_name] = trace_from_existing(
+                    agent_name,
+                    existing,
+                    agent_roles.get(agent_name, "unknown"),
+                    agent_dependencies.get(agent_name, []),
+                    reuse_metadata,
+                )
+                if snapshot_dir is not None:
+                    dump_json(snapshot_dir / f"{agent_name}.json", existing)
     run_agent_group(
         agent_home,
         context,
@@ -1800,10 +1755,36 @@ def main() -> None:
         pending(researcher_order),
         args.mock,
         worker_caps["researcher"],
+        agents_config,
+        llm_config,
     )
     for agent_name in [name for name in manager_order if name in ordered_agents]:
-        if aggregate["agents"].get(agent_name, {}).get("status") == "ok":
-            continue
+        existing_path = output_dir / f"{agent_name}.json"
+        if args.use_existing and existing_path.exists():
+            existing = load_json(existing_path)
+            agent_input = agent_inputs.build_agent_input(agent_name, context, dict(aggregate["agents"]))
+            user_prompt = build_user_prompt(agent_name, agent_input)
+            reuse_metadata = build_agent_reuse_metadata(
+                agent_home,
+                agent_name,
+                agent_input,
+                user_prompt,
+                use_mock=args.mock,
+                agents_config=agents_config,
+                llm_config=llm_config,
+            )
+            if can_reuse_agent_record(existing, reuse_metadata):
+                aggregate["agents"][agent_name] = existing
+                aggregate["workflow_trace"][agent_name] = trace_from_existing(
+                    agent_name,
+                    existing,
+                    agent_roles.get(agent_name, "unknown"),
+                    agent_dependencies.get(agent_name, []),
+                    reuse_metadata,
+                )
+                if snapshot_dir is not None:
+                    dump_json(snapshot_dir / f"{agent_name}.json", existing)
+                continue
         name, record, failure, trace = execute_agent(
             agent_home,
             report_date,
@@ -1813,6 +1794,8 @@ def main() -> None:
             args.mock,
             aggregate.get("agent_roles", {}),
             aggregate.get("agent_dependencies", {}),
+            agents_config,
+            llm_config,
         )
         merge_agent_result(aggregate, output_dir, snapshot_dir, name, record, failure, trace)
 
@@ -1821,11 +1804,11 @@ def main() -> None:
     if snapshot_dir is not None:
         dump_json(snapshot_dir / "aggregate.json", aggregate)
 
-    summary = degradation_summary(aggregate, [name for name in manager_order if name in ordered_agents])
+    summary = committee_synthesis.degradation_summary(aggregate, [name for name in manager_order if name in ordered_agents])
     aggregate.update(summary)
     aggregate["stage_status"] = build_stage_status(aggregate)
-    aggregate["committee"] = build_committee_summary(aggregate)
-    aggregate["committee_decision_bundle"] = build_committee_decision_bundle(aggregate, context)
+    aggregate["committee"] = committee_synthesis.build_committee_summary(aggregate)
+    aggregate["committee_decision_bundle"] = committee_synthesis.build_committee_decision_bundle(aggregate, context)
     write_workflow_artifacts(output_dir, snapshot_dir, workflow_meta, aggregate["workflow_trace"])
     issue_path = None
     if aggregate["failed_agents"] and not args.mock:

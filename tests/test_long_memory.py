@@ -6,13 +6,16 @@ import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from helpers import TempAgentHome
 from long_memory_store import approve_memory, build_execution_memory, build_fund_memory, list_memory_records, search_long_memory, stable_memory_id, upsert_memory_record
-from run_today_analysis import _pending_backfill_dates, run_today_analysis
+from learning_memory import run_learning_sync
+import run_today_analysis as run_today_module
+from run_today_analysis import _pending_backfill_dates, run_pending_backfills, run_today_analysis, should_run_pending_backfills
 from today_orchestrator import AlreadyRunningError, get_active_runtime
 from run_long_memory_analysis import run_memory_cycle
 
@@ -138,6 +141,24 @@ class LongMemoryTests(unittest.TestCase):
         fund_payload = build_fund_memory(self.agent.root)
         self.assertEqual(fund_payload["items"], [])
 
+    def test_execution_review_does_not_promote_advice_learning_ledger(self):
+        review_batches = [
+            {
+                "source": "execution",
+                "base_date": "2026-03-10",
+                "review_date": "2026-03-11",
+                "horizon": 1,
+                "summary": {"supportive": 0, "adverse": 1, "missed_upside": 0, "unknown": 0},
+                "diagnostic_summary": {"timing_drag": 2},
+            }
+        ]
+
+        _summary, ledger, _memory = run_learning_sync(self.agent.root, "2026-03-11", review_batches)
+
+        self.assertEqual(ledger["summary"]["strategic"], 0)
+        self.assertEqual(ledger["summary"]["permanent"], 0)
+        self.assertEqual(ledger["summary"]["core_permanent"], 0)
+
     def test_search_long_memory_uses_local_fts(self):
         upsert_memory_record(
             self.agent.root,
@@ -242,12 +263,15 @@ class LongMemoryTests(unittest.TestCase):
             started_at=datetime(2026, 5, 6, 14, 59),
         )
         runtime = json.loads((self.agent.root / "db" / "daily_workspace" / "2026-05-06" / "today_analysis_runtime.json").read_text(encoding="utf-8"))
-        self.assertEqual(runtime["status"], "ok")
+        self.assertIn(runtime["status"], {"ok", "degraded"})
         self.assertTrue(runtime["resultReady"])
         self.assertEqual(runtime["resultRunId"], runtime["runId"])
         self.assertTrue(runtime["heartbeatAt"])
         self.assertTrue(runtime["endedAt"])
         self.assertGreater(int(runtime["pid"]), 0)
+        if runtime["status"] == "degraded":
+            self.assertIn("executionEligible", runtime)
+            self.assertIn("committeeReady", runtime)
 
     def test_active_runtime_blocks_duplicate_today_analysis(self):
         runtime_path = self.agent.root / "db" / "daily_workspace" / "2026-05-06" / "today_analysis_runtime.json"
@@ -321,6 +345,39 @@ class LongMemoryTests(unittest.TestCase):
         )
         self.assertEqual(pending, ["2026-05-05", "2026-05-07"])
         self.assertNotIn("2026-05-02", pending)
+
+    def test_active_backfill_does_not_block_remaining_backfills(self):
+        started = datetime(2026, 5, 11, 10, 8)
+        active_error = AlreadyRunningError(
+            {
+                "runId": "run-0508",
+                "reportDate": "2026-05-08",
+                "pid": os.getpid(),
+            }
+        )
+        with patch.object(run_today_module, "pending_backfill_dates", return_value=["2026-05-08", "2026-05-09"]), patch.object(
+            run_today_module,
+            "run_today_analysis",
+            side_effect=[active_error, self.agent.root / "db" / "daily_workspace" / "2026-05-09" / "today_summary.json"],
+        ) as runner:
+            skipped = run_pending_backfills(
+                self.agent.root,
+                "2026-05-11",
+                started,
+                demo=True,
+                llm_mock=True,
+                resume_existing=False,
+            )
+        self.assertEqual(skipped[0]["date"], "2026-05-08")
+        self.assertIn("already running", skipped[0]["reason"])
+        self.assertEqual(runner.call_count, 2)
+        self.assertEqual(runner.call_args_list[1].args[1], "2026-05-09")
+
+    def test_manual_today_analysis_does_not_start_pending_backfills(self):
+        started = datetime(2026, 5, 11, 10, 8)
+        self.assertFalse(should_run_pending_backfills("manual", "2026-05-11", started))
+        self.assertTrue(should_run_pending_backfills("auto", "2026-05-11", started))
+        self.assertTrue(should_run_pending_backfills("compat_first_open", "2026-05-11", started))
 
     def test_run_long_memory_analysis_requires_memory_eligible(self):
         report_date = "2026-05-06"

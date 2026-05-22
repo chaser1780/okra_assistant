@@ -1,10 +1,11 @@
+use std::io::{Read, Write};
 use std::net::TcpStream;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager};
 
@@ -14,11 +15,25 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 struct ApiProcess(Mutex<Option<Child>>);
 
 fn api_is_available() -> bool {
-    TcpStream::connect_timeout(
+    let Ok(mut stream) = TcpStream::connect_timeout(
         &"127.0.0.1:8765".parse().expect("valid local API address"),
         Duration::from_millis(250),
-    )
-    .is_ok()
+    ) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    if stream
+        .write_all(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.contains("\"app\":\"okra-assistant\"") || response.contains("\"app\": \"okra-assistant\"")
 }
 
 fn project_root(app: &AppHandle) -> PathBuf {
@@ -127,6 +142,18 @@ fn spawn_api(app: &AppHandle) -> Option<Child> {
     let (python, prefix) = python_command(&root);
     let log_dir = root.join("logs").join("desktop");
     let _ = std::fs::create_dir_all(&log_dir);
+    let boot_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let stdout_log = std::fs::File::create(log_dir.join(format!("api_boot_{boot_id}_stdout.log")))
+        .ok()
+        .map(Stdio::from)
+        .unwrap_or_else(Stdio::null);
+    let stderr_log = std::fs::File::create(log_dir.join(format!("api_boot_{boot_id}_stderr.log")))
+        .ok()
+        .map(Stdio::from)
+        .unwrap_or_else(Stdio::null);
 
     let mut command = Command::new(python);
     command
@@ -140,8 +167,8 @@ fn spawn_api(app: &AppHandle) -> Option<Child> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(stdout_log)
+        .stderr(stderr_log);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);

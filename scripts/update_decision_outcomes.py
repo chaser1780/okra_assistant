@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from common import decisions_path, dump_json, ensure_layout, fund_nav_history_path, load_json, resolve_agent_home, resolve_date, timestamp_now
-from decision_ledger import append_decision_ledger, default_attribution, default_outcomes, load_decisions
+from decision_ledger import append_decision_outcome_events, default_attribution, default_outcomes, load_decisions, write_decision_latest
 
 WINDOWS = {"t1": 1, "t3": 3, "t5": 5, "t20": 20}
 
@@ -100,7 +100,8 @@ def update_outcomes(agent_home: Path, report_date: str, today: str) -> dict:
     updated["decisions"] = updated_decisions
     updated["outcomes_updated_at"] = timestamp_now()
     dump_json(decisions_path(agent_home, report_date), updated)
-    append_decision_ledger(agent_home, updated)
+    append_decision_outcome_events(agent_home, updated)
+    write_decision_latest(agent_home, updated)
     return updated
 
 

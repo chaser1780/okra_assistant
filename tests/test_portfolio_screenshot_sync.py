@@ -4,11 +4,14 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from helpers import TempAgentHome
-from sync_portfolio_from_screenshots import apply_sync_preview, build_sync_preview, normalize_fund_name
+from sync_portfolio_from_screenshots import apply_sync_preview, build_sync_preview, call_screenshot_vision, normalize_fund_name
 
 
 class PortfolioScreenshotSyncTests(unittest.TestCase):
@@ -213,6 +216,43 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
         self.assertEqual(added["holding_pnl"], 12.34)
         self.assertEqual(added["cost_basis_value"], 876.54)
         self.assertEqual(definition_item["opening_state"]["current_value"], 888.88)
+
+    def test_call_screenshot_vision_uses_lightweight_vision_settings(self):
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"output_text": '{"provider":"alipay","items":[],"warnings":[]}'}
+
+        class FakeSession:
+            trust_env = False
+
+            def post(self, endpoint, headers, json, timeout):
+                captured["payload"] = json
+                return FakeResponse()
+
+            def close(self):
+                pass
+
+        image_path = self.agent.root / "page.jpg"
+        Image.new("RGB", (16, 16), "white").save(image_path, format="JPEG")
+
+        with patch("sync_portfolio_from_screenshots.resolve_api_key", return_value="sk-test"), patch("sync_portfolio_from_screenshots.requests.Session", return_value=FakeSession()):
+            result = call_screenshot_vision(self.agent.root, [image_path], "alipay")
+
+        self.assertEqual(result["provider"], "alipay")
+        self.assertEqual(captured["payload"]["model"], "gpt-5.4")
+        self.assertEqual(captured["payload"]["reasoning"]["effort"], "low")
+        image_items = [
+            item
+            for message in captured["payload"]["input"]
+            for item in message["content"]
+            if item.get("type") == "input_image"
+        ]
+        self.assertEqual(image_items[0]["detail"], "high")
 
 
 if __name__ == "__main__":

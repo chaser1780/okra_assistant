@@ -70,13 +70,28 @@ def build_pipeline_command(home: Path, task_date: str, mode: str) -> list[str]:
     )
 
 
-def build_daily_first_open_command(home: Path, task_date: str, *, force: bool = False) -> list[str]:
+def build_portfolio_alignment_command(home: Path, task_date: str, *, force: bool = False) -> list[str]:
+    command = build_python_script_command(
+        home / "scripts" / "align_portfolio_on_startup.py",
+        "--agent-home",
+        str(home),
+        "--date",
+        task_date,
+    )
+    if force:
+        command.append("--force")
+    return command
+
+
+def build_daily_first_open_command(home: Path, task_date: str, *, force: bool = False, trigger: str = "manual") -> list[str]:
     command = build_python_script_command(
         home / "scripts" / "run_today_analysis.py",
         "--agent-home",
         str(home),
         "--date",
         task_date,
+        "--trigger",
+        trigger,
     )
     if force:
         command.append("--force")
@@ -242,6 +257,43 @@ def pending_nightly_catchup_dates(home: Path, portfolio_as_of_date: str, now: da
     if start_date >= target_date:
         return []
     return _business_dates_between(start_date, target_date)
+
+
+def portfolio_alignment_target_date(home: Path, now: datetime | None = None) -> str:
+    return latest_nightly_target_date(home, now=now)
+
+
+def portfolio_runtime_as_of_date(home: Path) -> str:
+    current = _read_json(home / "db" / "portfolio_state" / "current.json", {})
+    if not current:
+        current = _read_json(home / "config" / "portfolio.json", {})
+    return str(current.get("as_of_date") or current.get("last_valuation_run_date") or "").strip()
+
+
+def should_align_portfolio_on_boot(home: Path, now: datetime | None = None) -> bool:
+    strategy = _read_toml(home / "config" / "strategy.toml")
+    schedule = strategy.get("schedule", {}) or {}
+    if not bool(schedule.get("run_if_missed_on_next_boot", True)):
+        return False
+
+    current = _read_json(home / "db" / "portfolio_state" / "current.json", {})
+    if not current:
+        current = _read_json(home / "config" / "portfolio.json", {})
+    if not (current.get("funds") or []):
+        return False
+
+    target_text = portfolio_alignment_target_date(home, now=now)
+    try:
+        target_date = datetime.strptime(target_text, "%Y-%m-%d").date()
+    except Exception:
+        return False
+
+    current_text = str(current.get("as_of_date") or current.get("last_valuation_run_date") or "").strip()
+    try:
+        current_date = datetime.strptime(current_text, "%Y-%m-%d").date()
+    except Exception:
+        return True
+    return current_date < target_date
 
 
 def should_autorun_intraday_on_boot(home: Path, report_date: str, now: datetime | None = None) -> bool:

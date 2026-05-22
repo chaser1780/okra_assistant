@@ -1,0 +1,111 @@
+[rag]
+enabled = false
+default_profile = "copilot_qa"
+index_dir = "db/rag"
+trace_enabled = true
+fallback_to_legacy = true
+
+[rag.agent_shadow]
+enabled = false
+write_trace = true
+inject_into_prompt = false
+compare_legacy = true
+
+[rag.agent_default]
+enabled = false
+min_hits = 1
+write_trace = true
+fallback_to_legacy = true
+
+[rag.profile_evidence]
+enabled = false
+write_trace = true
+
+[rag.profile_evidence.decision]
+enabled = false
+top_k = 8
+min_hits = 1
+source_kinds = ["committee_bundle", "validated_advice"]
+domains = ["decision"]
+
+[rag.profile_evidence.memory]
+enabled = false
+top_k = 6
+skip_duplicate_permanent = true
+source_kinds = ["long_memory"]
+
+[rag.profile_evidence.review]
+enabled = false
+top_k = 8
+source_kinds = ["long_memory"]
+include_negative_memory = true
+
+[rag.profile_evidence.backtest]
+enabled = false
+top_k = 8
+source_kinds = ["long_memory", "validated_advice", "committee_bundle", "portfolio_state"]
+strict_no_future = true
+
+[rag.embedding]
+enabled = false
+provider = "OpenAI"
+model = "text-embedding-3-large"
+dimensions = 1536
+batch_size = 64
+timeout_seconds = 60
+cache_enabled = true
+dry_run = true
+
+[rag.vector_store]
+backend = "sqlite_mock"
+sqlite_path = "db/rag/rag.sqlite"
+allow_chroma = false
+allow_faiss = false
+
+[rag.sources]
+long_memory = true
+portfolio_state = true
+llm_context = true
+evidence_index = true
+validated_advice = true
+committee_bundle = true
+agent_outputs = false
+execution_sync = false
+raw_news = false
+
+[rag.safety]
+require_available_from = true
+require_source_path = true
+exclude_archived_by_default = true
+exclude_rejected_by_default = true
+exclude_execution_by_default = true
+
+[rag.agent_profiles.market_analyst]
+enabled = true
+domains = ["market", "fund"]
+source_kinds = ["llm_context", "evidence_item", "long_memory"]
+prefer_evidence_types = ["quote_snapshot", "intraday_proxy", "market_news", "policy_news"]
+top_k_portfolio = 8
+top_k_per_fund = 3
+allow_negative_memory = false
+include_execution = false
+
+[rag.agent_profiles.risk_manager]
+enabled = true
+domains = ["market", "portfolio", "memory", "risk", "decision", "fund"]
+source_kinds = ["llm_context", "evidence_item", "long_memory", "validated_advice", "committee_bundle"]
+prefer_evidence_types = ["regulatory_notice", "risk_event", "stale_data", "crowding"]
+top_k_portfolio = 12
+top_k_per_fund = 4
+allow_negative_memory = false
+include_execution = false
+
+[rag.agent_profiles.portfolio_trader]
+enabled = true
+domains = ["portfolio", "decision", "fund", "market"]
+source_kinds = ["portfolio_state", "validated_advice", "committee_bundle", "evidence_item", "llm_context"]
+prefer_source_tiers = ["structured_current", "decision_trace", "market_data"]
+top_k_portfolio = 10
+top_k_per_fund = 4
+allow_negative_memory = false
+include_execution = false

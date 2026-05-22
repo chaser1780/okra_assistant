@@ -1,3 +1,20 @@
+$script:rebuildRequested = $false
+$script:autoRebuildWhenChanged = $true
+foreach ($arg in $args) {
+    if ($arg -eq '-Rebuild' -or $arg -eq '--rebuild') {
+        $script:rebuildRequested = $true
+    }
+    if ($arg -eq '-AutoRebuildWhenChanged' -or $arg -eq '--auto-rebuild-when-changed') {
+        $script:autoRebuildWhenChanged = $true
+    }
+}
+if ($env:OKRA_DESKTOP_REBUILD -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
+    $script:rebuildRequested = $true
+}
+if ($env:OKRA_DESKTOP_AUTO_REBUILD -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
+    $script:autoRebuildWhenChanged = $true
+}
+
 $agentHome = 'F:\okra_assistant'
 $webApiPath = Join-Path $agentHome 'app\web_api.py'
 $frontendDir = Join-Path $agentHome 'frontend'
@@ -14,13 +31,6 @@ $env:PYTHONIOENCODING = 'utf-8'
 $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 if ((Test-Path $cargoBin) -and ($env:Path -notlike "*$cargoBin*")) {
     $env:Path = "$cargoBin;$env:Path"
-}
-
-Get-CimInstance Win32_Process | Where-Object {
-    $_.CommandLine -like "*$webApiPath*" -or
-    $_.CommandLine -like "*$frontendDir*node_modules*\\vite\\bin\\vite.js*"
-} | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
 function Resolve-PythonCommand {
@@ -73,14 +83,23 @@ $pythonCommand = Resolve-PythonCommand -ProjectRoot $agentHome
 $env:OKRA_PYTHON_EXE = $pythonCommand.Exe
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $logPath = Join-Path $logDir ("desktop_" + $timestamp + ".log")
+$workbenchExe = Join-Path $frontendDir 'src-tauri\target\release\okra-workbench.exe'
 
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $npmCommand) {
     $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
 }
-if (-not $npmCommand -or -not (Test-Path $frontendDir)) {
+if (-not (Test-Path $frontendDir)) {
     "Tauri/React frontend is unavailable. Install Node.js dependencies or restore the frontend directory." | Tee-Object -FilePath $logPath
     exit 1
+}
+if (-not $npmCommand) {
+    if ((Test-Path $workbenchExe) -and -not $script:rebuildRequested -and -not $script:autoRebuildWhenChanged) {
+        "Node/npm is unavailable; using existing OKRA Workbench executable: $workbenchExe" | Tee-Object -FilePath $logPath
+    } else {
+        "Node/npm is unavailable. Install Node.js or use an existing executable without -Rebuild." | Tee-Object -FilePath $logPath
+        exit 1
+    }
 }
 
 $apiLogPath = Join-Path $logDir ("web_api_" + $timestamp + ".log")
@@ -135,10 +154,6 @@ function Test-WorkbenchNeedsBuild {
     return $false
 }
 
-$apiArgs = @($pythonCommand.Prefix) + @('-B', '-X', 'utf8', $webApiPath, '--home', $agentHome)
-$apiProcess = Start-Process -FilePath $pythonCommand.Exe -ArgumentList $apiArgs -WorkingDirectory $agentHome -WindowStyle Hidden -RedirectStandardOutput $apiLogPath -RedirectStandardError $apiErrPath -PassThru
-Start-Sleep -Seconds 1
-
 function Get-ProcessExitCode {
     param([System.Diagnostics.Process]$Process)
 
@@ -150,26 +165,121 @@ function Get-ProcessExitCode {
     return [int]$Process.ExitCode
 }
 
-if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
+function Get-ProcessUsingPath {
+    param([string]$ExecutablePath)
+
+    $resolved = $null
+    try {
+        $resolved = (Resolve-Path $ExecutablePath -ErrorAction Stop).Path
+    } catch {
+        return $null
+    }
+    return Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            $_.Path -and ([string]::Equals($_.Path, $resolved, [System.StringComparison]::OrdinalIgnoreCase))
+        } catch {
+            $false
+        }
+    } | Select-Object -First 1
+}
+
+function Stop-ExistingDesktopHelpers {
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.CommandLine -like "*$webApiPath*" -or
+        $_.CommandLine -like "*$frontendDir*node_modules*\\vite\\bin\\vite.js*"
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-OkraApi {
+    try {
+        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/api/health' -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -ne 200) {
+            return $false
+        }
+        $payload = $response.Content | ConvertFrom-Json
+        if ($payload.ok -and $payload.data.app -eq 'okra-assistant') {
+            return $true
+        }
+        return $false
+    } catch {
+        return $false
+    }
+}
+
+function Wait-OkraApi {
+    param([int]$Attempts = 20)
+
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        if (Test-OkraApi) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Start-ManagedOkraApi {
+    Stop-ExistingDesktopHelpers
+    $apiArgs = @($pythonCommand.Prefix) + @('-B', '-X', 'utf8', $webApiPath, '--home', $agentHome)
+    $process = Start-Process -FilePath $pythonCommand.Exe -ArgumentList $apiArgs -WorkingDirectory $agentHome -WindowStyle Hidden -RedirectStandardOutput $apiLogPath -RedirectStandardError $apiErrPath -PassThru
+    if (-not (Wait-OkraApi)) {
+        "OKRA web API did not become healthy. See $apiErrPath" | Tee-Object -FilePath $logPath -Append
+    }
+    return $process
+}
+
+function Ensure-ApiForRunningWorkbench {
+    if (Test-OkraApi) {
+        "Existing OKRA web API is healthy; preserving it for the running Workbench." | Tee-Object -FilePath $logPath -Append
+        return $null
+    }
+    "Running Workbench found but OKRA web API is unavailable; starting a replacement API." | Tee-Object -FilePath $logPath -Append
+    return Start-ManagedOkraApi
+}
+
+$cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
+$frontendExit = 1
+$apiProcess = $null
+
+if ($npmCommand -and -not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
     Push-Location $frontendDir
     & $npmCommand.Source install *> $frontendLogPath
     $installExit = $LASTEXITCODE
     Pop-Location
     if ($installExit -ne 0) {
         "npm install failed. See $frontendLogPath" | Tee-Object -FilePath $logPath
-        Stop-Process -Id $apiProcess.Id -Force -ErrorAction SilentlyContinue
         exit $installExit
     }
 }
 
-$cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
-$frontendExit = 1
 try {
     Push-Location $frontendDir
-    if ($cargoCommand) {
-        $workbenchExe = Join-Path $frontendDir 'src-tauri\target\release\okra-workbench.exe'
-        $needsBuild = Test-WorkbenchNeedsBuild -FrontendRoot $frontendDir -ExecutablePath $workbenchExe
-        if ($needsBuild) {
+    if ($cargoCommand -or (Test-Path $workbenchExe)) {
+        $needsBuild = $script:rebuildRequested -or (-not (Test-Path $workbenchExe))
+        $buildBlocked = $false
+        if ($needsBuild -and -not $cargoCommand) {
+            "Cargo is unavailable and OKRA Workbench needs a rebuild. Install Rust/Cargo or use an existing executable." | Tee-Object -FilePath $logPath
+            $buildBlocked = $true
+            $frontendExit = 1
+        }
+        if (-not $buildBlocked -and -not $needsBuild -and $script:autoRebuildWhenChanged) {
+            if ($cargoCommand) {
+                $needsBuild = Test-WorkbenchNeedsBuild -FrontendRoot $frontendDir -ExecutablePath $workbenchExe
+            } else {
+                "Cargo is unavailable; skipping source freshness scan and using existing executable." | Tee-Object -FilePath $logPath
+            }
+        }
+        $runningWorkbench = if (Test-Path $workbenchExe) { Get-ProcessUsingPath -ExecutablePath $workbenchExe } else { $null }
+        if (-not $buildBlocked -and $needsBuild -and $runningWorkbench -and -not $script:rebuildRequested) {
+            "OKRA Workbench is already running (PID $($runningWorkbench.Id)); skipping rebuild of locked executable." | Tee-Object -FilePath $logPath
+            "Close the running app and use .\run_desktop_app.ps1 -Rebuild to force a rebuild." | Tee-Object -FilePath $logPath -Append
+            $needsBuild = $false
+        }
+        if ($buildBlocked) {
+            $frontendExit = 1
+        } elseif ($needsBuild -and $cargoCommand) {
             "Building OKRA Workbench..." | Tee-Object -FilePath $logPath
             $buildProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'build') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendLogPath -RedirectStandardError $frontendErrPath -PassThru
             $buildExit = Get-ProcessExitCode -Process $buildProcess
@@ -183,11 +293,22 @@ try {
             }
         } else {
             "Using existing OKRA Workbench executable: $workbenchExe" | Tee-Object -FilePath $logPath
+            if (-not $script:autoRebuildWhenChanged) {
+                "Fast startup mode: skipped source freshness scan. Use .\run_desktop_app.ps1 -Rebuild after frontend or Tauri changes." | Tee-Object -FilePath $logPath -Append
+            } else {
+                "Source freshness scan passed. Use .\run_desktop_app.ps1 -Rebuild to force a rebuild." | Tee-Object -FilePath $logPath -Append
+            }
             $frontendExit = 0
         }
 
         if ($frontendExit -eq 0) {
-            if (Test-Path $workbenchExe) {
+            if ($runningWorkbench -and -not $script:rebuildRequested) {
+                $apiProcess = Ensure-ApiForRunningWorkbench
+                "OKRA Workbench is already running (PID $($runningWorkbench.Id)); leaving the current window in place." | Tee-Object -FilePath $logPath -Append
+                Wait-Process -Id $runningWorkbench.Id
+                $frontendExit = 0
+            } elseif (Test-Path $workbenchExe) {
+                $apiProcess = Start-ManagedOkraApi
                 $appProcess = Start-Process -FilePath $workbenchExe -WorkingDirectory $agentHome -PassThru
                 Wait-Process -Id $appProcess.Id
                 $frontendExit = $appProcess.ExitCode
@@ -197,6 +318,7 @@ try {
             }
         }
     } else {
+        $apiProcess = Start-ManagedOkraApi
         $frontendProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'dev') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendLogPath -RedirectStandardError $frontendErrPath -PassThru
         Start-Sleep -Seconds 3
         Start-Process 'http://127.0.0.1:5173'
@@ -205,6 +327,8 @@ try {
     }
 } finally {
     Pop-Location
-    Stop-Process -Id $apiProcess.Id -Force -ErrorAction SilentlyContinue
+    if ($apiProcess) {
+        Stop-Process -Id $apiProcess.Id -Force -ErrorAction SilentlyContinue
+    }
 }
 exit $frontendExit

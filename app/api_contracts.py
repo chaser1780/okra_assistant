@@ -52,6 +52,9 @@ class TodayPageDto(ContractModel):
     todayAnalysis: dict[str, Any] = Field(default_factory=dict)
     dashboard: dict[str, Any] = Field(default_factory=dict)
     dailyFirstOpen: dict[str, Any] = Field(default_factory=dict)
+    portfolio: dict[str, Any] = Field(default_factory=dict)
+    longMemory: dict[str, Any] = Field(default_factory=dict)
+    system: dict[str, Any] = Field(default_factory=dict)
 
 
 class PortfolioPageDto(ContractModel):
@@ -71,6 +74,11 @@ class ResearchPageDto(ContractModel):
     selectedDate: str = ""
     summary: dict[str, Any] = Field(default_factory=dict)
     research: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntelligencePageDto(ContractModel):
+    selectedDate: str = ""
+    intelligence: dict[str, Any] = Field(default_factory=dict)
 
 
 class RealtimePageDto(ContractModel):
@@ -106,6 +114,51 @@ class FundDetailDto(ContractModel):
     performance: dict[str, Any] = Field(default_factory=dict)
     tradeMarkers: list[dict[str, Any]] = Field(default_factory=list)
     longMemory: dict[str, Any] = Field(default_factory=dict)
+    system: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutionTradeRequestDto(ContractModel):
+    trade_id: str | None = None
+    trade_date: str | None = None
+    trade_time: str | None = None
+    fund_code: str = ""
+    fund_name: str = ""
+    operation_type: str = ""
+    amount: float | int | str | None = None
+    units: float | int | str | None = None
+    nav: float | int | str | None = None
+    fee: float | int | str | None = None
+    status: str | None = None
+    confirm_date: str | None = None
+    settlement_date: str | None = None
+    linked_suggestion_id: str | None = None
+    linked_advice_date: str | None = None
+    source: str | None = None
+    platform: str | None = None
+    user_note: str | None = None
+
+
+class ExecutionConversionRequestDto(ContractModel):
+    conversion_id: str | None = None
+    trade_date: str | None = None
+    trade_time: str | None = None
+    out_fund_code: str = ""
+    out_fund_name: str = ""
+    out_amount: float | int | str | None = None
+    out_units: float | int | str | None = None
+    out_nav: float | int | str | None = None
+    in_fund_code: str = ""
+    in_fund_name: str = ""
+    in_amount: float | int | str | None = None
+    in_units: float | int | str | None = None
+    in_nav: float | int | str | None = None
+    fee: float | int | str | None = None
+    status: str | None = None
+    linked_suggestion_id: str | None = None
+    linked_advice_date: str | None = None
+    source: str | None = None
+    platform: str | None = None
+    user_note: str | None = None
 
 
 def model_dump_compat(model: BaseModel) -> dict[str, Any]:

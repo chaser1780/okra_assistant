@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from decision_ledger import append_decision_ledger, build_decisions_from_validated, make_decision_id
+from decision_ledger import append_decision_ledger, build_and_write_decisions, build_decisions_from_validated, load_decision_latest, make_decision_id
 from update_decision_outcomes import update_outcomes
 from helpers import TempAgentHome
 
@@ -33,6 +34,10 @@ class DecisionLedgerTests(unittest.TestCase):
     def test_stable_decision_id_includes_amount_hash(self):
         self.assertEqual(make_decision_id("2026-04-01", "F1", "add", 200), make_decision_id("2026-04-01", "F1", "add", 200.0))
         self.assertNotEqual(make_decision_id("2026-04-01", "F1", "add", 100), make_decision_id("2026-04-01", "F1", "add", 200))
+        self.assertNotEqual(
+            make_decision_id("2026-04-01", "F1", "add", 200, "s1", "tactical_actions"),
+            make_decision_id("2026-04-01", "F1", "add", 200, "s2", "tactical_actions"),
+        )
 
     def test_build_decisions_from_validated_captures_actions_and_fallback(self):
         self.agent.write_json(
@@ -76,6 +81,70 @@ class DecisionLedgerTests(unittest.TestCase):
         updated = update_outcomes(self.agent.root, "2026-04-01", "2026-04-06")
         self.assertEqual(updated["decisions"][0]["outcomes"]["t1"]["status"], "ready")
         self.assertAlmostEqual(updated["decisions"][0]["outcomes"]["t1"]["nav_return"], 10.0)
+
+    def test_update_outcomes_refreshes_latest_view(self):
+        self.agent.write_json(
+            "db/validated_advice/2026-04-01.json",
+            {
+                "report_date": "2026-04-01",
+                "tactical_actions": [{"suggestion_id": "s1", "fund_code": "F1", "fund_name": "Fund One", "validated_action": "add", "validated_amount": 200.0}],
+            },
+        )
+        build_and_write_decisions(self.agent.root, "2026-04-01")
+        self.agent.write_json(
+            "db/fund_nav_history/F1.json",
+            {"items": [{"date": "2026-04-01", "nav": 1.0}, {"date": "2026-04-02", "nav": 1.1}]},
+        )
+
+        update_outcomes(self.agent.root, "2026-04-01", "2026-04-02")
+        latest = load_decision_latest(self.agent.root, "F1")
+
+        self.assertEqual(latest["decision"]["outcomes"]["t1"]["status"], "ready")
+        self.assertAlmostEqual(latest["decision"]["outcomes"]["t1"]["nav_return"], 10.0)
+
+    def test_update_outcomes_appends_outcome_event_to_ledger(self):
+        self.agent.write_json(
+            "db/validated_advice/2026-04-01.json",
+            {
+                "report_date": "2026-04-01",
+                "tactical_actions": [{"suggestion_id": "s1", "fund_code": "F1", "fund_name": "Fund One", "validated_action": "add", "validated_amount": 200.0}],
+            },
+        )
+        build_and_write_decisions(self.agent.root, "2026-04-01")
+        self.agent.write_json(
+            "db/fund_nav_history/F1.json",
+            {"items": [{"date": "2026-04-01", "nav": 1.0}, {"date": "2026-04-02", "nav": 1.1}]},
+        )
+
+        update_outcomes(self.agent.root, "2026-04-01", "2026-04-02")
+        rows = [
+            json.loads(line)
+            for line in (self.agent.root / "db/decision_ledger/F1.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+
+        self.assertEqual(rows[0].get("validated_action"), "add")
+        self.assertEqual(rows[1]["event_type"], "outcome_update")
+        self.assertEqual(rows[1]["outcomes"]["t1"]["status"], "ready")
+
+    def test_same_day_same_fund_multiple_suggestions_do_not_collide(self):
+        self.agent.write_json(
+            "db/validated_advice/2026-04-01.json",
+            {
+                "report_date": "2026-04-01",
+                "tactical_actions": [
+                    {"suggestion_id": "s1", "fund_code": "F1", "fund_name": "Fund One", "validated_action": "add", "validated_amount": 200.0},
+                    {"suggestion_id": "s2", "fund_code": "F1", "fund_name": "Fund One", "validated_action": "add", "validated_amount": 200.0},
+                ],
+            },
+        )
+
+        payload = build_and_write_decisions(self.agent.root, "2026-04-01")
+        ids = [item["decision_id"] for item in payload["decisions"]]
+        latest = load_decision_latest(self.agent.root, "F1")
+
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(len(latest["decisions"]), 2)
 
 
 if __name__ == "__main__":

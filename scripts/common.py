@@ -4,6 +4,7 @@ import json
 import os
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 import tomllib
@@ -24,6 +25,7 @@ REQUIRED_DIRS = (
     "raw/quotes",
     "raw/news",
     "raw/fund_profiles",
+    "db/news_query_plans",
     "db/source_health",
     "db/evidence_index",
     "db/recommendation_delta",
@@ -41,8 +43,10 @@ REQUIRED_DIRS = (
     "db/validated_advice",
     "db/decisions",
     "db/decision_ledger",
+    "db/decision_latest",
     "db/agent_outputs",
     "db/agent_snapshots",
+    "db/locks",
     "db/portfolio_valuation",
     "db/portfolio_state",
     "db/portfolio_state/snapshots",
@@ -55,6 +59,7 @@ REQUIRED_DIRS = (
     "db/execution_status",
     "db/execution_sync",
     "db/execution_sync/actual_trades",
+    "db/execution_sync/settlement_events",
     "db/execution_sync/position_snapshots",
     "db/execution_sync/reconciliation_reports",
     "db/execution_sync/imports",
@@ -447,8 +452,55 @@ def dump_json(path: Path, payload: dict | list) -> Path:
     return path
 
 
+def lock_path(agent_home: Path, name: str) -> Path:
+    safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(name or "default"))
+    if not safe_name.endswith(".lock"):
+        safe_name = f"{safe_name}.lock"
+    return agent_home / "db" / "locks" / safe_name
+
+
+@contextmanager
+def file_lock(path: Path, *, timeout_seconds: float = 15.0, poll_seconds: float = 0.05, stale_seconds: float = 300.0):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    descriptor: int | None = None
+    while True:
+        try:
+            descriptor = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            payload = json.dumps({"pid": os.getpid(), "created_at": timestamp_now()}, ensure_ascii=False)
+            os.write(descriptor, payload.encode("utf-8"))
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+                if stale_seconds > 0 and age > stale_seconds:
+                    path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() - started >= timeout_seconds:
+                raise TimeoutError(f"Timed out waiting for lock {path}")
+            time.sleep(poll_seconds)
+    try:
+        yield path
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def load_json(path: Path) -> dict | list:
-    return repair_data(json.loads(path.read_text(encoding="utf-8")))
+    last_error = None
+    for attempt in range(12):
+        try:
+            return repair_data(json.loads(path.read_text(encoding="utf-8")))
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.03 * (attempt + 1))
+    raise last_error or PermissionError(f"Failed to read {path}")
 
 
 def quote_path(agent_home: Path, report_date: str) -> Path:
@@ -510,6 +562,11 @@ def decisions_path(agent_home: Path, report_date: str) -> Path:
 def decision_ledger_path(agent_home: Path, fund_code: str) -> Path:
     safe = str(fund_code or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
     return agent_home / "db" / "decision_ledger" / f"{safe}.jsonl"
+
+
+def decision_latest_path(agent_home: Path, fund_code: str) -> Path:
+    safe = str(fund_code or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return agent_home / "db" / "decision_latest" / f"{safe}.json"
 
 
 def agent_output_dir(agent_home: Path, report_date: str) -> Path:
@@ -640,6 +697,26 @@ def process_exists(pid: object) -> bool:
         return False
     if resolved <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = kernel32.OpenProcess(process_query_limited_information, False, resolved)
+            if not handle:
+                return False
+            try:
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == still_active
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(resolved, 0)
     except OSError:
@@ -681,6 +758,15 @@ def actual_trade_dir(agent_home: Path) -> Path:
 
 def actual_trade_path(agent_home: Path, trade_date: str) -> Path:
     return actual_trade_dir(agent_home) / f"{trade_date}.json"
+
+
+def settlement_event_dir(agent_home: Path) -> Path:
+    return agent_home / "db" / "execution_sync" / "settlement_events"
+
+
+def settlement_event_path(agent_home: Path, idempotency_key: str) -> Path:
+    safe = str(idempotency_key or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return settlement_event_dir(agent_home) / f"{safe}.json"
 
 
 def load_actual_trade_payload(agent_home: Path, trade_date: str) -> dict:
@@ -802,6 +888,10 @@ def load_benchmark_mappings(agent_home: Path) -> dict:
 
 def source_health_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "source_health" / f"{report_date}.json"
+
+
+def news_query_plan_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "news_query_plans" / f"{report_date}.json"
 
 
 def evidence_index_path(agent_home: Path, report_date: str) -> Path:

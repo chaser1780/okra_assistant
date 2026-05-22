@@ -1,7 +1,10 @@
-import type { ApiEnvelope, CopilotRequest, ExecutionSyncPayload, FundDetailPayload, MemoryAction, Snapshot } from "./types";
+import { copilotResponseSchema } from "./schemas";
+import type { ApiEnvelope, CopilotRequest, CopilotResponse, FundDetailPayload, MemoryAction, Snapshot } from "./types";
 
 const API_BASE = import.meta.env.VITE_OKRA_API_BASE ?? "http://127.0.0.1:8765";
 
+// Keep this module as the low-level HTTP boundary plus command-style mutations.
+// Page queries should prefer workbenchApi/workbenchQuery so payload validation stays centralized.
 type ErrorEnvelope = {
   error_code?: string;
   error_message?: string;
@@ -91,10 +94,6 @@ export function runTask(
   return request(`/api/run/${kind}`, { method: "POST", body: JSON.stringify(options) });
 }
 
-export function getExecutionSync(): Promise<ExecutionSyncPayload> {
-  return request("/api/execution-sync");
-}
-
 export function recordExecutionTrade(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return request("/api/execution-sync/trade", { method: "POST", body: JSON.stringify(payload) });
 }
@@ -105,10 +104,6 @@ export function recordExecutionConversion(payload: Record<string, unknown>): Pro
 
 export function parseAlipayScreenshots(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return request("/api/execution-sync/alipay-screenshot/parse", { method: "POST", body: JSON.stringify(payload) });
-}
-
-export function previewExecutionReconcile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return request("/api/execution-sync/reconcile/preview", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export function applyExecutionReconcile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -130,9 +125,17 @@ export function runLongMemoryAction(
   });
 }
 
-export function askCopilot(payload: CopilotRequest): Promise<{ answer: string; mode?: string; sourceDate?: string }> {
-  return request("/api/copilot/explain", {
+export async function askCopilot(payload: CopilotRequest): Promise<CopilotResponse> {
+  const result = await request<unknown>("/api/copilot/explain", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+  return copilotResponseSchema.parse(result) as CopilotResponse;
+}
+
+export function openExternalUrl(url: string): Promise<{ ok: boolean; url: string; opened?: boolean }> {
+  return request("/api/open-url", {
+    method: "POST",
+    body: JSON.stringify({ url })
   });
 }

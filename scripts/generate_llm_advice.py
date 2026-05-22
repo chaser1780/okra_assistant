@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from common import agent_output_dir, committee_advice_path, committee_decision_bundle_path, dump_json, ensure_layout, llm_advice_path, llm_context_path, llm_raw_path, load_json, load_llm_config, resolve_agent_home, resolve_date, timestamp_now
 from models import CommitteeDecisionBundle, FinalAdvice, LlmContext
-from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text
+from multiagent_utils import call_responses_text
+from rag_profile_evidence import build_decision_evidence_pack
 
 NARRATIVE_SCHEMA = {
     "type": "object",
@@ -170,9 +170,21 @@ def committee_core_agents_available(agent_bundle: dict | None) -> bool:
     return all(str(agents.get(name, {}).get("status", "")).lower() == "ok" for name in ("research_manager", "risk_manager", "portfolio_trader"))
 
 
-def build_user_prompt(context: LlmContext, agent_bundle: dict, committee_advice: FinalAdvice) -> str:
+def committee_hold_only_bundle_available(agent_bundle: dict | None, committee_bundle: dict | None) -> bool:
+    if not agent_bundle or not committee_bundle:
+        return False
+    if agent_bundle.get("failed_agents"):
+        return False
+    if str(committee_bundle.get("decision_mode", "") or "") != "hold_only":
+        return False
+    if bool(committee_bundle.get("execution_eligible", True)):
+        return False
+    return bool(committee_bundle.get("fund_decisions", []) or [])
+
+
+def build_user_prompt(context: LlmContext, agent_bundle: dict, committee_advice: FinalAdvice, decision_rag_pack: dict | None = None) -> str:
     committee_bundle = build_committee_bundle(agent_bundle)
-    return (
+    prompt = (
         "请基于已经固定的 committee advice，补写中文市场摘要与跨基金观察。\n"
         "规则：\n"
         "1. 你只能输出 market_summary 与 cross_fund_observations。\n"
@@ -189,6 +201,13 @@ def build_user_prompt(context: LlmContext, agent_bundle: dict, committee_advice:
         + "\n\nRAW_CONTEXT\n"
         + json.dumps(compact_context_for_final(context), ensure_ascii=False, indent=2)
     )
+    if decision_rag_pack and decision_rag_pack.get("enabled", True):
+        prompt += (
+            "\n\nRAG_DECISION_EVIDENCE_PACK\n"
+            "This pack may only explain/support existing committee advice. It must not add, remove, or change actions.\n"
+            + json.dumps(decision_rag_pack, ensure_ascii=False, indent=2)
+        )
+    return prompt
 
 
 def compact_raw_payload(payload: dict) -> dict:
@@ -227,6 +246,18 @@ def compact_raw_payload(payload: dict) -> dict:
     if payload.get("events"):
         compact["events_tail"] = [compact_event(item) for item in payload.get("events", [])[-8:]]
         compact["event_count"] = len(payload.get("events", []))
+    if payload.get("rag_decision_evidence") and payload.get("rag_decision_evidence", {}).get("enabled", True):
+        pack = payload.get("rag_decision_evidence", {}) or {}
+        compact["rag_decision_evidence"] = {
+            "enabled": pack.get("enabled", True),
+            "profile": pack.get("profile", "decision"),
+            "status": pack.get("status", ""),
+            "traceId": pack.get("traceId", ""),
+            "hitCount": len(pack.get("hits", []) or []),
+            "fallback_reason": pack.get("fallback_reason", ""),
+            "missingData": pack.get("missingData", []),
+            "guardrails": pack.get("guardrails", {}),
+        }
     if payload.get("advice"):
         compact["advice"] = payload.get("advice")
     return compact
@@ -593,22 +624,6 @@ def build_fallback_advice_from_agents(context: LlmContext, agent_bundle: dict) -
     return build_committee_advice_from_agents(context, agent_bundle)
 
 
-def resolve_api_key(config: dict) -> str:
-    direct = config.get("api_key", "").strip()
-    if direct:
-        return direct
-    api_key_file = config.get("api_key_file", "").strip()
-    if api_key_file:
-        path = Path(api_key_file)
-        if path.exists():
-            return path.read_text(encoding="utf-8").strip()
-    api_key_env = config.get("api_key_env", f"{config['model_provider'].upper()}_API_KEY")
-    env_value = os.getenv(api_key_env, "").strip()
-    if env_value:
-        return env_value
-    raise SystemExit(f"Missing API key. Checked api_key, api_key_file, and env var {api_key_env}.")
-
-
 def write_final_debug_log(agent_home: Path | str, request_name: str, payload: dict) -> None:
     path = Path(agent_home) / "logs" / "llm" / f"{timestamp_now().replace(':', '-').replace('+', '_')}_{request_name}.json"
     dump_json(path, payload)
@@ -634,10 +649,6 @@ def call_responses_api(
     max_attempts: int = 3,
     agent_home: Path | str | None = None,
 ) -> dict:
-    provider_key = config["model_provider"]
-    provider = config["model_providers"][provider_key]
-    api_key = resolve_api_key(config)
-    endpoint = provider["base_url"].rstrip("/") + "/responses"
     payload = {
         "model": config["model"],
         "stream": True,
@@ -658,128 +669,14 @@ def call_responses_api(
     }
     payload["text"]["verbosity"] = "low"
     payload["max_output_tokens"] = max_output_tokens
-
-    last_error = None
-    transport_order = [("direct", False), ("env_proxy", True)]
-    for attempt in range(1, max_attempts + 1):
-        for transport_name, use_env_proxy in transport_order:
-            delta_parts = []
-            events = []
-            session = build_llm_session(use_env_proxy=use_env_proxy)
-            try:
-                with session.post(
-                    endpoint,
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json=payload,
-                    timeout=(30, 300),
-                    stream=True,
-                ) as response:
-                    if response.status_code >= 400:
-                        raise RuntimeError(describe_api_failure(response.status_code, response.text[:800], request_kind, transport_name))
-                    parsed = consume_sse_response(response)
-                    events = parsed.get("events", [])
-                    delta_parts = [parsed.get("output_text", "")]
-
-                completed = parsed.get("completed_event") or {}
-                if isinstance(completed, dict) and completed.get("response"):
-                    output_text = extract_response_output_text(completed["response"]).strip()
-                else:
-                    output_text = extract_response_output_text(completed).strip()
-                if not output_text:
-                    output_text = parsed.get("output_text", "").strip()
-                if output_text:
-                    return {
-                        "request_payload": payload,
-                        "output_text": output_text,
-                        "events": events,
-                        "stream_incomplete": bool(parsed.get("stream_error")),
-                        "transport_name": transport_name,
-                    }
-                failed_event = parsed.get("failed_event") or {}
-                error_event = parsed.get("error_event") or {}
-                if failed_event:
-                    if agent_home:
-                        write_final_debug_log(
-                            agent_home,
-                            f"{request_kind}_{transport_name}_failed_attempt{attempt}",
-                            {
-                                "request_payload": payload,
-                                "events_tail": events[-20:],
-                                "failed_event": failed_event,
-                                "error_event": error_event,
-                                "transport_name": transport_name,
-                                "use_env_proxy": use_env_proxy,
-                            },
-                        )
-                    raise RuntimeError(f"{request_kind} failed before output text ({transport_name}): {json.dumps(failed_event, ensure_ascii=False)}")
-                if error_event:
-                    if agent_home:
-                        write_final_debug_log(
-                            agent_home,
-                            f"{request_kind}_{transport_name}_error_attempt{attempt}",
-                            {
-                                "request_payload": payload,
-                                "events_tail": events[-20:],
-                                "failed_event": failed_event,
-                                "error_event": error_event,
-                                "transport_name": transport_name,
-                                "use_env_proxy": use_env_proxy,
-                            },
-                        )
-                    raise RuntimeError(f"{request_kind} error event ({transport_name}): {json.dumps(error_event, ensure_ascii=False)}")
-                if agent_home:
-                    write_final_debug_log(
-                        agent_home,
-                        f"{request_kind}_{transport_name}_empty_attempt{attempt}",
-                        {
-                            "request_payload": payload,
-                            "events_tail": events[-20:],
-                            "completed_event": parsed.get("completed_event"),
-                            "failed_event": failed_event,
-                            "error_event": error_event,
-                            "parsed_output_text": parsed.get("output_text", ""),
-                            "stream_error": parsed.get("stream_error"),
-                            "transport_name": transport_name,
-                            "use_env_proxy": use_env_proxy,
-                        },
-                    )
-                raise RuntimeError(f"{request_kind} stream did not contain output_text deltas ({transport_name}).")
-            except Exception as exc:
-                last_error = exc
-                joined = "".join(delta_parts).strip()
-                if joined:
-                    try:
-                        json.loads(strip_json_fence(joined))
-                        return {
-                            "request_payload": payload,
-                            "output_text": joined,
-                            "events": events,
-                            "stream_incomplete": True,
-                            "transport_name": transport_name,
-                        }
-                    except Exception:
-                        pass
-                if agent_home:
-                    write_final_debug_log(
-                        agent_home,
-                        f"{request_kind}_{transport_name}_exception_attempt{attempt}",
-                        {
-                            "request_payload": payload,
-                            "events_tail": events[-20:],
-                            "response_text_tail": joined[-4000:] if joined else "",
-                            "error": str(exc),
-                            "transport_name": transport_name,
-                            "use_env_proxy": use_env_proxy,
-                        },
-                    )
-            finally:
-                session.close()
-        if attempt == max_attempts:
-            break
-        import time
-        time.sleep(2 * attempt)
-
-    raise RuntimeError(f"{request_kind} request failed after {max_attempts} attempts: {last_error}")
+    return call_responses_text(
+        config,
+        payload,
+        request_kind=request_kind,
+        max_attempts=max_attempts,
+        agent_home=agent_home,
+        timeout=(30, 300),
+    )
 
 
 def main() -> None:
@@ -803,7 +700,9 @@ def main() -> None:
     if not args.mock:
         if not agent_bundle:
             raise SystemExit("缺少多智能体聚合结果，无法生成最终建议。")
-        if not committee_core_agents_available(agent_bundle):
+        core_ready = committee_core_agents_available(agent_bundle)
+        hold_only_degraded = committee_hold_only_bundle_available(agent_bundle, committee_bundle)
+        if not core_ready and not hold_only_degraded:
             failed = ", ".join(item["agent_name"] for item in agent_bundle.get("failed_agents", []))
             raise SystemExit(f"委员会核心角色未完整成功，无法生成最终建议。失败智能体：{failed}")
         if agent_bundle.get("failed_agents") and not agent_bundle.get("degraded_ok", False):
@@ -813,6 +712,18 @@ def main() -> None:
             raise SystemExit("缺少 committee_decision_bundle，无法生成最终建议。")
         if str(committee_bundle.get("decision_mode", "") or "") == "blocked":
             raise SystemExit("Committee decision bundle is blocked and cannot produce executable advice.")
+
+    validated_file = agent_home / "db" / "validated_advice" / f"{report_date}.json"
+    validated_advice = load_json(validated_file) if validated_file.exists() else {}
+    try:
+        decision_rag_pack = build_decision_evidence_pack(
+            agent_home,
+            report_date,
+            committee_bundle=committee_bundle,
+            validated_advice=validated_advice,
+        )
+    except Exception as exc:
+        decision_rag_pack = {"enabled": True, "profile": "decision", "status": "failed", "fallback_reason": str(exc)}
 
     if args.mock:
         advice = build_mock_advice(context, agent_bundle)
@@ -826,6 +737,7 @@ def main() -> None:
             "advice": advice,
             "committee": committee,
             "committee_decision_bundle": committee_bundle,
+            "rag_decision_evidence": decision_rag_pack,
             "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)) if agent_bundle else True,
             "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)) if agent_bundle else False,
             "failed_agents": agent_bundle.get("failed_agents", []) if agent_bundle else [],
@@ -837,7 +749,7 @@ def main() -> None:
             raw_payload = call_responses_api(
                 config,
                 build_system_prompt(config.get("personality", "friendly")),
-                build_user_prompt(context, agent_bundle, committee_advice),
+                build_user_prompt(context, agent_bundle, committee_advice, decision_rag_pack),
                 schema=NARRATIVE_SCHEMA,
                 schema_name="fund_portfolio_narrative",
                 request_kind="final_narrative",
@@ -858,6 +770,7 @@ def main() -> None:
                     "advice": advice,
                     "committee": committee,
                     "committee_decision_bundle": committee_bundle,
+                    "rag_decision_evidence": decision_rag_pack,
                     "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                     "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                     "failed_agents": agent_bundle.get("failed_agents", []),
@@ -874,6 +787,7 @@ def main() -> None:
                 "advice": advice,
                 "committee": committee,
                 "committee_decision_bundle": committee_bundle,
+                "rag_decision_evidence": decision_rag_pack,
                 "aggregate_all_agents_ok": bool(agent_bundle.get("all_agents_ok", False)),
                 "aggregate_degraded_ok": bool(agent_bundle.get("degraded_ok", False)),
                 "failed_agents": agent_bundle.get("failed_agents", []),

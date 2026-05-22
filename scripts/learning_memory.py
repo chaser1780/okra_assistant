@@ -451,13 +451,18 @@ def _batch_rule_events(review_batches: list[dict[str, Any]]) -> tuple[Counter[st
     return support_counter, contradiction_counter, watchouts
 
 
+def _advice_review_batches(review_batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [batch for batch in review_batches if str(batch.get("source", "advice") or "advice") == "advice"]
+
+
 def run_learning_sync(agent_home: Path, review_date: str, review_batches: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     ledger = load_memory_ledger(agent_home)
     memory = load_long_memory_compat_view(agent_home)
-    support_counter, contradiction_counter, watchouts = _batch_rule_events(review_batches)
+    advice_batches = _advice_review_batches(review_batches)
+    support_counter, contradiction_counter, watchouts = _batch_rule_events(advice_batches)
     now = _now()
 
-    for batch in review_batches:
+    for batch in advice_batches:
         diagnostics = batch.get("diagnostic_summary", {}) or {}
         for label, count in diagnostics.items():
             _apply_observation(ledger, label=label, count=int(count or 0), batch=batch, as_support=True, source_kind="review")
@@ -479,7 +484,7 @@ def run_learning_sync(agent_home: Path, review_date: str, review_batches: list[d
         "review_date": review_date,
         "generated_at": now,
         "batch_count": len(review_batches),
-        "advice_batch_count": sum(1 for item in review_batches if item.get("source", "advice") == "advice"),
+        "advice_batch_count": len(advice_batches),
         "execution_batch_count": sum(1 for item in review_batches if item.get("source") == "execution"),
         "summary": {
             "supportive": sum(item.get("summary", {}).get("supportive", 0) for item in review_batches),

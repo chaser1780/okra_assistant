@@ -13,6 +13,7 @@ from typing import Any
 from common import (
     analysis_quality_for_start,
     committee_advice_path,
+    committee_decision_bundle_path,
     daily_workspace_dir,
     dump_json,
     ensure_layout,
@@ -185,10 +186,59 @@ def _elapsed_seconds(started_at_text: str) -> int:
         return 0
 
 
+def _decision_state(agent_home: Path, report_date: str) -> dict:
+    aggregate_path = agent_home / "db" / "agent_outputs" / report_date / "aggregate.json"
+    aggregate = load_json(aggregate_path) if aggregate_path.exists() else {}
+    bundle_path = committee_decision_bundle_path(agent_home, report_date)
+    bundle = load_json(bundle_path) if bundle_path.exists() else {}
+    validated_path = validated_advice_path(agent_home, report_date)
+    validated = load_json(validated_path) if validated_path.exists() else {}
+
+    degraded_agents = list(aggregate.get("degraded_agent_names", []) or [])
+    failed_agents = list(aggregate.get("failed_agents", []) or [])
+    failed_agent_names = list(aggregate.get("failed_agent_names", []) or [])
+    degradation_mode = str(
+        bundle.get("degradation_mode")
+        or aggregate.get("degradation_mode")
+        or validated.get("degradation_mode")
+        or ""
+    )
+    decision_mode = str(bundle.get("decision_mode") or validated.get("decision_mode") or "")
+    execution_eligible_values = [
+        aggregate.get("execution_eligible"),
+        bundle.get("execution_eligible"),
+        validated.get("execution_eligible"),
+    ]
+    execution_eligible = all(value is not False for value in execution_eligible_values)
+    committee_ready = bool(aggregate.get("committee_ready", bool(bundle)))
+    is_degraded = (
+        bool(degraded_agents)
+        or bool(failed_agents)
+        or bool(failed_agent_names)
+        or degradation_mode not in {"", "none", "ok"}
+        or decision_mode in {"hold_only", "degraded", "fallback"}
+        or not execution_eligible
+        or not committee_ready
+    )
+    status = RUNTIME_STATUS["degraded"] if is_degraded else RUNTIME_STATUS["ok"]
+    return {
+        "status": status,
+        "is_degraded": is_degraded,
+        "degradation_mode": degradation_mode,
+        "decision_mode": decision_mode,
+        "execution_eligible": execution_eligible,
+        "committee_ready": committee_ready,
+        "degraded_agents": degraded_agents,
+        "failed_agents": failed_agents,
+        "failed_agent_names": failed_agent_names,
+    }
+
+
 def _today_analysis_payload(agent_home: Path, report_date: str, run_meta: dict, memory_cycle: dict) -> dict:
     context = load_json(llm_context_path(agent_home, report_date)) if llm_context_path(agent_home, report_date).exists() else {}
     validated = load_json(validated_advice_path(agent_home, report_date)) if validated_advice_path(agent_home, report_date).exists() else {}
     committee = load_json(committee_advice_path(agent_home, report_date)) if committee_advice_path(agent_home, report_date).exists() else {}
+    decision_state = _decision_state(agent_home, report_date)
     return {
         "analysis_run_id": run_meta["analysis_run_id"],
         "analysis_date": report_date,
@@ -206,6 +256,11 @@ def _today_analysis_payload(agent_home: Path, report_date: str, run_meta: dict, 
         "memory_cycle": memory_cycle,
         "validated_available": bool(validated),
         "context_available": bool(context),
+        "decision_state": decision_state,
+        "degradation_mode": decision_state["degradation_mode"],
+        "decision_mode": decision_state["decision_mode"],
+        "execution_eligible": decision_state["execution_eligible"],
+        "committee_ready": decision_state["committee_ready"],
     }
 
 
@@ -218,6 +273,7 @@ def _today_decision_payload(agent_home: Path, report_date: str, run_meta: dict, 
     holds = list(validated.get("hold_actions", []) or [])
     actionable = tactical + dca
     primary = actionable[0] if actionable else {}
+    decision_state = _decision_state(agent_home, report_date)
     return {
         "analysis_run_id": run_meta["analysis_run_id"],
         "analysis_date": report_date,
@@ -236,6 +292,12 @@ def _today_decision_payload(agent_home: Path, report_date: str, run_meta: dict, 
         "committee": validated.get("committee", {}) or aggregate.get("committee", {}) or {},
         "prohibited_actions": analysis.get("memory_digest", {}).get("execution_memory_hits", []),
         "allowed_with_conditions": analysis.get("memory_digest", {}).get("strategic_memory_hits", []),
+        "decision_state": decision_state,
+        "degradation_mode": decision_state["degradation_mode"],
+        "decision_mode": decision_state["decision_mode"],
+        "execution_eligible": decision_state["execution_eligible"],
+        "committee_ready": decision_state["committee_ready"],
+        "degradedAgents": decision_state["degraded_agents"],
     }
 
 
@@ -317,7 +379,17 @@ def _run_memory_cycle(agent_home: Path, report_date: str, *, allow_fail: bool, l
     return {"status": "ok" if payload.get("returncode", 1) == 0 else "retryable_failure", "runner": payload}
 
 
-def run_today_analysis(agent_home: Path, report_date: str, *, trigger: str, demo: bool, force: bool, llm_mock: bool, started_at: datetime | None = None) -> Path:
+def run_today_analysis(
+    agent_home: Path,
+    report_date: str,
+    *,
+    trigger: str,
+    demo: bool,
+    force: bool,
+    llm_mock: bool,
+    started_at: datetime | None = None,
+    resume_existing: bool = False,
+) -> Path:
     ensure_layout(agent_home)
     started = started_at or shanghai_now()
     paths = _paths(agent_home, report_date)
@@ -389,6 +461,8 @@ def run_today_analysis(agent_home: Path, report_date: str, *, trigger: str, demo
         runtime.update({"phase": "today_analysis", "currentStep": "run_daily_pipeline", "elapsedSeconds": _elapsed_seconds(run_meta["started_at_shanghai"])})
         _write_runtime(agent_home, report_date, runtime)
         sync_args = ["--date", report_date, "--mode", "intraday"]
+        if resume_existing:
+            sync_args.append("--resume-existing")
         if demo:
             sync_args.append("--demo")
         if llm_mock or demo:
@@ -448,16 +522,25 @@ def run_today_analysis(agent_home: Path, report_date: str, *, trigger: str, demo
         brief = _brief_text(report_date, decision, analysis)
         paths.brief.write_text(brief, encoding="utf-8")
         (agent_home / "reports" / "daily" / f"{report_date}_daily_brief.md").write_text(brief, encoding="utf-8")
+        decision_state = decision.get("decision_state", {}) or _decision_state(agent_home, report_date)
+        failed_agents = list(decision_state.get("failed_agents", []) or [])
+        memory_failed_agents = memory_cycle.get("failedAgents", []) if isinstance(memory_cycle, dict) else []
+        if memory_failed_agents:
+            failed_agents.extend(memory_failed_agents)
         runtime.update(
             {
-                "status": RUNTIME_STATUS["ok"],
+                "status": str(decision_state.get("status") or RUNTIME_STATUS["ok"]),
                 "phase": "completed",
                 "currentStep": "",
                 "currentAgent": "",
                 "currentAgentStage": "",
                 "runningAgents": [],
-                "failedAgents": memory_cycle.get("failedAgents", []) if isinstance(memory_cycle, dict) else [],
-                "degradedAgents": memory_cycle.get("degradedAgents", []) if isinstance(memory_cycle, dict) else [],
+                "failedAgents": failed_agents,
+                "degradedAgents": list(decision_state.get("degraded_agents", []) or []),
+                "degradationMode": str(decision_state.get("degradation_mode", "") or ""),
+                "decisionMode": str(decision_state.get("decision_mode", "") or ""),
+                "executionEligible": bool(decision_state.get("execution_eligible", True)),
+                "committeeReady": bool(decision_state.get("committee_ready", False)),
                 "elapsedSeconds": _elapsed_seconds(run_meta["started_at_shanghai"]),
                 "endedAt": timestamp_now(),
                 "resultReady": True,

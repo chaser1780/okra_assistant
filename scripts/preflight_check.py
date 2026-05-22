@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import requests
 from datetime import time
 from pathlib import Path
 
@@ -18,7 +19,15 @@ from common import (
     resolve_agent_home,
     timestamp_now,
 )
-from multiagent_utils import build_llm_session, consume_sse_response, extract_response_output_text, resolve_api_key
+from multiagent_utils import (
+    build_llm_session,
+    consume_sse_response,
+    extract_response_output_text,
+    is_retryable_provider_status,
+    resolve_api_key,
+    responses_endpoint,
+    responses_headers,
+)
 
 
 KNOWN_INTRADAY_REPORT_MODES = {
@@ -173,23 +182,44 @@ def probe_llm_model(agent_home: Path, config: dict) -> dict:
             }
         },
     }
-    endpoint = provider["base_url"].rstrip("/") + "/responses"
+    endpoint = responses_endpoint(provider)
     last_errors: list[str] = []
+    attempts: list[dict] = []
     for transport_name, use_env_proxy in (("direct", False), ("env_proxy", True)):
         session = build_llm_session(use_env_proxy=use_env_proxy)
         try:
             with session.post(
                 endpoint,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=responses_headers(api_key, stream=True),
                 json=payload,
-                timeout=(10, 30),
+                timeout=(5, 12),
                 stream=True,
             ) as response:
                 if response.status_code >= 400:
                     detail = response.text[:500]
-                    last_errors.append(f"{transport_name}: HTTP {response.status_code}: {detail}")
+                    retryable = is_retryable_provider_status(response.status_code)
+                    attempts.append(
+                        {
+                            "transport_name": transport_name,
+                            "use_env_proxy": use_env_proxy,
+                            "endpoint": endpoint,
+                            "status_code": response.status_code,
+                            "retryable": retryable,
+                            "response_snippet": detail,
+                        }
+                    )
+                    last_errors.append(f"{transport_name}: HTTP {response.status_code}{' retryable' if retryable else ''}: {detail}")
                     continue
                 parsed_payload = consume_sse_response(response)
+                attempts.append(
+                    {
+                        "transport_name": transport_name,
+                        "use_env_proxy": use_env_proxy,
+                        "endpoint": endpoint,
+                        "status_code": response.status_code,
+                        "retryable": False,
+                    }
+                )
             completed = parsed_payload.get("completed_event") or {}
             if isinstance(completed, dict) and completed.get("response"):
                 text = extract_response_output_text(completed["response"]).strip()
@@ -202,16 +232,43 @@ def probe_llm_model(agent_home: Path, config: dict) -> dict:
                 return {
                     "status": "ok",
                     "transport_name": transport_name,
+                    "endpoint": endpoint,
+                    "attempts": attempts,
                     "detail": f"LLM probe 成功，model={config['model']}",
                 }
             last_errors.append(f"{transport_name}: 返回成功响应，但内容不符合预期。")
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            attempts.append(
+                {
+                    "transport_name": transport_name,
+                    "use_env_proxy": use_env_proxy,
+                    "endpoint": endpoint,
+                    "status_code": 0,
+                    "retryable": True,
+                    "error": str(exc),
+                }
+            )
+            last_errors.append(f"{transport_name}: network_timeout_or_connection_error: {exc}")
         except Exception as exc:
+            attempts.append(
+                {
+                    "transport_name": transport_name,
+                    "use_env_proxy": use_env_proxy,
+                    "endpoint": endpoint,
+                    "status_code": 0,
+                    "retryable": False,
+                    "error": str(exc),
+                }
+            )
             last_errors.append(f"{transport_name}: {exc}")
         finally:
             session.close()
     return {
         "status": "error",
         "transport_name": "",
+        "endpoint": endpoint,
+        "attempts": attempts,
+        "retryable": any(bool(item.get("retryable")) for item in attempts),
         "detail": "LLM probe 失败：" + " | ".join(last_errors),
     }
 
@@ -257,6 +314,9 @@ def check_llm(agent_home: Path, result: dict, probe_network: bool) -> None:
         status,
         detail,
         transport_name=probe.get("transport_name", ""),
+        endpoint=probe.get("endpoint", ""),
+        retryable=bool(probe.get("retryable", False)),
+        attempts=probe.get("attempts", []),
     )
 
 

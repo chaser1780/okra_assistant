@@ -63,6 +63,175 @@ def summarize_news(items: list[NewsItem], limit: int = 5) -> list[NewsItem]:
     ]
 
 
+def _avg(values: list[float]) -> float:
+    return round(sum(values) / len(values), 4) if values else 0.0
+
+
+def _max(values: list[float]) -> float:
+    return round(max(values), 4) if values else 0.0
+
+
+def _simple_news_item(item: dict) -> dict:
+    return {
+        "published_at": item.get("published_at", ""),
+        "title": item.get("title", ""),
+        "summary": item.get("summary", ""),
+        "impact": item.get("impact", "neutral"),
+        "sentiment_label": item.get("sentiment_label", "neutral"),
+        "risk_level": item.get("risk_level", "low"),
+        "heat_score": float(item.get("heat_score", 0.0) or 0.0),
+        "heat_rank": int(item.get("heat_rank", 0) or 0),
+        "source_name": item.get("source_name", ""),
+        "source_role": item.get("source_role", ""),
+        "evidence_type": item.get("evidence_type", ""),
+        "query_type": item.get("query_type", ""),
+        "topic_tags": list(item.get("topic_tags", []) or []),
+        "risk_tags": list(item.get("risk_tags", []) or []),
+        "url": item.get("url", item.get("source_url", "")),
+    }
+
+
+def build_news_digest(news_payload: dict, *, limit_per_group: int = 5) -> dict:
+    items = list(news_payload.get("items", []) or [])
+    unique_keys = {
+        str(item.get("canonical_url", "") or item.get("source_url", "") or item.get("url", "") or item.get("title", ""))
+        for item in items
+        if str(item.get("canonical_url", "") or item.get("source_url", "") or item.get("url", "") or item.get("title", ""))
+    }
+    by_source_role: dict[str, int] = Counter(str(item.get("source_role", "unknown") or "unknown") for item in items)
+    by_evidence_type: dict[str, int] = Counter(str(item.get("evidence_type", "unknown") or "unknown") for item in items)
+    by_impact: dict[str, int] = Counter(str(item.get("impact", "neutral") or "neutral") for item in items)
+    source_breakdown: dict[str, int] = Counter(str(item.get("provider", item.get("source_name", "unknown")) or "unknown") for item in items)
+    query_breakdown: dict[str, int] = Counter(str(item.get("query_type", "") or "none") for item in items)
+    sorted_items = sorted(items, key=lambda item: item.get("published_at", ""), reverse=True)
+    heat_sorted = sorted(items, key=lambda item: (float(item.get("heat_score", 0.0) or 0.0), item.get("published_at", "")), reverse=True)
+    risk_sorted = sorted(
+        [item for item in items if str(item.get("risk_level", "low") or "low") in {"high", "medium"} or bool(item.get("is_policy_signal", False))],
+        key=lambda item: (str(item.get("risk_level", "low") or "low") == "high", item.get("published_at", "")),
+        reverse=True,
+    )
+    mapped_item_count = int((news_payload.get("dedup_summary", {}) or {}).get("mapped_item_count", len(items)) or len(items))
+    unique_item_count = int((news_payload.get("dedup_summary", {}) or {}).get("unique_item_count", len(unique_keys) if unique_keys else len(items)) or 0)
+    duplicate_item_count = int((news_payload.get("dedup_summary", {}) or {}).get("duplicate_item_count", max(0, mapped_item_count - unique_item_count)) or 0)
+    return {
+        "item_count": len(items),
+        "mapped_item_count": mapped_item_count,
+        "unique_item_count": unique_item_count,
+        "duplicate_item_count": duplicate_item_count,
+        "by_source_role": dict(by_source_role),
+        "by_evidence_type": dict(by_evidence_type),
+        "by_impact": dict(by_impact),
+        "source_breakdown": dict(source_breakdown),
+        "query_breakdown": dict(query_breakdown),
+        "latest": [_simple_news_item(item) for item in sorted_items[:limit_per_group]],
+        "official_notices": [_simple_news_item(item) for item in sorted_items if item.get("evidence_type") == "official_notice"][:limit_per_group],
+        "market_news": [_simple_news_item(item) for item in sorted_items if item.get("source_role") == "market_news"][:limit_per_group],
+        "theme_news": [_simple_news_item(item) for item in sorted_items if item.get("source_role") == "theme_news"][:limit_per_group],
+        "top_heat_items": [_simple_news_item(item) for item in heat_sorted[:limit_per_group]],
+        "top_risk_items": [_simple_news_item(item) for item in risk_sorted[:limit_per_group]],
+    }
+
+
+def build_sentiment_digest(news_payload: dict) -> dict:
+    items = list(news_payload.get("items", []) or [])
+    source_health = list(news_payload.get("source_health", []) or [])
+    text_items = [item for item in items if str(item.get("source_role", "") or "") != "sentiment_news"]
+    provider_health = [
+        {
+            "source_key": item.get("source_key", ""),
+            "provider": item.get("provider", ""),
+            "status": item.get("status", ""),
+            "item_count": int(item.get("item_count", 0) or 0),
+            "error_count": int(item.get("error_count", 0) or 0),
+            "configured": bool(item.get("configured", True)),
+            "notes": list(item.get("notes", []) or [])[:4],
+            "metrics": dict(item.get("metrics", {}) or {}),
+        }
+        for item in source_health
+        if str(item.get("source_role", "") or "") == "sentiment_news"
+    ]
+    disabled_sources = [row.get("provider", "") for row in provider_health if str(row.get("status", "") or "") == "disabled"]
+    classifier_summary = dict(news_payload.get("classification_summary", {}) or {})
+    text_scores = [float(item.get("sentiment_score", 0.0) or 0.0) for item in text_items]
+    heat_scores = [float(item.get("heat_score", 0.0) or 0.0) for item in text_items]
+    derived_items = [item for item in items if str(item.get("provider", "") or "") == "derived_sentiment" or str(item.get("source_role", "") or "") == "sentiment_news"]
+    derived_scores = [float(item.get("sentiment_score", 0.0) or 0.0) for item in derived_items]
+    all_virality = [float(item.get("virality_score", 0.0) or 0.0) for item in text_items]
+    return {
+        "item_count": len(text_items),
+        "provider_count": len([row for row in provider_health if str(row.get("status", "") or "") == "ok"]),
+        "sentiment_score": _avg(text_scores),
+        "text_sentiment_score": _avg(text_scores),
+        "heat_score": _avg(heat_scores),
+        "derived_sentiment_score": _avg(derived_scores),
+        "max_virality_score": _max(all_virality),
+        "providers": [
+            {
+                "provider": "news_text_pool",
+                "item_count": len(text_items),
+                "positive_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") == "positive"),
+                "negative_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") == "negative"),
+                "neutral_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") in {"neutral", "mixed"}),
+                "sentiment_score": _avg(text_scores),
+                "max_virality_score": _max(all_virality),
+            }
+        ] if text_items else [],
+        "source_health": provider_health,
+        "provider_health": provider_health,
+        "classifier_health": classifier_summary,
+        "disabled_sources": disabled_sources,
+        "text_sentiment": {
+            "item_count": len(text_items),
+            "score": _avg(text_scores),
+            "positive_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") == "positive"),
+            "negative_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") == "negative"),
+            "mixed_count": sum(1 for item in text_items if str(item.get("sentiment_label", "neutral") or "neutral") == "mixed"),
+        },
+        "heat_sentiment": {
+            "score": _avg(heat_scores),
+            "max_heat_score": _max(heat_scores),
+            "top_items": [_simple_news_item(item) for item in sorted(text_items, key=lambda item: float(item.get("heat_score", 0.0) or 0.0), reverse=True)[:6]],
+        },
+        "derived_sentiment": {
+            "item_count": len(derived_items),
+            "score": _avg(derived_scores),
+            "label": "market_derived",
+        },
+        "top_items": [_simple_news_item(item) for item in sorted(text_items, key=lambda item: float(item.get("heat_score", 0.0) or 0.0), reverse=True)[:6]],
+    }
+
+
+def enrich_source_health_with_news_payload(summary: list[SourceHealthItem], news_payload: dict) -> list[SourceHealthItem]:
+    existing = {str(item.get("source_key", "")): item for item in summary}
+    for item in news_payload.get("source_health", []) or []:
+        key = str(item.get("source_key", "") or "")
+        if key and key not in existing:
+            existing[key] = dict(item)
+    return list(existing.values())
+
+
+def build_event_risks(news_payload: dict, *, limit: int = 8) -> list[dict]:
+    risks = []
+    for item in news_payload.get("items", []) or []:
+        evidence_type = str(item.get("evidence_type", "") or "")
+        risk_level = str(item.get("risk_level", "low") or "low")
+        is_policy_signal = bool(item.get("is_policy_signal", False))
+        historical = float(item.get("historical_significance", 0.0) or 0.0)
+        if evidence_type in {"official_notice", "regulatory_notice", "policy_notice", "filing_notice"} or risk_level == "high" or is_policy_signal:
+            severity = "high" if risk_level == "high" or evidence_type == "official_notice" else "medium"
+            title = str(item.get("title", "") or "")
+            priority = 0
+            if any(keyword in title for keyword in ("纪律处分", "异常经营", "失联", "临时停牌", "注销")):
+                priority = 3
+            elif evidence_type == "regulatory_notice":
+                priority = 2
+            elif evidence_type == "official_notice":
+                priority = 1
+            risks.append({**_simple_news_item(item), "fund_code": item.get("code", ""), "severity": severity, "historical_significance": historical, "_priority": priority})
+    ranked = sorted(risks, key=lambda item: (-int(item.get("_priority", 0) or 0), item.get("severity") != "high", str(item.get("published_at", "") or "")), reverse=False)
+    return [{key: value for key, value in item.items() if key != "_priority"} for item in ranked[:limit]]
+
+
 def stable_evidence_id(prefix: str, entity_id: str, as_of: str, source_url: str = "") -> str:
     digest_source = f"{prefix}|{entity_id}|{as_of}|{source_url}".encode("utf-8")
     digest = hashlib.sha1(digest_source).hexdigest()[:12]
@@ -883,7 +1052,10 @@ def main() -> None:
         fund_evidence_map[fund_code] = refs
         fund_rows.append(build_fund_snapshot(fund, quote, proxy, estimate, profile, normalized_news, refs))
 
-    source_health_summary = build_source_health_summary(quotes_payload, news_payload, proxies_payload, estimate_payload, profile_payload, evidence_items)
+    source_health_summary = enrich_source_health_with_news_payload(
+        build_source_health_summary(quotes_payload, news_payload, proxies_payload, estimate_payload, profile_payload, evidence_items),
+        news_payload,
+    )
 
     context: LlmContext = {
         "analysis_date": report_date,
@@ -908,6 +1080,10 @@ def main() -> None:
             "manual_biases": overrides.get("biases", []),
         },
         "memory_digest": build_memory_digest(memory, portfolio, exposure_summary),
+        "news_digest": build_news_digest(news_payload),
+        "sentiment_digest": build_sentiment_digest(news_payload),
+        "event_risks": build_event_risks(news_payload),
+        "news_query_plan": news_payload.get("query_plan", {}),
         "evidence_items": evidence_items,
         "fund_evidence_map": dict(fund_evidence_map),
         "source_health_summary": source_health_summary,

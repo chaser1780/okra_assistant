@@ -30,7 +30,6 @@ body,
 }
 
 body {
-  min-width: 1280px;
   background: radial-gradient(circle at 20% 0%, rgba(8, 145, 178, 0.12), transparent 34%),
     linear-gradient(135deg, #090d14 0%, #060910 48%, #02040a 100%);
   color: hsl(var(--foreground));

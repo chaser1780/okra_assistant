@@ -78,10 +78,115 @@ export type PortfolioPayload = {
   items: PortfolioItem[];
 };
 
+export type ResearchDigestEntry = Record<string, unknown> & {
+  news_id?: string;
+  id?: string;
+  title?: string;
+  summary?: string;
+  provider?: string;
+  source_key?: string;
+  source_name?: string;
+  source_role?: string;
+  evidence_type?: string;
+  query_type?: string;
+  label?: string;
+  name?: string;
+  key?: string;
+  status?: string;
+  count?: number | string;
+  item_count?: number | string;
+  mapped_item_count?: number | string;
+  unique_item_count?: number | string;
+  heat_score?: number | string;
+  virality_score?: number | string;
+  sentiment_score?: number | string;
+  sentiment_label?: string;
+  risk_level?: string;
+  severity?: string;
+  fund_code?: string;
+  code?: string;
+  canonical_url?: string;
+  source_url?: string;
+  url?: string;
+  published_at?: string;
+  evidence_url?: string;
+  notes?: string[] | string;
+};
+
+export type ResearchDigestBreakdown = Record<string, unknown> | ResearchDigestEntry[];
+
+export type ResearchSourceHealthPayload = {
+  report_date?: string;
+  generated_at?: string;
+  summary?: Record<string, unknown>;
+  items?: ResearchDigestEntry[];
+};
+
+export type ResearchNewsDigest = Record<string, unknown> & {
+  item_count?: number | string;
+  mapped_item_count?: number | string;
+  unique_item_count?: number | string;
+  duplicate_item_count?: number | string;
+  by_source_role?: Record<string, unknown>;
+  by_evidence_type?: Record<string, unknown>;
+  source_breakdown?: ResearchDigestBreakdown;
+  query_breakdown?: ResearchDigestBreakdown;
+  top_heat_items?: ResearchDigestEntry[];
+  top_risk_items?: ResearchDigestEntry[];
+  latest?: ResearchDigestEntry[];
+};
+
+export type ResearchSentimentBlock = Record<string, unknown> & {
+  label?: string;
+  sentiment_label?: string;
+  score?: number | string;
+  item_count?: number | string;
+  positive_count?: number | string;
+  neutral_count?: number | string;
+  negative_count?: number | string;
+  mixed_count?: number | string;
+};
+
+export type ResearchSentimentDigest = Record<string, unknown> & {
+  item_count?: number | string;
+  provider_count?: number | string;
+  sentiment_score?: number | string;
+  text_sentiment_score?: number | string;
+  heat_score?: number | string;
+  derived_sentiment_score?: number | string;
+  max_virality_score?: number | string;
+  providers?: ResearchDigestEntry[];
+  source_health?: ResearchDigestEntry[];
+  provider_health?: ResearchDigestBreakdown;
+  classifier_health?: ResearchDigestBreakdown;
+  disabled_sources?: Array<string | ResearchDigestEntry>;
+  latest?: ResearchDigestEntry[];
+  text_sentiment?: ResearchSentimentBlock;
+  heat_sentiment?: ResearchSentimentBlock;
+  derived_sentiment?: ResearchSentimentBlock;
+};
+
 export type ResearchPayload = {
   meta: string;
   metrics: Metric[];
   rows: Record<string, unknown>[];
+  source_health?: ResearchSourceHealthPayload;
+  news_digest?: ResearchNewsDigest;
+  sentiment_digest?: ResearchSentimentDigest;
+  event_risks?: ResearchDigestEntry[];
+};
+
+export type NewsIntelligencePayload = Record<string, unknown> & {
+  metrics?: Record<string, unknown>;
+  source_health?: ResearchSourceHealthPayload;
+  news_digest?: ResearchNewsDigest;
+  sentiment_digest?: ResearchSentimentDigest;
+  important_news?: ResearchDigestEntry[];
+  regulatory_items?: ResearchDigestEntry[];
+  szse_items?: ResearchDigestEntry[];
+  related_news_by_fund?: Record<string, ResearchDigestEntry[]>;
+  source_breakdown?: ResearchDigestBreakdown;
+  event_risks?: ResearchDigestEntry[];
 };
 
 export type FundAnalysisAgentCard = {
@@ -219,6 +324,29 @@ export type TodayAnalysisRuntimePayload = {
   lastError?: string;
 };
 
+export type RagRuntimePayload = Record<string, unknown> & {
+  generatedAt: string;
+  enabled: boolean;
+  defaultProfile: string;
+  fallbackToLegacy: boolean;
+  traceEnabled: boolean;
+  dbPath: string;
+  dbExists: boolean;
+  counts: Record<string, number>;
+  sourceCounts: Record<string, number>;
+  embeddingStatus: Record<string, number>;
+  agentShadow: Record<string, unknown>;
+  agentDefault: Record<string, unknown>;
+  profileEvidence: Record<string, unknown>;
+  embedding: Record<string, unknown>;
+  vectorStore: Record<string, unknown>;
+  latestEval: Record<string, unknown>;
+  latestTraces: Array<Record<string, unknown>>;
+  latestIngestRuns: Array<Record<string, unknown>>;
+  activeManifests: Array<Record<string, unknown>>;
+  statusError?: string;
+};
+
 export type SystemPayload = {
   sourceHealth?: Record<string, unknown>;
   preflightStatus?: string;
@@ -227,6 +355,8 @@ export type SystemPayload = {
   todayAnalysisRuntime?: TodayAnalysisRuntimePayload;
   longMemoryRuntime?: Record<string, unknown>;
   agentRuntime?: Record<string, unknown>;
+  ragRuntime?: RagRuntimePayload;
+  rag?: RagRuntimePayload;
   todayAnalysis?: TodayAnalysisSystemPayload;
   dailyFirstOpen?: TodayAnalysisSystemPayload;
 };
@@ -252,6 +382,7 @@ export type Snapshot = {
   dashboard: DashboardPayload;
   portfolio: PortfolioPayload;
   research: ResearchPayload;
+  intelligence?: NewsIntelligencePayload;
   realtime: RealtimePayload;
   review: ReviewPayload;
   longMemory: LongMemoryPayload;
@@ -287,6 +418,7 @@ export type TodayPagePayload = Pick<Snapshot, "selectedDate" | "dashboard" | "po
 export type PortfolioPagePayload = Pick<Snapshot, "selectedDate" | "portfolio">;
 export type ExecutionPagePayload = Pick<Snapshot, "selectedDate" | "executionSync" | "portfolio">;
 export type ResearchPagePayload = Pick<Snapshot, "selectedDate" | "research">;
+export type IntelligencePagePayload = Pick<Snapshot, "selectedDate"> & { intelligence: NewsIntelligencePayload };
 export type RealtimePagePayload = Pick<Snapshot, "selectedDate" | "realtime">;
 export type ReviewPagePayload = Pick<Snapshot, "selectedDate" | "review" | "longMemory">;
 export type SystemPagePayload = Pick<Snapshot, "selectedDate" | "summary" | "system">;
@@ -297,6 +429,52 @@ export type CopilotRequest = {
   page: string;
   selectedDate?: string;
   fundCode?: string;
+};
+
+export type CopilotCitation = {
+  id: string;
+  docId?: string;
+  chunkId?: string;
+  sourceKind?: string;
+  sourceRecordId?: string;
+  sourcePath?: string;
+  sourceTier?: string;
+  title?: string;
+  summary?: string;
+  asOfDate?: string;
+  availableFrom?: string;
+  publishedAt?: string;
+  domain?: string;
+  entityId?: string;
+  fundCodes?: string[];
+  score?: number;
+  stale?: boolean;
+  freshnessStatus?: string;
+  visibility?: string;
+  status?: string;
+  url?: string;
+};
+
+export type CopilotRetrieval = {
+  intent?: string;
+  profile?: string;
+  hitCount?: number;
+  missingData?: Record<string, unknown>[];
+  sourceCoverage?: Record<string, unknown>;
+  candidateCountBeforeFilter?: number;
+  candidateCountAfterFilter?: number;
+};
+
+export type CopilotResponse = {
+  answer: string;
+  mode?: string;
+  sourceDate?: string;
+  traceId?: string;
+  citations?: CopilotCitation[];
+  retrieval?: CopilotRetrieval;
+  traceSummary?: Record<string, unknown>;
+  fallbackReason?: string;
+  ragFallbackReason?: string;
 };
 
 export type TradeMarker = {

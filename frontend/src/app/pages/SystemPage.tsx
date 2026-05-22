@@ -1,4 +1,6 @@
 import { fieldLabel, valueLabel } from "../../lib/display";
+import { ragRuntimeSchema } from "../../lib/schemas";
+import type { RagRuntimePayload } from "../../lib/types";
 import { Badge, Card, SectionTitle } from "../../components/ui";
 
 export function SystemPage({ system, summary }: { system: Record<string, unknown>; summary: Record<string, unknown> }) {
@@ -6,6 +8,8 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
   const todayRuntime = (system.todayAnalysisRuntime ?? {}) as Record<string, unknown>;
   const longMemoryRuntime = (system.longMemoryRuntime ?? {}) as Record<string, unknown>;
   const agentRuntime = (system.agentRuntime ?? {}) as Record<string, unknown>;
+  const ragRuntime = ragRuntimeSchema.parse(system.ragRuntime ?? system.rag ?? {}) as RagRuntimePayload;
+  const latestTraces = Array.isArray(ragRuntime.latestTraces) ? ragRuntime.latestTraces : [];
   const failedAgents = Array.isArray(agentRuntime.failedAgents) ? agentRuntime.failedAgents : [];
   const degradedAgents = Array.isArray(agentRuntime.degradedAgents) ? agentRuntime.degradedAgents : [];
 
@@ -19,6 +23,24 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
           <StatusTile label="今日分析状态" value={String(todayRuntime.status ?? "暂无")} tone={tileTone(todayRuntime.status)} />
           <StatusTile label="当前 Agent" value={String(todayRuntime.currentAgent ?? "暂无")} tone="success" />
           <StatusTile label="长期记忆状态" value={String(longMemoryRuntime.status ?? "暂无")} tone={tileTone(longMemoryRuntime.status)} />
+        </div>
+      </Card>
+
+      <Card className="col-span-2 p-4">
+        <SectionTitle title="RAG 检索状态" />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <StatusTile label="默认接入" value={enabledLabel(ragRuntime.enabled)} tone={ragRuntime.enabled ? "success" : "info"} />
+          <StatusTile label="Agent Default" value={enabledLabel((ragRuntime.agentDefault ?? {}).enabled)} tone={(ragRuntime.agentDefault ?? {}).enabled ? "success" : "info"} />
+          <StatusTile label="Shadow" value={enabledLabel((ragRuntime.agentShadow ?? {}).enabled)} tone={(ragRuntime.agentShadow ?? {}).enabled ? "success" : "info"} />
+          <StatusTile label="Legacy fallback" value={enabledLabel(ragRuntime.fallbackToLegacy)} tone={ragRuntime.fallbackToLegacy ? "success" : "warning"} />
+          <StatusTile label="文档 / 分块" value={`${countValue(ragRuntime.counts, "documents")} / ${countValue(ragRuntime.counts, "chunks")}`} tone="accent" />
+          <StatusTile label="Embedding 待处理 / 错误" value={`${countValue(ragRuntime.embeddingStatus, "pending")} / ${countValue(ragRuntime.embeddingStatus, "error")}`} tone={countValue(ragRuntime.embeddingStatus, "error") ? "warning" : "info"} />
+        </div>
+        {ragRuntime.statusError ? <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-950/25 p-3 text-sm text-amber-100">{String(ragRuntime.statusError)}</div> : null}
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <MiniPanel title="来源计数" value={ragRuntime.sourceCounts ?? {}} />
+          <MiniPanel title="最近评估" value={ragRuntime.latestEval ?? {}} />
+          <MiniPanel title="最近 Trace" value={latestTraces.slice(0, 5)} />
         </div>
       </Card>
 
@@ -75,6 +97,15 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
         <SectionTitle title="原始系统信息" />
         <KeyValueTree value={system} />
       </Card>
+    </div>
+  );
+}
+
+function MiniPanel({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div className="min-h-[160px] rounded-md border border-slate-800 bg-slate-950/40 p-3">
+      <div className="mb-2 text-xs font-bold text-slate-400">{title}</div>
+      <KeyValueTree value={value} />
     </div>
   );
 }
@@ -174,4 +205,13 @@ function tileTone(status: unknown) {
   if (text === "failed") return "danger" as const;
   if (text === "running" || text === "ok") return "success" as const;
   return "info" as const;
+}
+
+function enabledLabel(value: unknown) {
+  return value === true ? "开启" : value === false ? "关闭" : "暂无";
+}
+
+function countValue(source: Record<string, number> | undefined, key: string) {
+  const value = source?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

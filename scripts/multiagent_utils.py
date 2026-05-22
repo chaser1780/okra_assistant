@@ -325,11 +325,141 @@ def build_llm_session(use_env_proxy: bool) -> requests.Session:
     return session
 
 
+def responses_endpoint(provider: dict) -> str:
+    base_url = str(provider.get("base_url", "") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("LLM provider base_url is empty.")
+    if base_url.endswith("/responses"):
+        return base_url
+    return f"{base_url}/responses"
+
+
+def responses_headers(api_key: str, *, stream: bool = True) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+
+
+def is_retryable_provider_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+
+
 def describe_api_failure(status_code: int, snippet: str, request_kind: str, transport_name: str) -> str:
     lowered = (snippet or "").lower()
     if status_code == 400 and ("not supported" in lowered or "chatgpt account" in lowered):
         return f"{request_kind} 模型兼容性错误（{transport_name}）：{snippet}"
+    if is_retryable_provider_status(status_code):
+        return f"Retryable HTTP {status_code} from {request_kind} API ({transport_name}): {snippet}"
     return f"HTTP {status_code} from {request_kind} API ({transport_name}): {snippet}"
+
+
+def call_responses_text(
+    config: dict,
+    payload: dict,
+    *,
+    request_kind: str,
+    max_attempts: int = 3,
+    agent_home: Path | str | None = None,
+    timeout: tuple[int, int] = (30, 300),
+) -> dict:
+    provider_key = config["model_provider"]
+    provider = config["model_providers"][provider_key]
+    api_key = resolve_api_key(config)
+    endpoint = responses_endpoint(provider)
+    last_error = None
+    transport_order = [("direct", False), ("env_proxy", True)]
+
+    for attempt in range(1, max_attempts + 1):
+        for transport_name, use_env_proxy in transport_order:
+            delta_parts: list[str] = []
+            events: list[dict] = []
+            session = build_llm_session(use_env_proxy=use_env_proxy)
+            try:
+                with session.post(
+                    endpoint,
+                    headers=responses_headers(api_key, stream=True),
+                    json=payload,
+                    timeout=timeout,
+                    stream=True,
+                ) as response:
+                    if response.status_code >= 400:
+                        raise RuntimeError(describe_api_failure(response.status_code, response.text[:800], request_kind, transport_name))
+                    parsed = consume_sse_response(response)
+                    events = parsed.get("events", [])
+                    delta_parts = [parsed.get("output_text", "")]
+
+                completed = parsed.get("completed_event") or {}
+                if isinstance(completed, dict) and completed.get("response"):
+                    output_text = extract_response_output_text(completed["response"]).strip()
+                else:
+                    output_text = extract_response_output_text(completed).strip()
+                if not output_text:
+                    output_text = parsed.get("output_text", "").strip()
+                if output_text:
+                    return {
+                        "request_payload": payload,
+                        "output_text": output_text,
+                        "events": events,
+                        "stream_incomplete": bool(parsed.get("stream_error")),
+                        "transport_name": transport_name,
+                    }
+
+                failed_event = parsed.get("failed_event") or {}
+                error_event = parsed.get("error_event") or {}
+                if agent_home:
+                    write_agent_debug_log(
+                        agent_home,
+                        f"{request_kind}_{transport_name}_empty_attempt{attempt}",
+                        {
+                            "request_payload": payload,
+                            "events_tail": events[-20:],
+                            "completed_event": parsed.get("completed_event"),
+                            "failed_event": failed_event,
+                            "error_event": error_event,
+                            "parsed_output_text": parsed.get("output_text", ""),
+                            "stream_error": parsed.get("stream_error"),
+                            "transport_name": transport_name,
+                            "use_env_proxy": use_env_proxy,
+                        },
+                    )
+                if failed_event:
+                    raise RuntimeError(f"{request_kind} failed before output text ({transport_name}): {json.dumps(failed_event, ensure_ascii=False)}")
+                if error_event:
+                    raise RuntimeError(f"{request_kind} error event ({transport_name}): {json.dumps(error_event, ensure_ascii=False)}")
+                raise RuntimeError(f"{request_kind} stream did not contain output_text deltas ({transport_name}).")
+            except Exception as exc:
+                last_error = exc
+                joined = "".join(delta_parts).strip()
+                if joined:
+                    return {
+                        "request_payload": payload,
+                        "output_text": joined,
+                        "events": events,
+                        "stream_incomplete": True,
+                        "transport_name": transport_name,
+                    }
+                if agent_home:
+                    write_agent_debug_log(
+                        agent_home,
+                        f"{request_kind}_{transport_name}_exception_attempt{attempt}",
+                        {
+                            "request_payload": payload,
+                            "events_tail": events[-20:],
+                            "response_text_tail": joined[-4000:] if joined else "",
+                            "error": str(exc),
+                            "transport_name": transport_name,
+                            "use_env_proxy": use_env_proxy,
+                        },
+                    )
+            finally:
+                session.close()
+        if attempt == max_attempts:
+            break
+        time.sleep(2 * attempt)
+
+    raise RuntimeError(f"{request_kind} request failed after {max_attempts} attempts: {last_error}")
 
 
 def strip_json_fence(value: str) -> str:
@@ -518,10 +648,12 @@ def call_json_agent(
     max_output_tokens: int | None = None,
     temperature: float | None = None,
     fallback_defaults: dict | None = None,
+    timeout: tuple[int, int] = (30, 240),
 ) -> dict:
     config = load_llm_config(agent_home)
     provider = config["model_providers"][config["model_provider"]]
     api_key = resolve_api_key(config)
+    endpoint = responses_endpoint(provider)
     effective_schema = schema or GENERIC_AGENT_SCHEMA
     payload = {
         "model": config["model"],
@@ -555,13 +687,10 @@ def call_json_agent(
             session = build_llm_session(use_env_proxy=use_env_proxy)
             try:
                 with session.post(
-                    provider["base_url"].rstrip("/") + "/responses",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    endpoint,
+                    headers=responses_headers(api_key, stream=True),
                     json=payload,
-                    timeout=(30, 240),
+                    timeout=timeout,
                     stream=True,
                 ) as response:
                     if response.status_code >= 400:

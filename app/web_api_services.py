@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
+import math
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -19,9 +22,9 @@ from execution_sync import (
     update_pending_confirmations,
 )
 from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_records
-from today_orchestrator import AlreadyRunningError, get_active_runtime
+from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
-from ui_tasks import desktop_log_path
+from ui_tasks import build_portfolio_alignment_command, desktop_log_path, portfolio_alignment_target_date, should_align_portfolio_on_boot
 from web_api_format import money as _money
 from web_api_format import percent as _percent
 from web_api_format import markers as _markers
@@ -39,37 +42,153 @@ from workbench_history import (
 from workbench_state import WorkbenchStateService
 
 
+def _news_key(item: dict[str, Any]) -> str:
+    return str(item.get("canonical_url") or item.get("source_url") or item.get("url") or item.get("title") or "")
+
+
+def _news_id(item: dict[str, Any], index: int = 0) -> str:
+    existing = str(item.get("news_id") or item.get("id") or "").strip()
+    if existing:
+        return existing
+    parts = [
+        str(item.get("canonical_url") or item.get("source_url") or item.get("url") or "").strip(),
+        str(item.get("provider") or item.get("source_key") or item.get("source_name") or "").strip(),
+        str(item.get("published_at") or item.get("date") or item.get("time") or "").strip(),
+        str(item.get("title") or "").strip(),
+        str(item.get("summary") or "").strip()[:160],
+    ]
+    seed = "\n".join(part for part in parts if part) or f"news-{index}"
+    return f"news_{hashlib.sha1(seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
+def _with_news_ids(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        copied = dict(item)
+        copied["news_id"] = _news_id(copied, index)
+        enriched.append(copied)
+    return enriched
+
+
+def _unique_news_count(items: list[dict[str, Any]]) -> int:
+    keys = {_news_key(item) for item in items if _news_key(item)}
+    return len(keys) if keys else len(items)
+
+
+def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key, "") or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _positive_number(payload: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            if float(value) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if math.isfinite(numeric) else default
+
+
+def _source_health_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "source_count": len(items),
+        "warning_count": sum(1 for item in items if str(item.get("status", "") or "") not in {"", "ok"}),
+        "error_count": sum(int(item.get("error_count", 0) or 0) for item in items),
+    }
+
+
+def _rank_news_items(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    def sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
+        risk_rank = {"high": 3, "medium": 2, "low": 1}.get(str(item.get("risk_level", "") or ""), 0)
+        return (_safe_float(item.get("heat_score"), 0.0), risk_rank, str(item.get("published_at", "") or ""))
+
+    return [dict(item) for item in sorted(items, key=sort_key, reverse=True)[:limit]]
+
+
+def _related_news_by_fund(items: list[dict[str, Any]], *, limit_per_fund: int) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in _rank_news_items(items, limit=len(items)):
+        fund_code = str(item.get("code") or item.get("fund_code") or "")
+        if not fund_code or fund_code == "GLOBAL":
+            continue
+        grouped.setdefault(fund_code, [])
+        if len(grouped[fund_code]) < limit_per_fund:
+            grouped[fund_code].append(item)
+    return grouped
+
+
 class TaskController:
     def __init__(self, home: Path):
         self.home = home
+        self._run_lock = threading.Lock()
+        self._alignment_lock = threading.Lock()
+
+    def run_portfolio_alignment_if_needed(self, *, force: bool = False) -> dict[str, Any]:
+        with self._alignment_lock:
+            if not force and not should_align_portfolio_on_boot(self.home):
+                return {"ok": True, "task": "portfolio_alignment", "skipped": True, "reason": "portfolio_already_current"}
+            run_date = portfolio_alignment_target_date(self.home)
+            command = build_portfolio_alignment_command(self.home, run_date, force=force)
+            env = {**os.environ, **build_runtime_env(self.home)}
+            started_at = datetime.now()
+            log_path = desktop_log_path(self.home, f"portfolio_alignment_{run_date.replace('-', '')}", started_at)
+            with log_path.open("w", encoding="utf-8") as handle:
+                completed = subprocess.run(command, cwd=str(self.home), env=env, stdout=handle, stderr=subprocess.STDOUT)
+            if completed.returncode != 0:
+                raise RuntimeError(f"portfolio alignment failed. See {log_path}")
+            return {
+                "ok": True,
+                "task": "portfolio_alignment",
+                "skipped": False,
+                "runDate": run_date,
+                "logPath": str(log_path),
+            }
 
     def run_task(self, kind: str, *, force: bool = False) -> dict[str, Any]:
-        run_date = today_str()
-        if kind == "daily":
-            active_runtime = get_active_runtime(self.home, run_date)
-            if active_runtime:
-                raise AlreadyRunningError(active_runtime)
-            command = build_daily_first_open_command(self.home, run_date, force=force)
-            task_name = "today_analysis"
-        elif kind == "realtime":
-            command = build_realtime_command(self.home, run_date)
-            task_name = "realtime"
-        else:
-            raise ValueError(f"Unsupported task: {kind}")
-        env = {**os.environ, **build_runtime_env(self.home)}
-        started_at = datetime.now()
-        log_path = desktop_log_path(self.home, f"{task_name}_{run_date.replace('-', '')}", started_at)
-        handle = log_path.open("w", encoding="utf-8")
-        try:
-            process = subprocess.Popen(command, cwd=str(self.home), env=env, stdout=handle, stderr=subprocess.STDOUT)
-        finally:
-            handle.close()
-        runtime: dict[str, Any] = {}
-        for _ in range(20):
-            runtime = get_active_runtime(self.home, run_date)
-            if runtime.get("runId"):
-                break
-            time.sleep(0.1)
+        with self._run_lock:
+            run_date = today_str()
+            if kind == "daily":
+                active_runtime = get_active_runtime(self.home, run_date)
+                if active_runtime:
+                    raise AlreadyRunningError(active_runtime)
+                alignment = self.run_portfolio_alignment_if_needed(force=False)
+                command = build_daily_first_open_command(self.home, run_date, force=force, trigger="manual" if force else "auto")
+                task_name = "today_analysis"
+            elif kind == "realtime":
+                command = build_realtime_command(self.home, run_date)
+                task_name = "realtime"
+                alignment = {}
+            else:
+                raise ValueError(f"Unsupported task: {kind}")
+            env = {**os.environ, **build_runtime_env(self.home)}
+            started_at = datetime.now()
+            log_path = desktop_log_path(self.home, f"{task_name}_{run_date.replace('-', '')}", started_at)
+            handle = log_path.open("w", encoding="utf-8")
+            try:
+                process = subprocess.Popen(command, cwd=str(self.home), env=env, stdout=handle, stderr=subprocess.STDOUT)
+            finally:
+                handle.close()
+            runtime: dict[str, Any] = {}
+            for _ in range(20):
+                runtime = get_active_runtime(self.home, run_date)
+                if runtime.get("runId"):
+                    break
+                time.sleep(0.1)
         return {
             "ok": True,
             "task": task_name,
@@ -78,6 +197,7 @@ class TaskController:
             "runDate": run_date,
             "force": force,
             "logPath": str(log_path),
+            "portfolioAlignment": alignment,
         }
 
 
@@ -89,9 +209,24 @@ class ExecutionController:
         return _to_jsonable(build_execution_sync_payload(self.home))
 
     def execution_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not str(payload.get("fund_code", "") or "").strip():
+            raise ValueError("fund_code is required")
+        operation_type = str(payload.get("operation_type", "") or "").strip().lower()
+        if operation_type not in {"buy", "sell", "add", "reduce", "fee", "dividend", "cancel"}:
+            raise ValueError("operation_type must be buy, sell, add, reduce, fee, dividend, or cancel")
+        if operation_type in {"buy", "sell", "add", "reduce"} and not _positive_number(payload, "amount", "units"):
+            raise ValueError("amount or units must be greater than 0")
         return _to_jsonable(record_actual_trade(self.home, payload))
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        out_code = str(payload.get("out_fund_code", "") or "").strip()
+        in_code = str(payload.get("in_fund_code", "") or "").strip()
+        if not out_code or not in_code:
+            raise ValueError("out_fund_code and in_fund_code are required")
+        if out_code == in_code:
+            raise ValueError("conversion source and target funds must be different")
+        if not _positive_number(payload, "out_amount", "out_units"):
+            raise ValueError("out_amount or out_units must be greater than 0")
         return _to_jsonable(record_conversion(self.home, payload))
 
     def execution_screenshot_parse(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -154,6 +289,64 @@ class PageService:
         ]
         return {"fund": _to_jsonable(fund_records), "execution": _to_jsonable(execution_records[:12]), "rules": _to_jsonable(portfolio_rules[:12])}
 
+    def intelligence_payload(self, state: dict[str, Any]) -> dict[str, Any]:
+        llm_context = state.get("llm_context", {}) or {}
+        selected = str(state.get("selected_date", "") or today_str())
+        news_payload = self.read_json_file(self.home / "raw" / "news" / f"{selected}.json")
+        news_items = _with_news_ids(list(news_payload.get("items", []) or []))
+        source_health = state.get("source_health", {}) or {}
+        source_health_items = list(source_health.get("items", []) or llm_context.get("source_health_summary", []) or news_payload.get("source_health", []) or [])
+        news_digest = llm_context.get("news_digest", {}) or {}
+        sentiment_digest = llm_context.get("sentiment_digest", {}) or {}
+        event_risks = _with_news_ids(list(llm_context.get("event_risks", []) or []))
+        unique_count = int(news_digest.get("unique_item_count") or (news_payload.get("dedup_summary", {}) or {}).get("unique_item_count") or _unique_news_count(news_items))
+        mapped_count = int(news_digest.get("mapped_item_count") or (news_payload.get("dedup_summary", {}) or {}).get("mapped_item_count") or len(news_items))
+        all_regulatory_items = [
+            item
+            for item in news_items
+            if str(item.get("source_role", "") or "") == "regulatory_news"
+            or str(item.get("evidence_type", "") or "") == "regulatory_notice"
+        ]
+        all_szse_items = [item for item in all_regulatory_items if "szse" in str(item.get("provider", "") or "").lower()]
+        regulatory_items = _rank_news_items(all_regulatory_items, limit=12)
+        szse_items = _rank_news_items(all_szse_items, limit=12)
+        important_news = _rank_news_items(
+            [
+                item
+                for item in news_items
+                if _safe_float(item.get("heat_score"), 0.0) >= 0.65
+                or str(item.get("risk_level", "") or "") in {"high", "medium"}
+                or bool(item.get("is_policy_signal", False))
+            ],
+            limit=12,
+        )
+        if not important_news:
+            important_news = _with_news_ids(list(news_digest.get("top_heat_items", []) or news_digest.get("latest", []) or [])[:12])
+        return {
+            "metrics": {
+                "unique_news_count": unique_count,
+                "mapped_news_count": mapped_count,
+                "important_news_count": len(important_news),
+                "regulatory_count": len(all_regulatory_items),
+                "szse_count": len(all_szse_items),
+                "source_count": len(source_health_items),
+                "warning_source_count": sum(1 for item in source_health_items if str(item.get("status", "") or "") != "ok"),
+                "text_sentiment_score": sentiment_digest.get("text_sentiment_score", sentiment_digest.get("sentiment_score", 0.0)),
+                "heat_score": sentiment_digest.get("heat_score", 0.0),
+                "derived_sentiment_score": sentiment_digest.get("derived_sentiment_score", 0.0),
+            },
+            "source_health": {"items": source_health_items, "summary": source_health.get("summary", {}) or _source_health_summary(source_health_items)},
+            "news_digest": news_digest,
+            "sentiment_digest": sentiment_digest,
+            "important_news": important_news,
+            "regulatory_items": regulatory_items,
+            "szse_items": szse_items,
+            "related_news_by_fund": _related_news_by_fund(news_items, limit_per_fund=6),
+            "source_breakdown": news_digest.get("source_breakdown") or _count_by(news_items, "provider"),
+            "event_risks": event_risks,
+            "generated_at": news_payload.get("generated_at") or llm_context.get("generated_at") or "",
+        }
+
     def snapshot(self, selected: str | None = None) -> dict[str, Any]:
         snapshot = self.state_service.load_snapshot(selected)
         dashboard = self.state_service.build_dashboard_view_model(snapshot)
@@ -169,6 +362,7 @@ class PageService:
             "dashboard": _to_jsonable(dashboard),
             "portfolio": self.portfolio_payload(state),
             "research": _to_jsonable(research),
+            "intelligence": self.intelligence_payload(state),
             "realtime": _to_jsonable(realtime),
             "review": _to_jsonable(review),
             "longMemory": self.long_memory_payload(),
@@ -419,7 +613,7 @@ class PageService:
         today_analysis_payload = state.get("today_analysis", {}) or self.read_json_file(today_analysis)
         today_analysis_meta_payload = state.get("today_analysis_meta", {}) or self.read_json_file(today_analysis_meta)
         memory_cycle_payload = state.get("today_analysis_memory_cycle", {}) or self.read_json_file(memory_cycle)
-        today_analysis_runtime_payload = self.normalize_today_runtime_payload(self.read_json_file(today_analysis_runtime))
+        today_analysis_runtime_payload = self.normalize_today_runtime_payload(ensure_runtime_not_stale(self.home, selected))
         long_memory_runtime_payload = self.read_json_file(long_memory_runtime)
         generated_at = str(
             today_analysis_meta_payload.get("runAt")
@@ -482,4 +676,13 @@ class PageService:
             },
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
+            "ragRuntime": self.rag_runtime_payload(),
         }
+
+    def rag_runtime_payload(self) -> dict[str, Any]:
+        try:
+            from rag_maintenance import rag_status
+
+            return rag_status(self.home)
+        except Exception as exc:
+            return {"statusError": str(exc)}
