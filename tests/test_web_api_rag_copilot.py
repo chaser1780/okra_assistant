@@ -173,6 +173,49 @@ class WebApiRagCopilotTests(unittest.TestCase):
         self.assertEqual("general_chat", result["retrieval"]["intent"])
         self.assertEqual("general_chat", call_llm.call_args.args[2]["kind"])
 
+    def test_fund_detail_page_general_question_does_not_force_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        api = OkraWebApi(self.agent.root)
+        with (
+            patch.object(api, "_build_copilot_rag_pack") as build_rag,
+            patch.object(api, "_call_copilot_llm", return_value="concept answer") as call_llm,
+        ):
+            result = api.explain(
+                {
+                    "context": "当前页面：基金详情。查看日期：2026-05-20",
+                    "question": "什么是最大回撤？",
+                    "page": "fundDetail",
+                    "selectedDate": "2026-05-20",
+                    "fundCode": "F1",
+                }
+            )
+
+        build_rag.assert_not_called()
+        self.assertEqual("llm", result["mode"])
+        self.assertEqual("general_chat", result["retrieval"]["intent"])
+        self.assertEqual("general_chat", call_llm.call_args.args[2]["kind"])
+
+    def test_fund_detail_contextual_question_uses_current_fund_rag(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+
+        with patch.object(api, "_call_copilot_llm", return_value="current fund answer [C1]") as call_llm:
+            result = api.explain(
+                {
+                    "context": "当前页面：基金详情。查看日期：2026-05-20",
+                    "question": "这只基金今天有什么风险？",
+                    "page": "fundDetail",
+                    "selectedDate": "2026-05-20",
+                    "fundCode": "F1",
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("copilot_rag_pack", evidence["kind"])
+        self.assertEqual(["F1"], evidence["query_plan"]["fund_codes"])
+
     def test_okra_question_triggers_rag_when_rag_enabled(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
         self._insert_rag_doc()

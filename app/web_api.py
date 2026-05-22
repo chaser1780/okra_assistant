@@ -104,6 +104,55 @@ COPILOT_RAG_KEYWORDS = (
     "rebalance",
 )
 COPILOT_FUND_CODE_PATTERN = re.compile(r"\b(?:F\d+|\d{6})\b", re.IGNORECASE)
+COPILOT_CONTEXTUAL_FUND_KEYWORDS = (
+    "这只",
+    "这支",
+    "这个基金",
+    "该基金",
+    "当前基金",
+    "这个持仓",
+    "这笔",
+    "今天怎么看",
+    "怎么看",
+    "要不要",
+    "该不该",
+    "是否需要",
+    "加仓",
+    "减仓",
+    "买入",
+    "卖出",
+    "定投",
+    "净值",
+    "收益",
+    "回撤",
+    "风险",
+    "仓位",
+    "估值",
+)
+COPILOT_CONTEXTUAL_EXECUTION_KEYWORDS = (
+    "这笔",
+    "这个交易",
+    "这次执行",
+    "待确认",
+    "确认",
+    "结算",
+    "对账",
+    "同步",
+    "执行",
+    "交易",
+)
+COPILOT_GENERAL_CONCEPT_PATTERNS = (
+    "什么是",
+    "是什么意思",
+    "有什么区别",
+    "区别是什么",
+    "解释一下",
+    "定义",
+    "原理",
+    "what is",
+    "difference between",
+    "explain",
+)
 
 
 def is_allowed_origin(origin: str | None) -> bool:
@@ -583,9 +632,13 @@ def _optional_bool(value) -> bool | None:
 def _copilot_should_use_rag(payload: dict, *, question: str, messages: list[dict[str, str]], page: str, fund_code: str) -> bool:
     if isinstance(payload.get("useRag"), bool):
         return bool(payload["useRag"])
-    if fund_code or page in COPILOT_RAG_PAGES:
-        return True
     recent_text = " ".join([question, *(item["content"] for item in messages[-4:])]).lower()
+    if any(pattern in recent_text for pattern in COPILOT_GENERAL_CONCEPT_PATTERNS):
+        return False
+    if fund_code and any(keyword in recent_text for keyword in COPILOT_CONTEXTUAL_FUND_KEYWORDS):
+        return True
+    if page == "execution" and any(keyword in recent_text for keyword in COPILOT_CONTEXTUAL_EXECUTION_KEYWORDS):
+        return True
     if COPILOT_FUND_CODE_PATTERN.search(recent_text):
         return True
     if any(keyword in recent_text for keyword in COPILOT_RAG_KEYWORDS):
