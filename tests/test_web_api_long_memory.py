@@ -257,6 +257,17 @@ class WebApiLongMemoryTests(unittest.TestCase):
                 self.assertEqual(page, payload["meta"]["page"])
                 self.assertIn(data_key, payload["data"])
 
+    def test_contract_handler_keeps_legacy_workbench_post_routes_compatible(self):
+        with patch.object(OkraWebApi, "explain", return_value={"answer": "ok", "mode": "llm"}):
+            payload = self._request_json(
+                "/api/workbench/copilot/explain",
+                method="POST",
+                body={"context": "today", "question": "组合风险是什么？", "page": "today"},
+                headers={"Origin": "http://tauri.localhost"},
+            )
+        self.assertTrue(payload["ok"])
+        self.assertEqual("ok", payload["data"]["answer"])
+
     def test_cors_origin_accepts_tauri_and_local_dev_hosts(self):
         self.assertTrue(is_allowed_origin("http://tauri.localhost"))
         self.assertTrue(is_allowed_origin("https://tauri.localhost"))

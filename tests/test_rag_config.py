@@ -4,7 +4,8 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from helpers import TempAgentHome
@@ -28,6 +29,18 @@ class RagConfigTests(unittest.TestCase):
         self.assertFalse(config["rag"]["profile_evidence"]["enabled"])
         self.assertFalse(rag_profile_evidence_profile(self.agent.root, "decision")["enabled"])
         self.assertFalse(is_rag_enabled(self.agent.root))
+
+    def test_repo_config_enables_production_rag_with_agent_fallback(self):
+        config = load_rag_config(ROOT)
+        settings = config["rag"]
+        self.assertTrue(settings["enabled"])
+        self.assertTrue(settings["agent_default"]["enabled"])
+        self.assertTrue(settings["agent_default"]["fallback_to_legacy"])
+        self.assertGreaterEqual(settings["agent_default"]["min_hits"], 1)
+        self.assertTrue(settings["agent_default"]["write_trace"])
+        for profile_name in ("market_analyst", "risk_manager", "portfolio_trader"):
+            self.assertTrue(settings["agent_profiles"][profile_name]["enabled"])
+            self.assertFalse(settings["agent_profiles"][profile_name].get("include_execution", False))
 
     def test_profile_evidence_requires_global_and_profile_enable(self):
         self.agent.write_text(

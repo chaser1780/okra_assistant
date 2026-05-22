@@ -149,6 +149,11 @@ class WebApiRagCopilotTests(unittest.TestCase):
                     "page": "fundDetail",
                     "selectedDate": "2026-05-20",
                     "fundCode": "F1",
+                    "messages": [
+                        {"role": "user", "content": "前一问"},
+                        {"role": "assistant", "content": "前一答"},
+                        {"role": "user", "content": "F1 risk?"},
+                    ],
                 }
             )
         self.assertEqual("rag_llm", result["mode"])
@@ -172,6 +177,57 @@ class WebApiRagCopilotTests(unittest.TestCase):
         self.assertEqual("rag broke", result["ragFallbackReason"])
         evidence = call_llm.call_args.args[2]
         self.assertIn("pageData", evidence)
+
+    def test_conversation_messages_are_passed_to_rag_llm(self):
+        self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+        messages = [
+            {"role": "user", "content": "先看 F1"},
+            {"role": "assistant", "content": "F1 主要看估值压力。"},
+            {"role": "user", "content": "继续说风险"},
+        ]
+
+        with patch.object(api, "_call_copilot_llm", return_value="RAG chat answer") as call_llm:
+            result = api.explain(
+                {
+                    "context": "fund detail",
+                    "question": "继续说风险",
+                    "page": "fundDetail",
+                    "selectedDate": "2026-05-20",
+                    "fundCode": "F1",
+                    "messages": messages,
+                }
+            )
+
+        self.assertEqual("rag_llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertEqual("copilot_rag_pack", evidence["kind"])
+        self.assertEqual(messages, evidence["conversationMessages"])
+
+    def test_conversation_messages_are_passed_to_legacy_fallback(self):
+        api = OkraWebApi(self.agent.root)
+        messages = [
+            {"role": "user", "content": "前一问"},
+            {"role": "assistant", "content": "前一答"},
+            {"role": "user", "content": "继续"},
+        ]
+
+        with patch.object(api, "_call_copilot_llm", return_value="legacy chat answer") as call_llm:
+            result = api.explain(
+                {
+                    "context": "today",
+                    "question": "继续",
+                    "page": "today",
+                    "selectedDate": "2026-05-20",
+                    "messages": messages,
+                }
+            )
+
+        self.assertEqual("llm", result["mode"])
+        evidence = call_llm.call_args.args[2]
+        self.assertNotEqual("copilot_rag_pack", evidence.get("kind"))
+        self.assertEqual(messages, evidence["conversationMessages"])
 
     def test_rag_llm_failure_returns_local_summary_with_trace(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
@@ -231,22 +287,16 @@ class WebApiRagCopilotTests(unittest.TestCase):
         self.assertIn("pageData", evidence)
         self.assertNotEqual("copilot_rag_pack", evidence.get("kind"))
 
-    def test_empty_question_uses_unicode_default_prompt_in_legacy_fallback(self):
+    def test_empty_question_is_rejected_in_legacy_path(self):
         api = OkraWebApi(self.agent.root)
-        with patch.object(api, "_call_copilot_llm", return_value="legacy answer") as call_llm:
+        with self.assertRaisesRegex(ValueError, "question is required"):
             api.explain({"context": "today", "question": "", "page": "today", "selectedDate": "2026-05-20"})
 
-        self.assertEqual("请解释当前页面最重要的结论、风险和证据链。", call_llm.call_args.args[1])
-
-    def test_empty_question_uses_unicode_default_prompt_after_rag_zero_hit(self):
+    def test_empty_question_is_rejected_before_rag_fallback(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_TOML)
         api = OkraWebApi(self.agent.root)
-        with patch.object(api, "_call_copilot_llm", return_value="legacy zero hit") as call_llm:
-            result = api.explain({"context": "today", "question": "", "page": "today", "selectedDate": "2026-05-20", "fundCode": "F1"})
-
-        self.assertEqual("llm", result["mode"])
-        self.assertEqual("hit_count_below_min", result["ragFallbackReason"])
-        self.assertEqual("请解释当前页面最重要的结论、风险和证据链。", call_llm.call_args.args[1])
+        with self.assertRaisesRegex(ValueError, "question is required"):
+            api.explain({"context": "today", "question": "", "page": "today", "selectedDate": "2026-05-20", "fundCode": "F1"})
 
     def test_execution_copilot_query_uses_execution_profile(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_WITH_EXECUTION_TOML)

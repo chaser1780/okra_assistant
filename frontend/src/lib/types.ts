@@ -429,6 +429,12 @@ export type CopilotRequest = {
   page: string;
   selectedDate?: string;
   fundCode?: string;
+  messages?: CopilotMessage[];
+};
+
+export type CopilotMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 export type CopilotCitation = {

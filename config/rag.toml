@@ -1,5 +1,5 @@
 [rag]
-enabled = false
+enabled = true
 default_profile = "copilot_qa"
 index_dir = "db/rag"
 trace_enabled = true
@@ -12,7 +12,7 @@ inject_into_prompt = false
 compare_legacy = true
 
 [rag.agent_default]
-enabled = false
+enabled = true
 min_hits = 1
 write_trace = true
 fallback_to_legacy = true

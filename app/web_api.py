@@ -59,7 +59,7 @@ ALLOWED_ORIGINS = {
     "tauri://localhost",
 }
 LOCAL_CORS_HOSTS = {"127.0.0.1", "localhost", "tauri.localhost"}
-DEFAULT_COPILOT_QUESTION = "\u8bf7\u89e3\u91ca\u5f53\u524d\u9875\u9762\u6700\u91cd\u8981\u7684\u7ed3\u8bba\u3001\u98ce\u9669\u548c\u8bc1\u636e\u94fe\u3002"
+MAX_COPILOT_HISTORY_MESSAGES = 10
 
 
 def is_allowed_origin(origin: str | None) -> bool:
@@ -335,14 +335,18 @@ class OkraWebApi:
     def explain(self, payload: dict) -> dict:
         context = str(payload.get("context", "\u5f53\u524d\u9875\u9762") or "\u5f53\u524d\u9875\u9762")
         question = str(payload.get("question", "") or "").strip()
+        if not question:
+            raise ValueError("question is required")
+        messages = _copilot_messages(payload)
         page = str(payload.get("page", "") or "").strip()
         selected = str(payload.get("selectedDate", "") or "").strip() or None
         fund_code = str(payload.get("fundCode", "") or "").strip()
-        prompt_question = question or DEFAULT_COPILOT_QUESTION
+        prompt_question = question
         rag_error = ""
         try:
             rag_payload = dict(payload)
             rag_payload["question"] = prompt_question
+            rag_payload["messages"] = messages
             rag_pack = self._build_copilot_rag_pack(rag_payload)
         except RagUnavailable:
             rag_pack = None
@@ -356,6 +360,7 @@ class OkraWebApi:
                 rag_pack = None
 
         if rag_pack is not None:
+            rag_pack["conversationMessages"] = messages
             try:
                 answer = self._call_copilot_llm(context, prompt_question, rag_pack)
                 return {
@@ -380,7 +385,8 @@ class OkraWebApi:
                     "fallbackReason": str(exc),
                 }
         evidence = self._copilot_evidence(page, selected, fund_code)
-        prompt_question = question or DEFAULT_COPILOT_QUESTION
+        evidence["conversationMessages"] = messages
+        prompt_question = question
         try:
             answer = self._call_copilot_llm(context, prompt_question, evidence)
             result = {"answer": answer, "mode": "llm", "sourceDate": evidence.get("selectedDate", "")}
@@ -521,6 +527,22 @@ def _optional_bool(value) -> bool | None:
     if text in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+def _copilot_messages(payload: dict) -> list[dict[str, str]]:
+    raw_messages = payload.get("messages", [])
+    if not isinstance(raw_messages, list):
+        return []
+    messages: list[dict[str, str]] = []
+    for item in raw_messages[-MAX_COPILOT_HISTORY_MESSAGES:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "") or "").strip()
+        content = str(item.get("content", "") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        messages.append({"role": role, "content": content[:4000]})
+    return messages
 
 class RequestHandler(BaseHTTPRequestHandler):
     api: OkraWebApi
@@ -758,6 +780,9 @@ class ContractRequestHandler(RequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        endpoint_path = parsed.path
+        if endpoint_path.startswith("/api/workbench/"):
+            endpoint_path = "/api/" + endpoint_path[len("/api/workbench/") :]
         if not self._origin_allowed():
             self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA local API", details={"path": parsed.path})
             return
@@ -766,35 +791,35 @@ class ContractRequestHandler(RequestHandler):
         try:
             if length:
                 payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-            if parsed.path == "/api/run/daily":
+            if endpoint_path == "/api/run/daily":
                 self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force"))))
-            elif parsed.path == "/api/run/realtime":
+            elif endpoint_path == "/api/run/realtime":
                 self._send_envelope(self.api.run_task("realtime"))
-            elif parsed.path == "/api/copilot/explain":
+            elif endpoint_path == "/api/copilot/explain":
                 self._send_envelope(self.api.explain(payload))
-            elif parsed.path == "/api/long-memory/action":
+            elif endpoint_path == "/api/long-memory/action":
                 self._send_envelope(self.api.long_memory_action(payload))
-            elif parsed.path == "/api/execution-sync/trade":
+            elif endpoint_path == "/api/execution-sync/trade":
                 self._send_envelope(self.api.execution_trade(coerce_model(ExecutionTradeRequestDto, payload)))
-            elif parsed.path == "/api/execution-sync/conversion":
+            elif endpoint_path == "/api/execution-sync/conversion":
                 self._send_envelope(self.api.execution_conversion(coerce_model(ExecutionConversionRequestDto, payload)))
-            elif parsed.path == "/api/execution-sync/alipay-screenshot/parse":
+            elif endpoint_path == "/api/execution-sync/alipay-screenshot/parse":
                 self._send_envelope(self.api.execution_screenshot_parse(payload))
-            elif parsed.path == "/api/execution-sync/reconcile/preview":
+            elif endpoint_path == "/api/execution-sync/reconcile/preview":
                 self._send_envelope(self.api.execution_reconcile_preview(payload))
-            elif parsed.path == "/api/execution-sync/reconcile/apply":
+            elif endpoint_path == "/api/execution-sync/reconcile/apply":
                 self._send_envelope(self.api.execution_reconcile_apply(payload))
-            elif parsed.path == "/api/execution-sync/confirmation/update":
+            elif endpoint_path == "/api/execution-sync/confirmation/update":
                 self._send_envelope(self.api.execution_confirmation_update(payload))
-            elif parsed.path == "/api/open-url":
+            elif endpoint_path == "/api/open-url":
                 self._send_envelope(self.api.open_url(payload), page="open-url")
-            elif parsed.path == "/api/rag/search":
+            elif endpoint_path == "/api/rag/search":
                 self._send_envelope(self.api.rag_search(payload), page="rag")
-            elif parsed.path == "/api/rag/reindex":
+            elif endpoint_path == "/api/rag/reindex":
                 self._send_envelope(self.api.rag_reindex(payload), page="rag")
-            elif parsed.path == "/api/rag/eval":
+            elif endpoint_path == "/api/rag/eval":
                 self._send_envelope(self.api.rag_eval(payload), page="rag")
-            elif parsed.path == "/api/rag/maintenance":
+            elif endpoint_path == "/api/rag/maintenance":
                 self._send_envelope(self.api.rag_maintenance(payload), page="rag")
             else:
                 self._send_error(404, "not_found", f"Unknown POST endpoint: {parsed.path}", details={"path": parsed.path})

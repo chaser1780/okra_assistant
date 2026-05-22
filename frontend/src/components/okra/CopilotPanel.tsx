@@ -1,15 +1,26 @@
 import { SendHorizontal, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { askCopilot } from "../../lib/api";
-import type { CopilotResponse } from "../../lib/types";
+import type { CopilotMessage, CopilotResponse } from "../../lib/types";
 import { Button } from "../ui";
 
-const ASSISTANT_TITLE = "\u0052\u0041\u0047 \u52a9\u624b";
-const INITIAL_ANSWER =
-  "\u4f60\u53ef\u4ee5\u76f4\u63a5\u95ee\u6211\u7ec4\u5408\u3001\u57fa\u91d1\u3001\u5e02\u573a\u3001\u98ce\u9669\u6216\u8bc1\u636e\u6765\u6e90\u3002\u6211\u4f1a\u5c3d\u91cf\u7ed3\u5408 RAG \u548c\u672c\u5730\u8bc1\u636e\u56de\u7b54\u3002";
+const ASSISTANT_TITLE = "\u667a\u80fd\u95ee\u7b54";
+const INITIAL_ANSWER = "\u4f60\u53ef\u4ee5\u76f4\u63a5\u95ee\u6211\u7ec4\u5408\u3001\u57fa\u91d1\u3001\u5e02\u573a\u3001\u98ce\u9669\u6216\u8bc1\u636e\u6765\u6e90\u3002";
 const EMPTY_ANSWER = "\u667a\u80fd\u52a9\u624b\u6682\u65f6\u6ca1\u6709\u8fd4\u56de\u53ef\u5c55\u793a\u7684\u5185\u5bb9\u3002";
 const OFFLINE_ANSWER = "\u667a\u80fd\u52a9\u624b\u6682\u65f6\u4e0d\u53ef\u7528\u3002";
-const QUESTION_PLACEHOLDER = "\u8f93\u5165\u4f60\u7684\u95ee\u9898\uff0c\u4f8b\u5982\uff1a\u4eca\u5929\u54ea\u4e2a\u6301\u4ed3\u7684\u98ce\u9669\u6700\u9700\u8981\u5173\u6ce8\uff1f";
+const QUESTION_PLACEHOLDER = "\u8f93\u5165\u4f60\u7684\u95ee\u9898";
+const HISTORY_LIMIT = 10;
+
+type UiMessage = CopilotMessage & {
+  id: string;
+};
+
+function newMessageId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export function CopilotPanel({
   context,
@@ -23,24 +34,34 @@ export function CopilotPanel({
   fundCode?: string;
 }) {
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState(INITIAL_ANSWER);
+  const [messages, setMessages] = useState<UiMessage[]>([{ id: "initial", role: "assistant", content: INITIAL_ANSWER }]);
   const [lastResult, setLastResult] = useState<CopilotResponse | null>(null);
   const [busy, setBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const trimmedQuestion = question.trim();
   const canSubmit = trimmedQuestion.length > 0 && !busy;
+
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, busy]);
 
   async function submit() {
     if (!canSubmit) {
       return;
     }
+    const userMessage: UiMessage = { id: newMessageId(), role: "user", content: trimmedQuestion };
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setBusy(true);
     try {
-      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode });
-      setAnswer(result.answer || EMPTY_ANSWER);
+      const history = nextMessages.slice(-HISTORY_LIMIT).map(({ role, content }) => ({ role, content }));
+      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode, messages: history });
+      const answer = result.answer || EMPTY_ANSWER;
+      setMessages((current) => [...current, { id: newMessageId(), role: "assistant", content: answer }]);
       setLastResult(result);
       setQuestion("");
     } catch (error) {
-      setAnswer(error instanceof Error ? error.message : OFFLINE_ANSWER);
+      setMessages((current) => [...current, { id: newMessageId(), role: "assistant", content: error instanceof Error ? error.message : OFFLINE_ANSWER }]);
       setLastResult(null);
     } finally {
       setBusy(false);
@@ -51,7 +72,7 @@ export function CopilotPanel({
   const retrieval = lastResult?.retrieval;
 
   return (
-    <aside className="hidden h-full w-[320px] shrink-0 flex-col border-l border-slate-800 bg-slate-950/70 xl:flex">
+    <aside className="hidden h-full w-[360px] shrink-0 flex-col border-l border-slate-800 bg-slate-950/70 xl:flex">
       <div className="border-b border-slate-800 p-4">
         <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
           <Sparkles className="h-4 w-4 text-cyan-300" />
@@ -59,8 +80,25 @@ export function CopilotPanel({
         </div>
         <p className="mt-2 text-xs leading-5 text-slate-500">{context}</p>
       </div>
-      <div className="flex-1 overflow-auto p-4">
-        <div className="whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-900/70 p-3 text-sm leading-6 text-slate-300">{answer}</div>
+      <div className="flex-1 space-y-3 overflow-auto p-4">
+        {messages.map((message) => (
+          <div key={message.id} className={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
+            <div
+              className={
+                message.role === "user"
+                  ? "max-w-[92%] whitespace-pre-wrap rounded-md border border-cyan-500/40 bg-cyan-950/35 p-3 text-sm leading-6 text-cyan-50"
+                  : "max-w-[92%] whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-900/70 p-3 text-sm leading-6 text-slate-300"
+              }
+            >
+              {message.content}
+            </div>
+          </div>
+        ))}
+        {busy ? (
+          <div className="flex justify-start">
+            <div className="rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-400">\u601d\u8003\u4e2d...</div>
+          </div>
+        ) : null}
         {lastResult ? (
           <div className="mt-3 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs leading-5 text-slate-500">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -92,6 +130,7 @@ export function CopilotPanel({
             ) : null}
           </div>
         ) : null}
+        <div ref={scrollRef} />
       </div>
       <div className="border-t border-slate-800 p-3">
         <textarea

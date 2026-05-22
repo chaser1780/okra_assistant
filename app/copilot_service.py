@@ -12,6 +12,22 @@ from common import load_llm_config
 from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
 
 
+def _conversation_history(evidence: dict) -> list[dict[str, str]]:
+    raw_messages = evidence.get("conversationMessages", []) if isinstance(evidence, dict) else []
+    if not isinstance(raw_messages, list):
+        return []
+    messages: list[dict[str, str]] = []
+    for item in raw_messages[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "") or "").strip()
+        content = str(item.get("content", "") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        messages.append({"role": role, "content": content[:4000]})
+    return messages
+
+
 def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) -> str:
     if requests is None:
         raise RuntimeError("requests is not installed")
@@ -19,24 +35,30 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
     provider = config["model_providers"][config["model_provider"]]
     api_key = resolve_api_key(config)
     is_rag_pack = isinstance(evidence, dict) and evidence.get("kind") == "copilot_rag_pack"
+    history = _conversation_history(evidence)
+    history_text = json.dumps(history, ensure_ascii=False, indent=2) if history else "[]"
     system_prompt = (
-        "你是 OKRA 长期记忆投资工作台的右侧智能助手。"
-        "你的任务是基于本地页面数据、基金详情、长期记忆和证据链，用中文回答用户问题。"
-        "只解释已有数据，不编造未提供的行情、净值、新闻或交易结论。"
-        "如果证据不足，要直接说明缺少哪些数据。"
-        "回答要面向实际投研工作流：先给结论，再给原因、风险、证据和下一步动作。"
-        "不要输出 JSON，不要写免责声明套话，不要建议用户离开工作台查询。"
+        "你是 OKRA 智能问答助手。用中文自然对话回答用户，不要表现得像固定模板。"
+        "你必须基于提供的 OKRA 本地证据、RAG 检索结果和对话上下文回答；证据不足时直接说明缺口。"
+        "不要编造净值、收益、新闻、持仓、交易状态或执行结论。"
+        "回答要先给可执行结论，再说明依据、风险和下一步。"
+        "不要输出 JSON，不要写泛泛免责声明。"
     )
-    user_prompt = f"页面上下文：{context}\n用户问题：{question}\n\n本地证据数据：\n" + json.dumps(evidence, ensure_ascii=False, indent=2)
+    user_prompt = (
+        f"当前页面上下文：{context}\n"
+        f"最近对话历史：\n{history_text}\n"
+        f"用户当前问题：{question}\n\n"
+        "OKRA 本地证据数据：\n"
+        + json.dumps(evidence, ensure_ascii=False, indent=2)
+    )
     if is_rag_pack:
         system_prompt = (
-            "You are the OKRA investment workbench copilot. Answer in Chinese using only the provided RAG evidence pack. "
-            "Start with the conclusion, then explain evidence, risks, and next actions. "
-            "Cite evidence as [C1], [C2] using citation ids from the pack. "
-            "Use structuredFacts before free text for numeric facts. "
-            "If validated advice, portfolio state, market/news evidence, or same-day data is missing, say exactly what is missing. "
-            "Mark stale evidence as stale. Archived or rejected memory can only be historical counterexamples. "
-            "Do not invent NAV, returns, news, holdings, or trading conclusions. Do not output JSON."
+            "你是 OKRA 智能问答助手。用中文自然对话回答用户，不要表现得像固定模板。"
+            "优先使用提供的 RAG evidence pack 和 structuredFacts；引用证据时使用 [C1]、[C2]。"
+            "如果 RAG 缺少 validated advice、portfolio state、market/news evidence 或同日数据，要明确指出缺口。"
+            "stale 证据必须标明过期或延迟；archived/rejected memory 只能作为历史反例。"
+            "不要编造净值、收益、新闻、持仓、交易状态或执行结论。"
+            "回答要先给可执行结论，再说明依据、风险和下一步。不要输出 JSON。"
         )
     request_payload = {
         "model": config["model"],
@@ -88,20 +110,20 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
         retrieval = evidence.get("retrieval", {}) if isinstance(evidence.get("retrieval"), dict) else {}
         source_date = evidence.get("sourceDate", "")
         lines = [
-            "RAG evidence was retrieved, but the LLM call failed. Here is the local evidence summary.",
+            "已检索到 RAG 证据，但这次没有成功连接 LLM。以下是本地证据摘要。",
             "",
-            f"Page: {context}",
-            f"Date: {source_date or 'unknown'}",
-            f"Question: {question}",
-            f"Trace: {evidence.get('traceId', '') or 'unknown'}",
+            f"页面：{context}",
+            f"日期：{source_date or '未知'}",
+            f"问题：{question}",
+            f"Trace：{evidence.get('traceId', '') or '未知'}",
             "",
-            "Retrieval:",
-            f"- Hit count: {retrieval.get('hitCount', len(citations))}",
+            "检索：",
+            f"- 命中数：{retrieval.get('hitCount', len(citations))}",
         ]
         missing = retrieval.get("missingData") or evidence.get("missingData") or []
         if missing:
-            lines.append(f"- Missing data: {json.dumps(missing, ensure_ascii=False)[:500]}")
-        lines.extend(["", "Evidence:"])
+            lines.append(f"- 缺失数据：{json.dumps(missing, ensure_ascii=False)[:500]}")
+        lines.extend(["", "证据："])
         for item in citations[:5]:
             if not isinstance(item, dict):
                 continue
@@ -111,8 +133,8 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
                 f"{item.get('sourceKind', '')} {item.get('asOfDate', '')}: {item.get('summary', '')}"
             )
         if not citations:
-            lines.append("- No usable evidence was retrieved.")
-        lines.extend(["", f"LLM error: {error[:500]}"])
+            lines.append("- 没有可用证据。")
+        lines.extend(["", f"LLM 调用失败原因：{error[:500]}"])
         return "\n".join(lines)
 
     page_data = evidence.get("pageData", {}) if isinstance(evidence, dict) else {}
