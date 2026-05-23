@@ -2,8 +2,9 @@
 
 This index describes the current React + Tauri workbench and canonical
 today-analysis code path. Older Qt/PySide PRDs, handoff notes, completed
-improvement lists, and obsolete screenshot baselines were removed from the
-working documentation set; use git history if those past artifacts are needed.
+improvement lists, obsolete screenshot baselines, and superseded RAG task-split
+notes were removed from the working documentation set; use git history if those
+past artifacts are needed.
 
 ## Current Entrypoints
 
@@ -12,15 +13,12 @@ working documentation set; use git history if those past artifacts are needed.
 - `docs/modern_workbench.md`: current React + Tauri workbench, local API surface, runtime behavior.
 - `config/retention.toml`: retention policy for rebuildable runtime artifacts.
 - `scripts/cleanup_retention.py`: dry-run-first cleanup planner; use explicit apply commands only after reviewing the generated plan.
+- `docs/refactor_runs/`: run-specific planning and execution records for larger architecture changes.
 
 ## Current Design Docs
 
 - `docs/fund_multiagent_design.md`: current fund multi-agent research chain, committee synthesis, validated advice, and execution boundary.
 - `docs/okra_unified_rag_architecture.md`: unified vector RAG architecture for Copilot Q&A and future today-analysis retrieval.
-
-## Archived Development Notes
-
-- `docs/archive/2026-05-rag-development-plan/`: completed/stage-specific RAG task split, handoff notes, acceptance matrix, and subagent notes. Keep it for reference, but do not treat it as the current implementation plan.
 
 ## Data Retention
 

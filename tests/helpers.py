@@ -340,7 +340,6 @@ class TempAgentHome:
             "db/daily_scores",
             "db/intraday_proxies",
             "db/realtime_monitor",
-            "db/portfolio_advice",
             "db/llm_context",
             "db/evidence_index",
             "db/llm_advice",

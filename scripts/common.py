@@ -62,7 +62,6 @@ REQUIRED_DIRS = (
     "db/daily_scores",
     "db/intraday_proxies",
     "db/realtime_monitor",
-    "db/portfolio_advice",
     "db/llm_context",
     "db/llm_advice",
     "db/committee_advice",
@@ -569,10 +568,6 @@ def intraday_proxy_path(agent_home: Path, report_date: str) -> Path:
 
 def realtime_monitor_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "realtime_monitor" / f"{report_date}.json"
-
-
-def portfolio_advice_path(agent_home: Path, report_date: str) -> Path:
-    return agent_home / "db" / "portfolio_advice" / f"{report_date}.json"
 
 
 def llm_context_path(agent_home: Path, report_date: str) -> Path:
