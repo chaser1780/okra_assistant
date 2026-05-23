@@ -123,6 +123,7 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
                     "matched_fund_code": "017641",
                     "match_status": "matched",
                     "current_value": 1653.34,
+                    "daily_pnl": 14.64,
                     "holding_pnl": 3.34,
                     "holding_return_pct": 0.21,
                     "derived_cost_basis_value": 1650.0,
@@ -144,8 +145,12 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
         self.assertEqual(sp500["current_value"], 1653.34)
         self.assertEqual(sp500["holding_pnl"], 3.34)
         self.assertEqual(sp500["cost_basis_value"], 1650.0)
+        self.assertEqual(sp500["actual_daily_pnl"], 14.64)
+        self.assertEqual(sp500["actual_daily_pnl_date"], "2026-04-16")
+        self.assertEqual(sp500["units_source"], "screenshot_sync_value_only")
         self.assertEqual(grid["current_value"], 0.0)
         self.assertEqual(grid["holding_units"], 0.0)
+        self.assertEqual(grid["actual_daily_pnl"], 0.0)
         self.assertEqual(portfolio["as_of_date"], "2026-04-16")
 
     def test_build_sync_preview_identifies_new_fund_candidates(self):
@@ -190,6 +195,7 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
                     "proxy_name": "",
                     "definition_item": {},
                     "current_value": 888.88,
+                    "daily_pnl": 6.66,
                     "holding_pnl": 12.34,
                     "holding_return_pct": 1.41,
                     "derived_cost_basis_value": 876.54,
@@ -215,7 +221,33 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
         self.assertEqual(added["current_value"], 888.88)
         self.assertEqual(added["holding_pnl"], 12.34)
         self.assertEqual(added["cost_basis_value"], 876.54)
+        self.assertEqual(added["actual_daily_pnl"], 6.66)
         self.assertEqual(definition_item["opening_state"]["current_value"], 888.88)
+        self.assertEqual(definition_item["opening_state"]["actual_daily_pnl"], 6.66)
+        self.assertEqual(definition_item["opening_state"]["actual_daily_pnl_date"], "2026-04-16")
+
+    def test_apply_sync_preview_rejects_unmatched_holdings(self):
+        preview = {
+            "provider": "alipay",
+            "image_count": 1,
+            "matched_items": [
+                {
+                    "matched_fund_code": "017641",
+                    "match_status": "matched",
+                    "current_value": 1653.34,
+                    "holding_pnl": 3.34,
+                    "holding_return_pct": 0.21,
+                    "derived_cost_basis_value": 1650.0,
+                }
+            ],
+            "missing_portfolio_funds": [],
+            "new_fund_candidates": [],
+            "unmatched_detected": [{"display_name": "New Fund", "current_value": 100.0}],
+            "apply_ready": False,
+        }
+
+        with self.assertRaises(RuntimeError):
+            apply_sync_preview(self.agent.root, preview, sync_date="2026-04-16", drop_missing=False, auto_add_new=False)
 
     def test_call_screenshot_vision_uses_lightweight_vision_settings(self):
         captured = {}

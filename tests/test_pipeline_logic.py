@@ -204,6 +204,39 @@ class PipelineLogicTests(unittest.TestCase):
         finally:
             agent.cleanup()
 
+    def test_should_not_sync_units_for_actual_position_snapshot(self):
+        agent = TempAgentHome()
+        try:
+            agent.write_json(
+                "config/portfolio.json",
+                {
+                    "portfolio_name": "娴嬭瘯缁勫悎",
+                    "as_of_date": "2026-03-11",
+                    "funds": [
+                        {
+                            "fund_code": "EQ1",
+                            "fund_name": "鏉冪泭鍩洪噾",
+                            "role": "tactical",
+                            "current_value": 503.21,
+                            "holding_units": 250.0,
+                            "last_valuation_nav": 2.0,
+                            "last_valuation_date": "2026-03-11",
+                            "units_source": "actual_position_value_only",
+                            "actual_daily_pnl": 3.21,
+                            "actual_daily_pnl_date": "2026-03-11",
+                            "last_real_position_date": "2026-03-11",
+                            "real_position_source": "alipay_screenshot",
+                        }
+                    ],
+                },
+            )
+            agent.write_json("raw/quotes/2026-03-11.json", {"funds": [{"code": "EQ1", "nav": 2.1, "as_of_date": "2026-03-11"}]})
+            agent.write_json("db/estimated_nav/2026-03-11.json", {"items": [{"fund_code": "EQ1", "official_nav": 2.1, "official_nav_date": "2026-03-11"}]})
+
+            self.assertFalse(should_sync_units(agent.root, "2026-03-11"))
+        finally:
+            agent.cleanup()
+
     def test_load_portfolio_for_date_prefers_runtime_state_over_legacy_bootstrap(self):
         agent = TempAgentHome()
         try:

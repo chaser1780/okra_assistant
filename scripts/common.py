@@ -10,6 +10,34 @@ from pathlib import Path
 import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+PORTFOLIO_RUNTIME_FIELDS = {
+    "current_value",
+    "holding_pnl",
+    "holding_return_pct",
+    "holding_units",
+    "cost_basis_value",
+    "last_valuation_nav",
+    "last_valuation_date",
+    "last_official_nav",
+    "last_official_nav_date",
+    "units_source",
+    "actual_daily_pnl",
+    "actual_daily_pnl_date",
+    "actual_daily_pnl_source",
+    "official_daily_pnl",
+    "official_daily_pnl_date",
+    "official_daily_pnl_source",
+    "official_daily_pnl_status",
+    "official_daily_pnl_reason",
+    "official_daily_pnl_units",
+    "official_daily_pnl_nav",
+    "official_daily_pnl_previous_nav",
+    "official_daily_pnl_previous_nav_date",
+    "actual_position_synced_at",
+    "last_real_position_date",
+    "real_position_source",
+}
+
 DEFAULT_AGENT_HOME = Path(r"F:\okra_assistant")
 try:
     SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -52,6 +80,7 @@ REQUIRED_DIRS = (
     "db/portfolio_state/snapshots",
     "db/portfolio_state/events",
     "db/portfolio_imports",
+    "db/portfolio_daily_pnl",
     "db/preflight",
     "db/run_manifests",
     "db/review_results",
@@ -402,11 +431,26 @@ def load_portfolio(agent_home: Path) -> dict:
                 "last_official_nav": fund.get("last_official_nav"),
                 "last_official_nav_date": fund.get("last_official_nav_date", ""),
                 "units_source": fund.get("units_source", ""),
+                "actual_daily_pnl": fund.get("actual_daily_pnl"),
+                "actual_daily_pnl_date": fund.get("actual_daily_pnl_date", ""),
+                "actual_daily_pnl_source": fund.get("actual_daily_pnl_source", ""),
+                "official_daily_pnl": fund.get("official_daily_pnl"),
+                "official_daily_pnl_date": fund.get("official_daily_pnl_date", ""),
+                "official_daily_pnl_source": fund.get("official_daily_pnl_source", ""),
+                "official_daily_pnl_status": fund.get("official_daily_pnl_status", ""),
+                "official_daily_pnl_reason": fund.get("official_daily_pnl_reason", ""),
+                "official_daily_pnl_units": fund.get("official_daily_pnl_units"),
+                "official_daily_pnl_nav": fund.get("official_daily_pnl_nav"),
+                "official_daily_pnl_previous_nav": fund.get("official_daily_pnl_previous_nav"),
+                "official_daily_pnl_previous_nav_date": fund.get("official_daily_pnl_previous_nav_date", ""),
+                "actual_position_synced_at": fund.get("actual_position_synced_at", ""),
+                "last_real_position_date": fund.get("last_real_position_date", ""),
+                "real_position_source": fund.get("real_position_source", ""),
             }
             config_fields = {
                 key: value
                 for key, value in fund.items()
-                if key not in opening_state and key not in {"current_value", "holding_pnl", "holding_return_pct", "holding_units", "cost_basis_value", "last_valuation_nav", "last_valuation_date", "last_official_nav", "last_official_nav_date", "units_source"}
+                if key not in opening_state and key not in PORTFOLIO_RUNTIME_FIELDS
             }
             definition["funds"].append({**config_fields, "opening_state": opening_state})
         dump_json(definition_path, definition)
@@ -587,6 +631,10 @@ def execution_review_result_path(agent_home: Path, base_date: str, horizon: int)
 
 def portfolio_valuation_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "portfolio_valuation" / f"{report_date}.json"
+
+
+def portfolio_daily_pnl_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "portfolio_daily_pnl" / f"{report_date}.json"
 
 
 def portfolio_definition_path(agent_home: Path) -> Path:

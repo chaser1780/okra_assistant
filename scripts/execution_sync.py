@@ -57,6 +57,15 @@ def _money(value: Any) -> float:
         return 0.0
 
 
+def _optional_money(value: Any) -> float | None:
+    if value in (None, "", "--"):
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def _units(value: Any) -> float | None:
     if value in (None, "", "--"):
         return None
@@ -417,6 +426,7 @@ def preview_reconciliation(agent_home: Path, actual_positions: list[dict[str, An
             "cost_basis_value": _money(item.get("cost_basis_value")),
             "holding_pnl": _money(item.get("holding_pnl")),
             "holding_return_pct": float(item.get("holding_return_pct", 0.0) or 0.0),
+            "daily_pnl": _optional_money(item.get("daily_pnl", item.get("actual_daily_pnl"))),
             "before_current_value": _money(current.get("current_value")),
             "before_holding_units": _units(current.get("holding_units")),
             "delta_current_value": round(_money(item.get("current_value")) - _money(current.get("current_value")), 2),
@@ -450,6 +460,7 @@ def _position_row_from_preview(row: dict[str, Any]) -> dict[str, Any]:
     current_value = _money(row.get("current_value"))
     holding_pnl = row.get("holding_pnl")
     cost_basis = row.get("cost_basis_value", row.get("derived_cost_basis_value"))
+    daily_pnl = _optional_money(row.get("daily_pnl", row.get("actual_daily_pnl")))
     if cost_basis in (None, "") and holding_pnl not in (None, ""):
         cost_basis = round(max(0.0, current_value - _money(holding_pnl)), 2)
     return {
@@ -460,6 +471,7 @@ def _position_row_from_preview(row: dict[str, Any]) -> dict[str, Any]:
         "cost_basis_value": _money(cost_basis),
         "holding_pnl": _money(holding_pnl),
         "holding_return_pct": float(row.get("holding_return_pct", 0.0) or 0.0),
+        "actual_daily_pnl": daily_pnl,
     }
 
 
@@ -469,9 +481,15 @@ def apply_reconciliation(agent_home: Path, preview: dict[str, Any], *, drop_miss
 
 
 def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *, drop_missing: bool = False) -> dict[str, Any]:
+    unmatched = list(preview.get("unmatched_detected", []) or [])
+    if unmatched and preview.get("apply_ready") is False:
+        raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
     portfolio = deepcopy(load_portfolio(agent_home))
     current_by_code = {str(item.get("fund_code", "")): item for item in portfolio.get("funds", []) or []}
     snapshot_date = str(preview.get("snapshot_date") or preview.get("sync_date") or resolve_date())
+    source = str(preview.get("source") or preview.get("provider") or "actual_position_sync")
+    platform = str(preview.get("platform") or preview.get("provider") or "alipay")
+    synced_at = timestamp_now()
     updated_codes: list[str] = []
     added_codes: list[str] = []
     rows = list(preview.get("matched_items", []) or []) + list(preview.get("new_items", []) or [])
@@ -498,6 +516,8 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
         if row.get("holding_units") not in (None, ""):
             fund["holding_units"] = _units(row.get("holding_units")) or 0.0
             fund["units_source"] = "actual_position_sync"
+        else:
+            fund["units_source"] = "actual_position_value_only"
         if row.get("cost_basis_value") not in (None, ""):
             fund["cost_basis_value"] = _money(row.get("cost_basis_value"))
         if row.get("holding_pnl") not in (None, ""):
@@ -506,6 +526,13 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
             fund["holding_pnl"] = round(_money(fund.get("current_value")) - _money(fund.get("cost_basis_value")), 2)
         fund["holding_return_pct"] = float(row.get("holding_return_pct", fund.get("holding_return_pct", 0.0)) or 0.0)
         fund["last_valuation_date"] = snapshot_date
+        if row.get("actual_daily_pnl") is not None:
+            fund["actual_daily_pnl"] = row["actual_daily_pnl"]
+            fund["actual_daily_pnl_date"] = snapshot_date
+            fund["actual_daily_pnl_source"] = source
+        fund["last_real_position_date"] = snapshot_date
+        fund["real_position_source"] = source
+        fund["actual_position_synced_at"] = synced_at
         updated_codes.append(code)
     dropped_codes: list[str] = []
     if drop_missing:
@@ -519,6 +546,12 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
                 fund["holding_pnl"] = 0.0
                 fund["holding_return_pct"] = 0.0
                 fund["units_source"] = "actual_position_missing_zero"
+                fund["actual_daily_pnl"] = 0.0
+                fund["actual_daily_pnl_date"] = snapshot_date
+                fund["actual_daily_pnl_source"] = source
+                fund["last_real_position_date"] = snapshot_date
+                fund["real_position_source"] = source
+                fund["actual_position_synced_at"] = synced_at
                 dropped_codes.append(str(row.get("fund_code", "")))
     portfolio["as_of_date"] = snapshot_date
     portfolio["total_value"] = round(sum(_money(item.get("current_value")) for item in portfolio.get("funds", []) or []), 2)
@@ -526,11 +559,11 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
     current_path, snapshot_path = _save_portfolio_state_unlocked(
         agent_home,
         portfolio,
-        source=str(preview.get("source") or "actual_position_sync"),
+        source=source,
         event_date=snapshot_date,
         event_type="actual_position_reconcile",
         extra_meta={
-            "platform": preview.get("platform", "alipay"),
+            "platform": platform,
             "reconcile_id": preview.get("reconcile_id", ""),
             "updated_fund_codes": updated_codes,
             "added_fund_codes": added_codes,
@@ -539,8 +572,8 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
     )
     position_payload = {
         "snapshot_date": snapshot_date,
-        "source": preview.get("source", "manual"),
-        "platform": preview.get("platform", "alipay"),
+        "source": source,
+        "platform": platform,
         "reconcile_id": preview.get("reconcile_id", "") or preview.get("import_id", ""),
         "portfolio": portfolio,
         "updated_at": timestamp_now(),

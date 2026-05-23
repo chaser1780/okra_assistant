@@ -18,6 +18,10 @@ working documentation set; use git history if those past artifacts are needed.
 - `docs/fund_multiagent_design.md`: current fund multi-agent research chain, committee synthesis, validated advice, and execution boundary.
 - `docs/okra_unified_rag_architecture.md`: unified vector RAG architecture for Copilot Q&A and future today-analysis retrieval.
 
+## Archived Development Notes
+
+- `docs/archive/2026-05-rag-development-plan/`: completed/stage-specific RAG task split, handoff notes, acceptance matrix, and subagent notes. Keep it for reference, but do not treat it as the current implementation plan.
+
 ## Data Retention
 
 Permanent state must be preserved:

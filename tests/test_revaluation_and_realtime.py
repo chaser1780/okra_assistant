@@ -98,6 +98,8 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
                     {
                         "code": "EQ1",
                         "nav": 2.12,
+                        "previous_nav": 2.0,
+                        "previous_nav_date": "2026-03-09",
                         "as_of_date": "2026-03-10",
                         "date_match_type": "previous_trading_day",
                         "freshness_label": "官方净值为上一交易日",
@@ -105,6 +107,8 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
                     {
                         "code": "QDII1",
                         "nav": 1.95,
+                        "previous_nav": 2.0,
+                        "previous_nav_date": "2026-03-04",
                         "as_of_date": "2026-03-05",
                         "date_match_type": "delayed",
                         "freshness_label": "官方净值滞后 4 个交易日",
@@ -112,6 +116,8 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
                     {
                         "code": "CASH",
                         "nav": 1.0,
+                        "previous_nav": 1.0,
+                        "previous_nav_date": "2026-03-09",
                         "as_of_date": "2026-03-10",
                         "date_match_type": "previous_trading_day",
                         "freshness_label": "官方净值为上一交易日",
@@ -129,9 +135,163 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
         eq1 = next(item for item in valuation["items"] if item["fund_code"] == "EQ1")
         qdii = next(item for item in valuation["items"] if item["fund_code"] == "QDII1")
         self.assertEqual(eq1["new_current_value"], 530.0)
+        self.assertEqual(eq1["official_daily_pnl"], 30.0)
+        self.assertEqual(eq1["official_daily_pnl_date"], "2026-03-10")
+        self.assertEqual(eq1["official_daily_pnl_status"], "ok")
+        self.assertEqual(valuation["official_daily_pnl"], 15.0)
+        daily_pnl = json.loads((self.agent.root / "db" / "portfolio_daily_pnl" / "2026-03-11.json").read_text(encoding="utf-8"))
+        self.assertEqual(daily_pnl["total_official_daily_pnl"], 15.0)
+        self.assertEqual(daily_pnl["confirmed_count"], 3)
         self.assertEqual(eq1["freshness_label"], "官方净值为上一交易日")
         self.assertEqual(qdii["freshness_label"], "官方净值滞后 4 个交易日")
         self.assertEqual(valuation["stale_fund_codes"], ["QDII1"])
+
+    def test_revalue_portfolio_preserves_actual_position_snapshot_for_same_day(self):
+        portfolio = {
+            "portfolio_name": "娴嬭瘯缁勫悎",
+            "as_of_date": "2026-03-11",
+            "total_value": 503.21,
+            "holding_pnl": 3.21,
+            "funds": [
+                {
+                    "fund_code": "EQ1",
+                    "fund_name": "鏉冪泭鍩洪噾",
+                    "role": "tactical",
+                    "style_group": "growth",
+                    "current_value": 503.21,
+                    "holding_pnl": 3.21,
+                    "holding_return_pct": 0.64,
+                    "holding_units": 250.0,
+                    "last_valuation_nav": 2.0,
+                    "last_valuation_date": "2026-03-11",
+                    "units_source": "actual_position_value_only",
+                    "cost_basis_value": 500.0,
+                    "actual_daily_pnl": 3.21,
+                    "actual_daily_pnl_date": "2026-03-11",
+                    "last_real_position_date": "2026-03-11",
+                    "real_position_source": "alipay_screenshot",
+                }
+            ],
+        }
+        self.agent.write_json("config/portfolio.json", portfolio)
+        self.agent.write_json("db/portfolio_state/current.json", portfolio)
+        self.agent.write_json(
+            "raw/quotes/2026-03-11.json",
+            {
+                "report_date": "2026-03-11",
+                "funds": [{"code": "EQ1", "nav": 2.12, "as_of_date": "2026-03-11", "date_match_type": "same_day"}],
+            },
+        )
+        self.agent.write_json("db/estimated_nav/2026-03-11.json", {"items": []})
+
+        self.agent.run_script("revalue_portfolio_official_nav.py", "--date", "2026-03-11")
+
+        valuation = json.loads((self.agent.root / "db" / "portfolio_valuation" / "2026-03-11.json").read_text(encoding="utf-8"))
+        portfolio_after = json.loads((self.agent.root / "db" / "portfolio_state" / "current.json").read_text(encoding="utf-8"))
+        item = valuation["items"][0]
+        fund = portfolio_after["funds"][0]
+
+        self.assertEqual(item["status"], "skipped")
+        self.assertEqual(item["reason"], "actual_position_snapshot_authoritative")
+        self.assertEqual(item["new_current_value"], 503.21)
+        self.assertEqual(fund["current_value"], 503.21)
+        self.assertEqual(fund["holding_pnl"], 3.21)
+        self.assertEqual(fund["actual_daily_pnl"], 3.21)
+
+    def test_revalue_portfolio_blocks_official_daily_pnl_for_derived_units(self):
+        portfolio = {
+            "portfolio_name": "test",
+            "as_of_date": "2026-03-10",
+            "total_value": 500.0,
+            "holding_pnl": 0.0,
+            "funds": [
+                {
+                    "fund_code": "EQ1",
+                    "fund_name": "Fund",
+                    "role": "tactical",
+                    "style_group": "growth",
+                    "current_value": 500.0,
+                    "holding_pnl": 0.0,
+                    "holding_return_pct": 0.0,
+                    "holding_units": 250.0,
+                    "last_valuation_nav": 2.0,
+                    "units_source": "derived_from_official_nav",
+                    "cost_basis_value": 500.0,
+                }
+            ],
+        }
+        self.agent.write_json("config/portfolio.json", portfolio)
+        self.agent.write_json(
+            "raw/quotes/2026-03-11.json",
+            {
+                "report_date": "2026-03-11",
+                "funds": [{"code": "EQ1", "nav": 2.12, "previous_nav": 2.0, "previous_nav_date": "2026-03-10", "as_of_date": "2026-03-11", "date_match_type": "same_day"}],
+            },
+        )
+        self.agent.write_json("db/estimated_nav/2026-03-11.json", {"items": []})
+
+        self.agent.run_script("revalue_portfolio_official_nav.py", "--date", "2026-03-11")
+
+        valuation = json.loads((self.agent.root / "db" / "portfolio_valuation" / "2026-03-11.json").read_text(encoding="utf-8"))
+        portfolio_after = json.loads((self.agent.root / "db" / "portfolio_state" / "current.json").read_text(encoding="utf-8"))
+        item = valuation["items"][0]
+
+        self.assertEqual(item["new_current_value"], 530.0)
+        self.assertIsNone(item["official_daily_pnl"])
+        self.assertEqual(item["official_daily_pnl_status"], "blocked")
+        self.assertEqual(item["official_daily_pnl_reason"], "untrusted_units_source:derived_from_official_nav")
+        self.assertIsNone(portfolio_after["funds"][0]["official_daily_pnl"])
+        self.assertEqual(portfolio_after["funds"][0]["official_daily_pnl_status"], "blocked")
+        self.assertNotIn("actual_daily_pnl", portfolio_after["funds"][0])
+        self.assertEqual(valuation["official_daily_pnl"], 0.0)
+
+    def test_value_only_actual_snapshot_only_blocks_same_day(self):
+        portfolio = {
+            "portfolio_name": "test",
+            "as_of_date": "2026-03-11",
+            "total_value": 503.21,
+            "holding_pnl": 3.21,
+            "funds": [
+                {
+                    "fund_code": "EQ1",
+                    "fund_name": "Fund",
+                    "role": "tactical",
+                    "style_group": "growth",
+                    "current_value": 503.21,
+                    "holding_pnl": 3.21,
+                    "holding_return_pct": 0.64,
+                    "holding_units": 250.0,
+                    "last_valuation_nav": 2.0,
+                    "last_valuation_date": "2026-03-11",
+                    "units_source": "actual_position_value_only",
+                    "cost_basis_value": 500.0,
+                    "actual_daily_pnl": 3.21,
+                    "actual_daily_pnl_date": "2026-03-11",
+                    "last_real_position_date": "2026-03-11",
+                    "real_position_source": "alipay_screenshot",
+                }
+            ],
+        }
+        self.agent.write_json("config/portfolio.json", portfolio)
+        self.agent.write_json("db/portfolio_state/current.json", portfolio)
+        self.agent.write_json(
+            "raw/quotes/2026-03-12.json",
+            {
+                "report_date": "2026-03-12",
+                "funds": [{"code": "EQ1", "nav": 2.2, "previous_nav": 2.12, "previous_nav_date": "2026-03-11", "as_of_date": "2026-03-12", "date_match_type": "same_day"}],
+            },
+        )
+        self.agent.write_json("db/estimated_nav/2026-03-12.json", {"items": []})
+
+        self.agent.run_script("revalue_portfolio_official_nav.py", "--date", "2026-03-12")
+
+        valuation = json.loads((self.agent.root / "db" / "portfolio_valuation" / "2026-03-12.json").read_text(encoding="utf-8"))
+        item = valuation["items"][0]
+
+        self.assertEqual(item["status"], "updated")
+        self.assertEqual(item["new_current_value"], 550.0)
+        self.assertIsNone(item["official_daily_pnl"])
+        self.assertEqual(item["official_daily_pnl_reason"], "untrusted_units_source:actual_position_value_only")
 
     def test_build_realtime_profit_respects_policy_and_outputs_freshness(self):
         self.build_portfolio()

@@ -118,6 +118,8 @@ def apply_trade(portfolio: dict, fund_code: str, action: str, amount: float, tra
         units_delta = infer_trade_units(target, amount)
         if units_delta:
             target["holding_units"] = round((target_units or 0.0) + units_delta, 6)
+            if trade_units is not None or trade_nav is not None:
+                target["units_source"] = "actual_trade_units"
         if trade_nav is not None:
             target["last_valuation_nav"] = round(trade_nav, 6)
         recalc_fund(target)
@@ -133,6 +135,8 @@ def apply_trade(portfolio: dict, fund_code: str, action: str, amount: float, tra
         units_delta = infer_trade_units(target, amount)
         if target_units and units_delta:
             target["holding_units"] = round(max(0.0, target_units - units_delta), 6)
+            if trade_units is not None or trade_nav is not None:
+                target["units_source"] = "actual_trade_units"
         if trade_nav is not None:
             target["last_valuation_nav"] = round(trade_nav, 6)
         recalc_fund(target)

@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from common import (
+    PORTFOLIO_RUNTIME_FIELDS,
     iter_actual_trade_items,
     dump_json,
     execution_status_path,
@@ -24,18 +25,78 @@ from common import (
 )
 
 
-RUNTIME_FIELDS = {
-    "current_value",
-    "holding_pnl",
-    "holding_return_pct",
-    "holding_units",
-    "cost_basis_value",
-    "last_valuation_nav",
-    "last_valuation_date",
-    "last_official_nav",
-    "last_official_nav_date",
-    "units_source",
+RUNTIME_FIELDS = PORTFOLIO_RUNTIME_FIELDS
+
+ACTUAL_POSITION_UNIT_SOURCES = {
+    "actual_position_sync",
+    "actual_position_value_only",
+    "actual_position_missing_zero",
+    "screenshot_sync_value_only",
+    "screenshot_sync_missing_zero",
 }
+
+VALUE_ONLY_POSITION_UNIT_SOURCES = {
+    "actual_position_value_only",
+    "actual_position_missing_zero",
+    "screenshot_sync_value_only",
+    "screenshot_sync_missing_zero",
+}
+
+ACTUAL_POSITION_SOURCES = {
+    "actual_position_sync",
+    "alipay_screenshot",
+    "manual_position_snapshot",
+    "portfolio_screenshot_sync",
+}
+
+TRUSTED_DAILY_PNL_UNIT_SOURCES = {
+    "stored",
+    "manual",
+    "manual_position_snapshot",
+    "actual_position_sync",
+    "actual_trade_units",
+}
+
+UNTRUSTED_DAILY_PNL_UNIT_SOURCES = {
+    "derived_from_official_nav",
+    *VALUE_ONLY_POSITION_UNIT_SOURCES,
+}
+
+
+def actual_position_snapshot_date(fund: dict) -> str:
+    for key in ("last_real_position_date", "actual_daily_pnl_date"):
+        value = str(fund.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def is_actual_position_source(fund: dict) -> bool:
+    units_source = str(fund.get("units_source") or "").strip()
+    source = str(fund.get("real_position_source") or fund.get("actual_daily_pnl_source") or "").strip()
+    return units_source in ACTUAL_POSITION_UNIT_SOURCES or source in ACTUAL_POSITION_SOURCES
+
+
+def actual_position_is_authoritative(fund: dict, report_date: str | None = None) -> bool:
+    units_source = str(fund.get("units_source") or "").strip()
+    if units_source in VALUE_ONLY_POSITION_UNIT_SOURCES:
+        if report_date is None:
+            return True
+        return actual_position_snapshot_date(fund) == str(report_date or "").strip()
+    if not is_actual_position_source(fund):
+        return False
+    if report_date is None:
+        return True
+    return actual_position_snapshot_date(fund) == str(report_date or "").strip()
+
+
+def daily_pnl_units_are_trusted(fund: dict) -> tuple[bool, str]:
+    units_source = str(fund.get("units_source") or "").strip()
+    if units_source in TRUSTED_DAILY_PNL_UNIT_SOURCES:
+        return True, ""
+    if units_source in UNTRUSTED_DAILY_PNL_UNIT_SOURCES:
+        return False, f"untrusted_units_source:{units_source}"
+    return False, f"unclassified_units_source:{units_source or 'missing'}"
 
 
 def _safe_event_token(value: str) -> str:

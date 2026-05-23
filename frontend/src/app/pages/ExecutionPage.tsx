@@ -109,6 +109,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     user_note: ""
   });
   const recognizedRows = useMemo(() => extractPreviewRows(screenshotPreview), [screenshotPreview]);
+  const screenshotApplyReady = screenshotPreview ? screenshotPreview.apply_ready !== false && recognizedRows.length > 0 : false;
 
   async function submitTrade() {
     if (tradeKind === "convert") {
@@ -185,6 +186,10 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
   async function applyScreenshot(mode: ScreenshotMode) {
     if (!screenshotPreview) return;
+    if (!screenshotApplyReady) {
+      setMessage("截图中还有未匹配持仓，请先完成新基金建档/分类后再写入真实持仓。");
+      return;
+    }
     setBusy(true);
     setMessage(mode === "replace" ? "正在按截图全部替换真实仓位..." : "正在按截图更新真实仓位...");
     try {
@@ -270,10 +275,10 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
             <div className="mt-4 space-y-3">
               <PreviewSummary preview={screenshotPreview} rows={recognizedRows} />
               <div className="flex flex-wrap gap-2">
-                <Button variant="primary" disabled={busy || !recognizedRows.length} onClick={() => void applyScreenshot("update")}>
+                <Button variant="primary" disabled={busy || !screenshotApplyReady} onClick={() => void applyScreenshot("update")}>
                   更新
                 </Button>
-                <Button variant="danger" disabled={busy || !recognizedRows.length} onClick={() => void applyScreenshot("replace")}>
+                <Button variant="danger" disabled={busy || !screenshotApplyReady} onClick={() => void applyScreenshot("replace")}>
                   全部替换
                 </Button>
                 <Button variant="ghost" disabled={busy} onClick={() => setScreenshotPreview(null)}>
@@ -402,6 +407,7 @@ function ConversionForm({
 function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; rows: Record<string, unknown>[] }) {
   const warnings = [...asList(preview.warnings), ...asList(preview.vision_warnings)];
   const missing = asList(preview.missing_items).length || asList(preview.missing_portfolio_funds).length;
+  const unmatched = asList(preview.unmatched_detected);
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -419,6 +425,16 @@ function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; r
         ))}
       </div>
       {missing ? <div className="mt-3 text-xs text-amber-200">有 {missing} 只当前持仓未出现在截图中；选择“全部替换”时会归零。</div> : null}
+      {unmatched.length ? (
+        <div className="mt-3 rounded border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs leading-5 text-amber-100">
+          <div className="font-semibold">截图中有 {unmatched.length} 只未匹配持仓，当前不会写入持仓。</div>
+          {unmatched.slice(0, 4).map((item, index) => (
+            <div key={index}>
+              {text(item.display_name)} | 市值 {signedMoney(asNumber(item.current_value))}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {warnings.map((item, index) => (
         <div key={index} className="mt-2 text-xs leading-5 text-slate-500">
           {text(item)}

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from common import ensure_layout, estimated_nav_path, load_json, load_portfolio, quote_path, resolve_agent_home, resolve_date
-from portfolio_state import save_portfolio_state
+from portfolio_state import actual_position_is_authoritative, save_portfolio_state
 
 
 def safe_float(value) -> float | None:
@@ -33,6 +33,8 @@ def main() -> None:
     estimate_by_code = {item["fund_code"]: item for item in estimates.get("items", [])}
 
     for fund in portfolio.get("funds", []):
+        if actual_position_is_authoritative(fund):
+            continue
         current_value = float(fund.get("current_value", 0.0))
         if current_value <= 0:
             continue

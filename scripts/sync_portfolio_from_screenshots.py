@@ -27,7 +27,7 @@ from common import (
     timestamp_now,
 )
 from multiagent_utils import describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
-from portfolio_state import ensure_portfolio_definition, save_portfolio_state
+from portfolio_state import RUNTIME_FIELDS, ensure_portfolio_definition, save_portfolio_state
 
 
 SCREENSHOT_SCHEMA = {
@@ -84,7 +84,7 @@ def safe_portfolio_definition(agent_home: Path, portfolio: dict) -> dict:
             "base_as_of_date": portfolio.get("as_of_date", ""),
             "funds": [
                 {
-                    **{key: deepcopy(value) for key, value in fund.items() if key not in {"current_value", "holding_pnl", "holding_return_pct", "holding_units", "cost_basis_value", "last_valuation_nav", "last_valuation_date", "last_official_nav", "last_official_nav_date", "units_source"}},
+                    **{key: deepcopy(value) for key, value in fund.items() if key not in RUNTIME_FIELDS},
                     "opening_state": {
                         "current_value": float(fund.get("current_value", 0.0) or 0.0),
                         "holding_pnl": float(fund.get("holding_pnl", 0.0) or 0.0),
@@ -96,6 +96,12 @@ def safe_portfolio_definition(agent_home: Path, portfolio: dict) -> dict:
                         "last_official_nav": fund.get("last_official_nav"),
                         "last_official_nav_date": fund.get("last_official_nav_date", ""),
                         "units_source": fund.get("units_source", ""),
+                        "actual_daily_pnl": fund.get("actual_daily_pnl"),
+                        "actual_daily_pnl_date": fund.get("actual_daily_pnl_date", ""),
+                        "actual_daily_pnl_source": fund.get("actual_daily_pnl_source", ""),
+                        "actual_position_synced_at": fund.get("actual_position_synced_at", ""),
+                        "last_real_position_date": fund.get("last_real_position_date", ""),
+                        "real_position_source": fund.get("real_position_source", ""),
                     },
                 }
                 for fund in portfolio.get("funds", []) or []
@@ -368,7 +374,7 @@ def infer_role_for_new_fund(category: str, style_group: str, portfolio: dict) ->
     return "tactical"
 
 
-def build_new_fund_entry(candidate: dict, matched_item: dict, strategy: dict, portfolio: dict) -> dict:
+def build_new_fund_entry(candidate: dict, matched_item: dict, strategy: dict, portfolio: dict, sync_date: str = "") -> dict:
     definition_item = deepcopy(candidate.get("definition_item", {}) or {})
     if definition_item:
         entry = {key: value for key, value in definition_item.items() if key != "opening_state"}
@@ -403,6 +409,7 @@ def build_new_fund_entry(candidate: dict, matched_item: dict, strategy: dict, po
     current_value = safe_float(matched_item.get("current_value")) or 0.0
     holding_pnl = safe_float(matched_item.get("holding_pnl")) or 0.0
     holding_return_pct = safe_float(matched_item.get("holding_return_pct")) or 0.0
+    daily_pnl = safe_float(matched_item.get("daily_pnl"))
     cost_basis = safe_float(matched_item.get("derived_cost_basis_value"))
     if cost_basis is None:
         cost_basis = round(max(0.0, current_value - holding_pnl), 2)
@@ -418,6 +425,13 @@ def build_new_fund_entry(candidate: dict, matched_item: dict, strategy: dict, po
         "last_official_nav_date": "",
         "units_source": "screenshot_sync_value_only",
     }
+    if daily_pnl is not None:
+        opening_state["actual_daily_pnl"] = daily_pnl
+        opening_state["actual_daily_pnl_date"] = sync_date
+        opening_state["actual_daily_pnl_source"] = "portfolio_screenshot_sync"
+    opening_state["last_real_position_date"] = sync_date
+    opening_state["real_position_source"] = "portfolio_screenshot_sync"
+    opening_state["actual_position_synced_at"] = ""
     return {**entry, "opening_state": opening_state}
 
 
@@ -574,10 +588,14 @@ def recalc_portfolio_totals(portfolio: dict) -> None:
 
 
 def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_missing: bool, auto_add_new: bool) -> dict:
+    unmatched = list(preview.get("unmatched_detected", []) or [])
+    if unmatched and preview.get("apply_ready") is False:
+        raise RuntimeError("Position preview contains unmatched holdings; add or classify them before applying.")
     portfolio = deepcopy(load_portfolio(agent_home))
     current_by_code = {item.get("fund_code", ""): item for item in portfolio.get("funds", []) or []}
     strategy = load_strategy(agent_home)
     definition = safe_portfolio_definition(agent_home, portfolio)
+    synced_at = timestamp_now()
     updated_codes: list[str] = []
     added_codes: list[str] = []
 
@@ -596,7 +614,7 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
                 "proxy_name": item.get("proxy_name", ""),
                 "definition_item": deepcopy(item.get("definition_item", {}) or {}),
             }
-            fund_entry = build_new_fund_entry(candidate, item, strategy, portfolio)
+            fund_entry = build_new_fund_entry(candidate, item, strategy, portfolio, sync_date)
             portfolio.setdefault("funds", []).append({key: value for key, value in fund_entry.items() if key != "opening_state"})
             current_by_code[item.get("matched_fund_code", "")] = portfolio["funds"][-1]
             definition.setdefault("funds", []).append(fund_entry)
@@ -609,6 +627,7 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
         current_value = safe_float(item.get("current_value")) or 0.0
         holding_pnl = safe_float(item.get("holding_pnl"))
         holding_return_pct = safe_float(item.get("holding_return_pct"))
+        daily_pnl = safe_float(item.get("daily_pnl"))
         cost_basis = safe_float(item.get("derived_cost_basis_value"))
         if holding_pnl is None and cost_basis is not None:
             holding_pnl = round(current_value - cost_basis, 2)
@@ -625,7 +644,14 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
         if cost_basis is not None:
             fund["cost_basis_value"] = round(max(0.0, cost_basis), 2)
         fund["last_valuation_date"] = sync_date
-        fund["units_source"] = str(fund.get("units_source") or "screenshot_sync_value_only")
+        fund["units_source"] = "screenshot_sync_value_only"
+        if daily_pnl is not None:
+            fund["actual_daily_pnl"] = daily_pnl
+            fund["actual_daily_pnl_date"] = sync_date
+            fund["actual_daily_pnl_source"] = "portfolio_screenshot_sync"
+        fund["last_real_position_date"] = sync_date
+        fund["real_position_source"] = "portfolio_screenshot_sync"
+        fund["actual_position_synced_at"] = synced_at
         updated_codes.append(fund.get("fund_code", ""))
 
     dropped_codes: list[str] = []
@@ -641,6 +667,12 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
             fund["holding_units"] = 0.0
             fund["last_valuation_date"] = sync_date
             fund["units_source"] = "screenshot_sync_missing_zero"
+            fund["actual_daily_pnl"] = 0.0
+            fund["actual_daily_pnl_date"] = sync_date
+            fund["actual_daily_pnl_source"] = "portfolio_screenshot_sync"
+            fund["last_real_position_date"] = sync_date
+            fund["real_position_source"] = "portfolio_screenshot_sync"
+            fund["actual_position_synced_at"] = synced_at
             dropped_codes.append(fund.get("fund_code", ""))
 
     portfolio["as_of_date"] = sync_date

@@ -35,6 +35,11 @@ export type PortfolioItem = {
   holdingPnlText: string;
   holdingReturnPct: number;
   holdingReturnPctText: string;
+  officialDailyPnl: number | null;
+  officialDailyPnlText: string;
+  officialDailyPnlDate: string;
+  officialDailyPnlStatus: string;
+  officialDailyPnlReason: string;
   costBasis: number;
   costBasisText: string;
   holdingUnits: number;

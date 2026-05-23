@@ -149,10 +149,11 @@ class ExecutionSyncTests(unittest.TestCase):
                     "cost_basis_value": 1000,
                     "holding_pnl": 200,
                     "holding_return_pct": 20,
+                    "daily_pnl": 12.34,
                 }
             ],
             snapshot_date="2026-05-05",
-            source="manual_position_snapshot",
+            source="alipay_screenshot",
         )
         self.assertTrue(preview["apply_ready"])
         result = apply_reconciliation(self.agent.root, preview, drop_missing=False)
@@ -161,7 +162,32 @@ class ExecutionSyncTests(unittest.TestCase):
         fund = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
         self.assertEqual(fund["current_value"], 1200.0)
         self.assertEqual(fund["holding_units"], 1100.0)
+        self.assertEqual(fund["actual_daily_pnl"], 12.34)
+        self.assertEqual(fund["actual_daily_pnl_date"], "2026-05-05")
+        self.assertEqual(fund["actual_daily_pnl_source"], "alipay_screenshot")
+        self.assertEqual(fund["last_real_position_date"], "2026-05-05")
         self.assertFalse(lock_path(self.agent.root, "portfolio_state").exists())
+
+    def test_reconciliation_apply_rejects_unmatched_screenshot_holdings(self):
+        preview = {
+            "source": "alipay_screenshot",
+            "platform": "alipay",
+            "snapshot_date": "2026-05-05",
+            "matched_items": [
+                {
+                    "fund_code": "025857",
+                    "fund_name": "鐢电綉璁惧C",
+                    "current_value": 1200,
+                    "holding_pnl": 200,
+                    "holding_return_pct": 20,
+                }
+            ],
+            "unmatched_detected": [{"display_name": "New Fund", "current_value": 100}],
+            "apply_ready": False,
+        }
+
+        with self.assertRaises(ValueError):
+            apply_reconciliation(self.agent.root, preview, drop_missing=False)
 
     def test_reconciliation_replace_zeros_missing_holdings(self):
         preview = preview_reconciliation(

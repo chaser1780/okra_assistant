@@ -33,6 +33,13 @@ function pnlTone(value: unknown) {
   return "neutral" as const;
 }
 
+function officialDailyPnlLabel(item: PortfolioItem) {
+  if (item.officialDailyPnlStatus === "ok" || item.officialDailyPnlStatus === "already_written") {
+    return item.officialDailyPnlText;
+  }
+  return item.officialDailyPnlReason ? "待确认" : "暂无";
+}
+
 export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: PortfolioPayload; onOpenFundDetail: (fundCode: string) => void }) {
   const [selected, setSelected] = useState<PortfolioItem | null>(null);
   const returnBars = useMemo(
@@ -160,6 +167,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
                   <th className="px-3 py-3 text-right">市值</th>
                   <th className="px-3 py-3 text-right">占比</th>
                   <th className="px-3 py-3 text-right">持有盈亏</th>
+                  <th className="px-3 py-3 text-right">官方日盈亏</th>
                   <th className="px-3 py-3 text-right">收益率</th>
                   <th className="px-3 py-3 text-left">角色</th>
                   <th className="px-3 py-3 text-left">状态</th>
@@ -178,6 +186,9 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
                     <td className="metric-number px-3 py-3 text-right">{item.weightText}</td>
                     <td className="metric-number px-3 py-3 text-right">
                       <Badge tone={pnlTone(item.holdingPnl)}>{item.holdingPnlText}</Badge>
+                    </td>
+                    <td className="metric-number px-3 py-3 text-right">
+                      <Badge tone={item.officialDailyPnl == null ? "warning" : pnlTone(item.officialDailyPnl)}>{officialDailyPnlLabel(item)}</Badge>
                     </td>
                     <td className="metric-number px-3 py-3 text-right">{item.holdingReturnPctText}</td>
                     <td className="px-3 py-3">
@@ -210,6 +221,7 @@ function PortfolioDetail({ item, onOpenFundDetail }: { item: PortfolioItem; onOp
     ["当前市值", item.amountText],
     ["成本金额", item.costBasisText],
     ["持有盈亏", item.holdingPnlText],
+    ["官方日盈亏", `${officialDailyPnlLabel(item)}${item.officialDailyPnlDate ? ` (${item.officialDailyPnlDate})` : ""}`],
     ["持有收益率", item.holdingReturnPctText],
     ["组合占比", item.weightText],
     ["持有份额", String(item.holdingUnits)],
@@ -218,6 +230,8 @@ function PortfolioDetail({ item, onOpenFundDetail }: { item: PortfolioItem; onOp
     ["角色", roleLabel(item.role || "未标注")],
     ["风格分组", styleLabel(item.styleGroup || "未分组")],
     ["交易状态", item.allowTrade ? "允许交易" : "固定持有/不可交易"],
+    ["官方日盈亏状态", item.officialDailyPnlStatus || "暂无"],
+    ["官方日盈亏说明", item.officialDailyPnlReason || "暂无"],
     ["定投金额", item.fixedDailyBuyAmount > 0 ? `${item.fixedDailyBuyAmount} 元/日` : "未开启"]
   ];
   return (

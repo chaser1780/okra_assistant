@@ -241,6 +241,8 @@ class ExecutionController:
     def execution_reconcile_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
         preview = payload.get("preview") or payload
         drop_missing = bool(payload.get("dropMissing") or payload.get("drop_missing"))
+        if preview.get("apply_ready") is False and preview.get("unmatched_detected"):
+            raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
         return _to_jsonable(apply_reconciliation(self.home, preview, drop_missing=drop_missing))
 
     def execution_confirmation_update(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -515,6 +517,11 @@ class PageService:
                     "holdingPnlText": _money(item.get("holding_pnl") or 0),
                     "holdingReturnPct": item.get("holding_return_pct") or 0,
                     "holdingReturnPctText": _percent(item.get("holding_return_pct") or 0),
+                    "officialDailyPnl": item.get("official_daily_pnl"),
+                    "officialDailyPnlText": _money(item.get("official_daily_pnl") or 0) if item.get("official_daily_pnl") is not None else "暂无",
+                    "officialDailyPnlDate": item.get("official_daily_pnl_date") or "",
+                    "officialDailyPnlStatus": item.get("official_daily_pnl_status") or "",
+                    "officialDailyPnlReason": item.get("official_daily_pnl_reason") or "",
                     "costBasis": item.get("cost_basis_value") or 0,
                     "costBasisText": _money(item.get("cost_basis_value") or 0),
                     "holdingUnits": item.get("holding_units") or 0,
