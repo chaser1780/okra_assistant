@@ -137,3 +137,54 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\diff_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
 - Final replay diff verdict: PASS, with forbidden write count 0 and
   non-executable violation count 0.
+
+## 2026-05-24 Phase 1 Action Ticket Shadow Foundation Started
+
+- Implemented the standalone Phase 1 action-ticket shadow foundation without
+  wiring it into `scripts/run_daily_pipeline.py` or the Workbench UI.
+- Added `scripts/action_ticket_models.py` with compact core dataclasses:
+  `ActionTicket`, `ActionTicketArtifact`, `EvidenceRef`,
+  `GuardrailResult`, and `SoftPolicyAdjustment`.
+- Enforced the Phase 1 runtime boundary in the model layer:
+  `write_scope=shadow_only` and `non_executable=true` are required for every
+  ticket and root artifact.
+- Extended `scripts/artifact_boundary.py` so `shadow_only` writes can target
+  `db/action_tickets/` and optional `db/action_debates/`, while official output
+  paths remain forbidden.
+- Added `scripts/build_action_ticket_shadow.py` as a standalone CLI:
+  `python scripts\build_action_ticket_shadow.py --date YYYY-MM-DD`.
+- The builder reads official validated advice and current portfolio state as
+  inputs only, then writes only `db/action_tickets/<date>.json`.
+- Per user decision, generated one ticket for every current holding fund, not
+  only active trades. For `2026-05-22`, this produced 15 tickets:
+  2 `scheduled_dca` tickets and 13 `hold` tickets.
+- Preserved the first locked golden slice behavior for
+  `2026-05-22 + 017641 + scheduled_dca`: the generated ticket is
+  `scheduled_dca`, `execution_mode=scheduled`, `ticket_status=shadow_only`,
+  `requested_amount=25.0`, and `validated_amount=25.0`.
+- Demoted legacy DCA-only/fixed-DCA restrictions out of hard guardrails for new
+  action tickets. The legacy `core_dca_only` and `core_dca_fixed_rule` context
+  is retained as soft policy notes, not as a hard Phase 1 blocker.
+- Added `tests/test_action_tickets.py` covering model round-trip validation,
+  non-executable enforcement, all-fund ticket coverage, DCA mapping,
+  add/reduce normalization, blocked holds, adjusted sizing, missing-data
+  reporting, CLI execution, and forbidden official write rejection.
+- Generated local shadow artifact:
+  `db/action_tickets/2026-05-22.json` with summary
+  `ticket_count=15`, `action_count=2`, `hold_ticket_count=13`,
+  `blocked_count=11`, `adjusted_count=0`, `silent_hold_rate=0.0`,
+  and `non_executable_violation_count=0`.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python scripts\check_repo_text_hygiene.py`
+  - `python -B -X utf8 -m py_compile scripts\action_ticket_models.py scripts\build_action_ticket_shadow.py scripts\artifact_boundary.py tests\test_action_tickets.py`
+  - `python -B -X utf8 -m unittest tests.test_action_tickets`
+  - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice`
+  - `python -B -X utf8 scripts\replay_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
+  - `python -B -X utf8 scripts\diff_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
+- Final golden-slice diff verdict remained PASS.

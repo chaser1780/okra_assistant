@@ -52,12 +52,12 @@ notes for the refactor.
   `shadow_only`, `learning_only`, and `non_executable` checks.
 - [pending] Create `codex/action-ticket-shadow-foundation` only after Phase
   0.5 golden slice passes and the planning checkpoint is safe.
-- [pending] Finalize Phase 1 action-ticket dataclass fields and enums.
-- [pending] Implement standalone `build_action_ticket_shadow.py` without adding
+- [done] Finalize Phase 1 action-ticket dataclass fields and enums.
+- [done] Implement standalone `build_action_ticket_shadow.py` without adding
   it to the official daily pipeline yet.
-- [pending] Add focused action-ticket tests for add, reduce, scheduled DCA,
+- [done] Add focused action-ticket tests for add, reduce, scheduled DCA,
   meaningful hold, hard-blocked, soft-adjusted, and missing-data tickets.
-- [pending] Add action-ticket dataclass round-trip tests with fixed clock.
+- [done] Add action-ticket dataclass round-trip tests with fixed clock.
 - [pending] Finalize Phase 2 retrieval-pack dataclasses and no-future checks.
 - [pending] Design retrieval-pack builder for action-ticket generation.
 - [pending] Add retrieval-pack round-trip tests and trace completeness metric.
@@ -98,4 +98,4 @@ Use this structure once implementation branches begin:
 | Phase | Status | Owner / agent | Depends on | Write scope | Output artifact | Validation command | Completion evidence | Notes |
 |---|---|---|---|---|---|---|---|---|
 | Phase 0.5 | done | Codex | Phase 0 | `tests/fixtures/golden_slices/*`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, optional `scripts/artifact_boundary.py` | `db/refactor_shadow_runs/2026-05-22__017641__scheduled_dca/`, `diff_report.md` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` | PASS; `2026-05-22 + 017641 + scheduled_dca` locked | One date, one fund, one action type |
-| Phase 1 | pending | unassigned | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | to be filled after implementation | Keep standalone first |
+| Phase 1 | partial | Codex | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | PASS; `2026-05-22` produced 15 shadow-only tickets, including `017641` scheduled DCA | Standalone only; not integrated into daily pipeline/UI |
