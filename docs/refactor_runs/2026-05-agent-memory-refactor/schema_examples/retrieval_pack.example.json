@@ -1,0 +1,194 @@
+{
+  "schema_version": "retrieval_pack.v1",
+  "pack_id": "pack:2026-05-24:110011:001",
+  "report_date": "2026-05-24",
+  "generated_at": "2026-05-24T21:25:00+08:00",
+  "decision_cutoff": "2026-05-24T21:30:00+08:00",
+  "write_scope": "shadow_only",
+  "non_executable": true,
+  "target": {
+    "fund_code": "110011",
+    "fund_name": "易方达中小盘混合",
+    "role": "tactical_short_term",
+    "category": "domestic_equity",
+    "portfolio_bucket": "growth_cluster"
+  },
+  "visibility": {
+    "include_execution": false,
+    "include_private_position_details": true,
+    "reason": "Daily strategy reasoning can read current portfolio facts, but execution-only deviations are excluded unless an execution profile is explicitly requested."
+  },
+  "source_manifests": [
+    {
+      "kind": "rag_manifest",
+      "manifest_id": "manifest:decision:2026-05-24",
+      "path": "db/rag/manifests/decision/2026-05-24.json",
+      "content_sha256": "example-sha256"
+    },
+    {
+      "kind": "portfolio_state",
+      "path": "db/portfolio_state/current.json",
+      "content_sha256": "example-sha256"
+    }
+  ],
+  "canonical_facts": [
+    {
+      "fact_id": "fact:portfolio:110011:position_value",
+      "layer": "canonical_fact",
+      "domain": "portfolio",
+      "source_kind": "portfolio_state",
+      "source_path": "db/portfolio_state/current.json",
+      "source_record_id": "fund:110011",
+      "as_of_date": "2026-05-24",
+      "available_from": "2026-05-24T20:00:00+08:00",
+      "status": "present",
+      "value": {
+        "current_value": 6000.0,
+        "holding_units": 4200.0,
+        "cost_basis": 6500.0,
+        "weight_pct": 5.8
+      },
+      "trust_level": "structured_current"
+    },
+    {
+      "fact_id": "fact:nav:110011:2026-05-23",
+      "layer": "canonical_fact",
+      "domain": "market_data",
+      "source_kind": "official_nav",
+      "source_path": "raw/fund_nav/110011.json",
+      "source_record_id": "110011:2026-05-23",
+      "as_of_date": "2026-05-23",
+      "available_from": "2026-05-24T00:30:00+08:00",
+      "status": "present",
+      "value": {
+        "nav": 1.4286,
+        "daily_change_pct": -0.72
+      },
+      "trust_level": "official_or_structured"
+    }
+  ],
+  "derived_signals": [
+    {
+      "signal_id": "signal:110011:short_term_reversal",
+      "layer": "derived_signal",
+      "source_kind": "llm_context",
+      "source_path": "db/llm_context/2026-05-24.json",
+      "as_of_date": "2026-05-24",
+      "available_from": "2026-05-24T15:30:00+08:00",
+      "status": "present",
+      "signal_type": "short_term_reversal",
+      "direction": "positive",
+      "strength": 0.56,
+      "summary": "Intraday proxy and market breadth improved after recent drawdown."
+    }
+  ],
+  "decision_history": [
+    {
+      "decision_id": "ticket:2026-05-21:110011:hold:001",
+      "layer": "decision_event",
+      "source_kind": "validated_advice",
+      "source_path": "db/validated_advice/2026-05-21.json",
+      "as_of_date": "2026-05-21",
+      "available_from": "2026-05-21T21:00:00+08:00",
+      "action_verb": "hold",
+      "summary": "Held because theme exposure was near the upper allocation band."
+    }
+  ],
+  "outcome_history": [
+    {
+      "outcome_id": "outcome:2026-05-21:T+1:example",
+      "layer": "outcome_event",
+      "source_kind": "outcome_event",
+      "source_path": "db/outcome_events/2026-05-21__T+1.json",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-23T00:30:00+08:00",
+      "status": "scored",
+      "outcome_label": "avoided_loss",
+      "summary": "The prior hold avoided a small next-day drawdown."
+    }
+  ],
+  "similar_cases": [
+    {
+      "case_id": "case:memory:fund:110011:drawdown_rebound",
+      "layer": "retrieved_memory",
+      "source_kind": "long_memory",
+      "source_path": "db/long_memory/memory.sqlite",
+      "source_record_id": "mem_20260520_001",
+      "as_of_date": "2026-05-20",
+      "available_from": "2026-05-20T23:10:00+08:00",
+      "retrieval_profile": "portfolio_trader",
+      "score": 0.71,
+      "summary": "Small adds after a confirmed reversal have worked better than same-day aggressive adds."
+    }
+  ],
+  "anti_patterns": [
+    {
+      "case_id": "case:memory:portfolio:overweight_growth_add",
+      "layer": "retrieved_memory",
+      "source_kind": "long_memory",
+      "source_path": "db/long_memory/memory.sqlite",
+      "source_record_id": "mem_20260510_004",
+      "as_of_date": "2026-05-10",
+      "available_from": "2026-05-10T23:00:00+08:00",
+      "retrieval_profile": "risk_manager",
+      "score": 0.68,
+      "summary": "Adding to an already overweight growth bucket increased drawdown volatility."
+    }
+  ],
+  "adaptive_policies": [
+    {
+      "policy_id": "policy:portfolio:growth_cluster_overweight:v1",
+      "status": "candidate",
+      "source_path": "db/strategy_memory/policies.json",
+      "as_of_date": "2026-05-24",
+      "available_from": "2026-05-24T00:00:00+08:00",
+      "effect_type": "size_multiplier",
+      "effect_value": 0.65,
+      "summary": "Reduce add size when growth-cluster exposure is close to the upper band."
+    }
+  ],
+  "strategy_skill_candidates": [
+    {
+      "skill_id": "skill:small_reversal_add:v1",
+      "status": "candidate",
+      "source_path": "db/strategy_skills/registry.json",
+      "as_of_date": "2026-05-24",
+      "available_from": "2026-05-24T00:00:00+08:00",
+      "summary": "Use a starter add after drawdown only when official NAV and proxy confirmation agree."
+    }
+  ],
+  "long_text_evidence": [
+    {
+      "doc_id": "ragdoc:news:2026-05-24:market_digest",
+      "chunk_id": "ragchunk:news:2026-05-24:market_digest:0",
+      "source_kind": "llm_context",
+      "source_path": "db/llm_context/2026-05-24.json",
+      "as_of_date": "2026-05-24",
+      "available_from": "2026-05-24T15:30:00+08:00",
+      "score": 0.63,
+      "summary": "Market digest notes improved breadth but mixed sector momentum."
+    }
+  ],
+  "missing_data": [
+    {
+      "field": "official_nav_for_2026-05-24",
+      "state": "pending",
+      "reason": "Same-day official NAV is not published at decision time.",
+      "impact": "Outcome scoring waits for later official data.",
+      "blocks_debate": false
+    }
+  ],
+  "rag_trace_refs": [
+    {
+      "trace_id": "ragtrace:2026-05-24:portfolio_trader:110011",
+      "path": "db/rag/traces/ragtrace-2026-05-24-portfolio-trader-110011.json",
+      "profile": "portfolio_trader",
+      "fallback_used": false
+    }
+  ],
+  "audit": {
+    "builder": "scripts/build_layered_retrieval_pack.py",
+    "builder_version": "phase2-shadow",
+    "content_sha256": "example-sha256"
+  }
+}

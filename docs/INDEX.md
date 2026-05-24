@@ -17,8 +17,8 @@ past artifacts are needed.
 
 ## Current Design Docs
 
-- `docs/fund_multiagent_design.md`: current fund multi-agent research chain, committee synthesis, validated advice, and execution boundary.
 - `docs/okra_unified_rag_architecture.md`: unified vector RAG architecture for Copilot Q&A and future today-analysis retrieval.
+- `docs/refactor_runs/2026-05-agent-memory-refactor/`: current agent, action-ticket, memory layering, LangGraph, strategy-skill, schema, hard-constraint, and phase-checklist refactor plan.
 
 ## Data Retention
 
@@ -56,5 +56,10 @@ python -B -X utf8 scripts\cleanup_retention.py --dry-run --assert-protected --re
 
 1. `README.md`
 2. `docs/modern_workbench.md`
-3. `docs/fund_multiagent_design.md`
-4. `docs/okra_unified_rag_architecture.md`
+3. `docs/refactor_runs/2026-05-agent-memory-refactor/accepted_plan_index.md`
+4. `docs/refactor_runs/2026-05-agent-memory-refactor/06_execution_technical_plan.md`
+5. `docs/refactor_runs/2026-05-agent-memory-refactor/hard_constraints_inventory.md`
+6. `docs/refactor_runs/2026-05-agent-memory-refactor/11_review_refinement_and_vertical_slice.md`
+7. `docs/refactor_runs/2026-05-agent-memory-refactor/phase_checklists/phase_0_5_golden_vertical_slice.md`
+8. `docs/refactor_runs/2026-05-agent-memory-refactor/phase_checklists/phase_1_action_ticket_shadow.md`
+9. `docs/okra_unified_rag_architecture.md`

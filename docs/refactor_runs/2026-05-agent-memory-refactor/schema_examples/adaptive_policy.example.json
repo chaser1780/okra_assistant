@@ -1,0 +1,90 @@
+{
+  "schema_version": "adaptive_policy_store.v1",
+  "generated_at": "2026-05-26T00:10:00+08:00",
+  "materialized_from": "db/strategy_memory/policy_events.jsonl",
+  "write_scope": "learning_only",
+  "non_executable": true,
+  "hard_block_allowed": false,
+  "policies": [
+    {
+      "policy_id": "policy:portfolio:growth_cluster_overweight:v1",
+      "schema_version": "adaptive_policy.v1",
+      "scope": "portfolio:growth_cluster",
+      "status": "candidate",
+      "statement": "When growth-cluster exposure is close to the upper allocation band, tactical adds should use reduced starter sizes unless breadth and official NAV confirmation are both strong.",
+      "when_to_apply": {
+        "portfolio_bucket": "growth_cluster",
+        "action_verb": "add",
+        "conditions": [
+          {
+            "field": "bucket_weight_vs_upper_band_pct",
+            "operator": ">=",
+            "value": -1.0
+          }
+        ]
+      },
+      "effect_type": "size_multiplier",
+      "effect_value": 0.65,
+      "effect_bounds": {
+        "min": 0.5,
+        "max": 1.0
+      },
+      "allowed_effects": [
+        "confidence_delta",
+        "size_multiplier",
+        "wait_trigger",
+        "note"
+      ],
+      "forbidden_effects": [
+        "block",
+        "force_trade",
+        "change_hard_constraint"
+      ],
+      "support_count": 3,
+      "contradiction_count": 1,
+      "confidence": 0.58,
+      "source_outcome_ids": [
+        "outcome:2026-05-24:T+1:ticket-hash-example",
+        "outcome:2026-05-18:T+5:ticket-hash-example"
+      ],
+      "source_ticket_ids": [
+        "ticket:2026-05-24:110011:add:001"
+      ],
+      "last_supported_at": "2026-05-25T23:30:00+08:00",
+      "last_contradicted_at": "2026-05-19T23:30:00+08:00",
+      "last_reviewed_at": "2026-05-26T00:10:00+08:00",
+      "valid_from": "2026-05-26",
+      "valid_until": "",
+      "version": 1,
+      "promotion_rule": {
+        "min_support_count_for_active": 5,
+        "max_contradiction_ratio_for_active": 0.25,
+        "user_approval_required": true
+      },
+      "audit": {
+        "created_by": "scripts/update_adaptive_policies.py",
+        "created_at": "2026-05-26T00:10:00+08:00",
+        "content_sha256": "example-sha256"
+      }
+    }
+  ],
+  "recent_events": [
+    {
+      "event_id": "policy_event:2026-05-26:portfolio:growth_cluster:001",
+      "policy_id": "policy:portfolio:growth_cluster_overweight:v1",
+      "event_type": "support",
+      "event_time": "2026-05-26T00:10:00+08:00",
+      "source_outcome_id": "outcome:2026-05-24:T+1:ticket-hash-example",
+      "delta": {
+        "support_count": 1,
+        "confidence": 0.04
+      },
+      "notes": "Small-size add produced positive excess return while maintaining allocation discipline."
+    }
+  ],
+  "caps": {
+    "max_active_policies_per_scope": 5,
+    "max_candidate_policies_per_scope": 20,
+    "archive_if_contradiction_ratio_above": 0.6
+  }
+}

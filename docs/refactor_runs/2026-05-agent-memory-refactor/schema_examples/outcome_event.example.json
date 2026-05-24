@@ -1,0 +1,115 @@
+{
+  "schema_version": "outcome_event.v1",
+  "artifact_id": "outcome_events:2026-05-24:T+1",
+  "base_date": "2026-05-24",
+  "evaluation_date": "2026-05-25",
+  "horizon": "T+1",
+  "generated_at": "2026-05-25T23:30:00+08:00",
+  "write_scope": "learning_only",
+  "non_executable": true,
+  "source_artifacts": [
+    {
+      "kind": "action_ticket",
+      "path": "db/action_tickets/2026-05-24.json",
+      "content_sha256": "example-sha256"
+    },
+    {
+      "kind": "official_nav",
+      "path": "raw/fund_nav/110011.json",
+      "content_sha256": "example-sha256"
+    }
+  ],
+  "events": [
+    {
+      "outcome_id": "outcome:2026-05-24:T+1:ticket-hash-example",
+      "ticket_id": "ticket:2026-05-24:110011:add:001",
+      "base_date": "2026-05-24",
+      "evaluation_date": "2026-05-25",
+      "horizon": "T+1",
+      "fund_code": "110011",
+      "fund_name": "易方达中小盘混合",
+      "action_verb": "add",
+      "execution_mode": "conditional",
+      "amount": 500.0,
+      "amount_currency": "CNY",
+      "scoring_status": "scored",
+      "blocked_reason": "",
+      "official_nav_start": {
+        "nav_date": "2026-05-23",
+        "nav": 1.4286,
+        "source_path": "raw/fund_nav/110011.json",
+        "available_from": "2026-05-24T00:30:00+08:00"
+      },
+      "official_nav_end": {
+        "nav_date": "2026-05-25",
+        "nav": 1.4372,
+        "source_path": "raw/fund_nav/110011.json",
+        "available_from": "2026-05-25T23:00:00+08:00"
+      },
+      "benchmark": {
+        "benchmark_id": "proxy:CSI300",
+        "benchmark_name": "沪深300 proxy",
+        "return_pct": 0.28,
+        "source_path": "raw/benchmarks/csi300.json",
+        "available_from": "2026-05-25T16:30:00+08:00"
+      },
+      "actual_return_pct": 0.602,
+      "benchmark_return_pct": 0.28,
+      "excess_return_pct": 0.322,
+      "no_action_baseline": {
+        "baseline_type": "hold_cash",
+        "return_pct": 0.0,
+        "excess_vs_baseline_pct": 0.602
+      },
+      "outcome_label": "helped",
+      "diagnostic_label": "timing_helped_small_size",
+      "confidence": 0.72,
+      "cashflow_checks": {
+        "cashflow_between_nav_dates": false,
+        "units_trusted": true,
+        "position_authoritative": true
+      },
+      "learning_implications": [
+        {
+          "target_type": "adaptive_policy",
+          "target_id": "policy:portfolio:growth_cluster_overweight:v1",
+          "effect": "support",
+          "notes": "Reduced size captured upside while respecting allocation risk."
+        },
+        {
+          "target_type": "strategy_skill",
+          "target_id": "skill:small_reversal_add:v1",
+          "effect": "support",
+          "notes": "The starter-size reversal procedure matched this outcome."
+        }
+      ],
+      "source_refs": [
+        {
+          "kind": "action_ticket",
+          "path": "db/action_tickets/2026-05-24.json",
+          "json_pointer": "/tickets/0"
+        },
+        {
+          "kind": "official_nav_start",
+          "path": "raw/fund_nav/110011.json",
+          "record_id": "110011:2026-05-23"
+        },
+        {
+          "kind": "official_nav_end",
+          "path": "raw/fund_nav/110011.json",
+          "record_id": "110011:2026-05-25"
+        }
+      ],
+      "audit": {
+        "builder": "scripts/evaluate_action_ticket_outcomes.py",
+        "content_sha256": "example-sha256"
+      }
+    }
+  ],
+  "summary": {
+    "event_count": 1,
+    "scored_count": 1,
+    "pending_count": 0,
+    "blocked_count": 0
+  }
+}

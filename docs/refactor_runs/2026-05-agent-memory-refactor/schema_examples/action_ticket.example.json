@@ -1,0 +1,221 @@
+{
+  "schema_version": "action_ticket.v1",
+  "report_date": "2026-05-24",
+  "generated_at": "2026-05-24T21:30:00+08:00",
+  "artifact_id": "action_tickets:2026-05-24",
+  "artifact_kind": "action_ticket_shadow",
+  "write_scope": "shadow_only",
+  "non_executable": true,
+  "core_contract": {
+    "description": "Phase 1 implementation should require only compact core fields. Extension fields in this example are allowed but not mandatory.",
+    "ticket_core_fields": [
+      "ticket_id",
+      "schema_version",
+      "report_date",
+      "generated_at",
+      "fund_code",
+      "fund_name",
+      "action_verb",
+      "execution_mode",
+      "ticket_status",
+      "non_executable",
+      "write_scope",
+      "validated_amount",
+      "confidence",
+      "thesis",
+      "hard_guardrail_results",
+      "source_artifacts",
+      "legacy_mapping"
+    ],
+    "extension_fields": [
+      "percent_of_position",
+      "percent_of_portfolio",
+      "opposing_evidence_refs",
+      "soft_policy_adjustments",
+      "skill_refs",
+      "skill_outputs",
+      "opportunity_cost",
+      "debate",
+      "invalidation_conditions"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "kind": "validated_advice",
+      "path": "db/validated_advice/2026-05-24.json",
+      "content_sha256": "example-sha256"
+    },
+    {
+      "kind": "portfolio_state",
+      "path": "db/portfolio_state/current.json",
+      "content_sha256": "example-sha256"
+    }
+  ],
+  "summary": {
+    "ticket_count": 3,
+    "action_count": 2,
+    "meaningful_hold_count": 1,
+    "blocked_count": 1,
+    "degraded_count": 0,
+    "official_advice_unchanged": true
+  },
+  "tickets": [
+    {
+      "ticket_id": "ticket:2026-05-24:110011:add:001",
+      "schema_version": "action_ticket.v1",
+      "report_date": "2026-05-24",
+      "generated_at": "2026-05-24T21:30:00+08:00",
+      "fund_code": "110011",
+      "fund_name": "易方达中小盘混合",
+      "role": "tactical_short_term",
+      "category": "domestic_equity",
+      "portfolio_bucket": "growth_cluster",
+      "action_verb": "add",
+      "execution_mode": "conditional",
+      "ticket_status": "adjusted",
+      "non_executable": true,
+      "write_scope": "shadow_only",
+      "decision_kind": "tactical_action",
+      "amount_currency": "CNY",
+      "requested_amount": 800.0,
+      "validated_amount": 500.0,
+      "size_bucket": "small",
+      "percent_of_position": 0.0833,
+      "percent_of_portfolio": 0.0125,
+      "confidence": 0.64,
+      "confidence_reason": "Bull case is supported by short-term reversal evidence, but size is reduced by allocation and cash guardrails.",
+      "thesis": "Add a small tactical amount only if the fund remains inside the allowed short-term bucket and cash floor remains safe.",
+      "debate": {
+        "debate_id": "debate:2026-05-24:110011:001",
+        "bull_case": "Recent drawdown has improved forward risk/reward and no fund-specific risk veto is active.",
+        "bear_case": "Theme exposure is already near the upper allocation band and market breadth remains weak.",
+        "referee_summary": "Action survives as a reduced conditional add; thesis is invalidated if the next NAV confirms continued underperformance.",
+        "unresolved_questions": [
+          "Whether the sector rebound is broad enough to support a larger position."
+        ]
+      },
+      "supporting_evidence_refs": [
+        {
+          "ref_id": "fact:llm_context:2026-05-24:market:breadth",
+          "source_kind": "llm_context",
+          "source_path": "db/llm_context/2026-05-24.json",
+          "source_record_id": "market:breadth",
+          "as_of_date": "2026-05-24",
+          "available_from": "2026-05-24T15:30:00+08:00",
+          "summary": "Market breadth improved from the prior session."
+        }
+      ],
+      "opposing_evidence_refs": [
+        {
+          "ref_id": "policy:portfolio:growth_cluster_overweight:v1",
+          "source_kind": "adaptive_policy",
+          "source_path": "db/strategy_memory/policies.json",
+          "source_record_id": "policy:portfolio:growth_cluster_overweight",
+          "as_of_date": "2026-05-24",
+          "available_from": "2026-05-24T00:00:00+08:00",
+          "summary": "Growth-cluster additions should be smaller when the bucket is already near the upper band."
+        }
+      ],
+      "hard_guardrail_results": [
+        {
+          "rule_id": "guardrail:amount:normalization",
+          "category": "amount",
+          "result": "adjust",
+          "input_value": 800.0,
+          "output_value": 800.0,
+          "notes": "Amount is already at 100 CNY granularity."
+        },
+        {
+          "rule_id": "guardrail:cash:floor",
+          "category": "cash",
+          "result": "pass",
+          "input_snapshot": {
+            "cash_hub_available": 2200.0,
+            "requested_add_total": 500.0
+          },
+          "notes": "Available cash after floor is enough for the adjusted add."
+        },
+        {
+          "rule_id": "guardrail:allocation:tactical_band",
+          "category": "allocation",
+          "result": "adjust",
+          "input_snapshot": {
+            "requested_amount": 800.0,
+            "max_allowed_amount": 500.0
+          },
+          "notes": "Size reduced to avoid pushing tactical_short_term beyond the band."
+        }
+      ],
+      "soft_policy_adjustments": [
+        {
+          "policy_id": "policy:portfolio:growth_cluster_overweight:v1",
+          "effect_type": "size_multiplier",
+          "effect_value": 0.65,
+          "confidence": 0.58,
+          "notes": "Outcome history favors smaller adds near the upper growth-cluster band."
+        }
+      ],
+      "skill_refs": [
+        {
+          "skill_id": "skill:small_reversal_add:v1",
+          "status": "candidate",
+          "contribution": "Requires a small starter size and explicit invalidation on next official NAV."
+        }
+      ],
+      "skill_outputs": [
+        {
+          "skill_id": "skill:small_reversal_add:v1",
+          "output_type": "sizing_note",
+          "text": "Use a reduced size until the next official NAV confirms reversal."
+        }
+      ],
+      "invalidation_conditions": [
+        {
+          "condition_id": "invalid:next_nav_underperforms_proxy",
+          "description": "Cancel follow-up add if the next official NAV underperforms the proxy by more than 0.50 percentage points.",
+          "data_needed": "official_nav_next_day",
+          "status": "pending"
+        }
+      ],
+      "opportunity_cost": {
+        "best_alternative": "hold cash hub above floor",
+        "reason": "Cash can be kept for a broader market confirmation.",
+        "estimated_cost": "missed short-term rebound if reversal continues"
+      },
+      "timing": {
+        "decision_cutoff": "2026-05-24T21:30:00+08:00",
+        "valid_until": "2026-05-25T15:00:00+08:00",
+        "trigger_conditions": [
+          "No new risk veto before execution.",
+          "Cash hub remains above configured floor."
+        ]
+      },
+      "missing_data": [
+        {
+          "field": "next_official_nav",
+          "state": "pending",
+          "reason": "Outcome data is not available at decision time.",
+          "blocks_ticket": false
+        }
+      ],
+      "source_artifacts": [
+        {
+          "kind": "validated_action",
+          "path": "db/validated_advice/2026-05-24.json",
+          "json_pointer": "/tactical_actions/0"
+        }
+      ],
+      "legacy_mapping": {
+        "suggestion_id": "2026-05-24:110011:add",
+        "legacy_action": "add",
+        "legacy_validated_amount": 500.0,
+        "legacy_execution_status": "pending"
+      },
+      "audit": {
+        "builder": "scripts/build_action_ticket_shadow.py",
+        "builder_version": "phase1-shadow",
+        "content_sha256": "example-sha256"
+      }
+    }
+  ]
+}

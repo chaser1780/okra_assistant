@@ -4,6 +4,134 @@
 >
 > 当前版本定位：产品 + 技术落地方案，供后续开发拆任务实现。
 
+## 0. Implementation Status / Source Of Truth
+
+Last reviewed: 2026-05-24.
+
+This document is no longer only a proposal. The repository already contains a
+substantial RAG foundation. Future work should treat this section as the current
+implementation status and use later sections as architecture rationale and
+design history.
+
+### Implemented
+
+Current implemented modules include:
+
+- `scripts/rag_config.py`
+- `scripts/rag_models.py`
+- `scripts/rag_index_store.py`
+- `scripts/rag_sources.py`
+- `scripts/rag_ingest.py`
+- `scripts/rag_query_planner.py`
+- `scripts/rag_retriever.py`
+- `scripts/rag_rerank.py`
+- `scripts/rag_trace.py`
+- `scripts/rag_embedding_client.py`
+- `scripts/rag_vector_store.py`
+- `scripts/rag_eval.py`
+- `scripts/rag_maintenance.py`
+- `scripts/rag_profile_evidence.py`
+- `app/rag_service.py`
+- `app/rag_answering.py`
+
+Implemented capabilities:
+
+- SQLite metadata store for documents, chunks, manifests, active manifests,
+  manifest membership, embedding cache, traces, and ingest runs.
+- Source adapters for long memory, portfolio state, `llm_context`,
+  evidence items, validated advice, committee bundles, and execution sync.
+- Ingest CLI with dry-run/write, domain/date/all ingestion, manifest writing,
+  active manifest switching, source deactivation, and embedding cache support.
+- Retrieval with active-manifest membership, query plans, hard filters, text
+  scoring/rerank, trace writing, missing-data reporting, and fallback reasons.
+- Safety filtering for no-future `available_from`, fund mismatch,
+  archived/rejected/review-only memory, and execution-only data boundaries.
+- Copilot RAG path through `app/rag_service.py` and `app/web_api.py`, returning
+  `mode=rag_llm`, `traceId`, `citations`, and retrieval metadata when active.
+- Web/admin routes: `/api/rag/status`, `/api/rag/trace`, `/api/rag/search`,
+  `/api/rag/reindex`, `/api/rag/eval`, and `/api/rag/maintenance`.
+- Multi-agent input hooks in `scripts/agent_inputs.py`, including
+  `rag_retrieved_evidence`, `rag_default_trace_id`,
+  `rag_default_fallback_reason`, and `rag_legacy_diff`.
+- `run_daily_pipeline.py --rag-shadow` support for optional shadow ingest/eval
+  without changing final advice.
+- Test coverage across `tests/test_rag_*.py` and
+  `tests/test_web_api_rag_copilot.py`.
+
+### Partially Implemented Or Gated
+
+Current `config/rag.toml` defaults:
+
+- `rag.enabled=true`
+- `rag.agent_default.enabled=true`
+- `rag.agent_shadow.enabled=false`
+- `rag.profile_evidence.enabled=false`
+- `rag.embedding.enabled=false`
+- `rag.embedding.dry_run=true`
+- `rag.vector_store.backend="sqlite_mock"`
+- `rag.sources.execution_sync=false`
+- `rag.safety.exclude_execution_by_default=true`
+
+Meaning:
+
+- Copilot can use RAG when its router decides RAG is appropriate, but ordinary
+  general chat may still bypass it.
+- Agent default RAG can be used with legacy fallback, but actual quality depends
+  on fresh active manifests and current source coverage.
+- Agent shadow comparison is not a default daily behavior.
+- Decision/memory/review/backtest profile evidence is implemented but globally
+  disabled.
+- Embedding code exists, but the configured default is dry-run/mock rather than
+  production vector retrieval.
+- Execution data remains excluded from normal RAG by default.
+
+### Still Design-Only Or Not Fully Promoted
+
+- Production FAISS/Chroma vector-store switching is not enabled.
+- Real embedding endpoint cost, provider compatibility, and rollout defaults
+  still need a gray-release path.
+- `evidence_index.py` is still required as legacy fallback/parallel comparison;
+  do not delete it before RAG proves itself in shadow.
+- Not every LLM call in the project is forced through RAG.
+- Frontend trace/citation/admin surfaces exist only where current UI has wired
+  them; do not assume complete user-facing observability.
+- Some Copilot fallback/prompt text still needs mojibake cleanup in code.
+
+### Relation To The Agent/Memory Refactor
+
+The new action-ticket architecture should not consume raw RAG hits directly.
+It should consume a layered retrieval pack:
+
+```text
+structured current facts
++ derived signals
++ decision history
++ outcome history
++ similar cases / anti-patterns from RAG
++ adaptive policies
++ strategy skill candidates
++ missing-data and visibility metadata
+-> retrieval pack
+-> debate-to-action graph
+```
+
+RAG is therefore a retrieval subsystem inside the pack, not the source of truth
+for:
+
+- official NAV;
+- current position value;
+- cash and funding availability;
+- execution settlement state;
+- hard constraints;
+- portfolio reconciliation;
+- action-ticket outcome scoring.
+
+For the current refactor, the relevant implementation anchors are:
+
+- `docs/refactor_runs/2026-05-agent-memory-refactor/schema_examples/retrieval_pack.example.json`
+- `docs/refactor_runs/2026-05-agent-memory-refactor/phase_checklists/phase_2_layered_retrieval_pack.md`
+- `docs/refactor_runs/2026-05-agent-memory-refactor/hard_constraints_inventory.md`
+
 ## 1. 背景与目标
 
 OKRA 当前已经具备比较完整的本地投资研究工作流：
@@ -440,7 +568,11 @@ api_key_file = "F:\\okra_assistant\\config\\openai_api_key.txt"
 - Windows 依赖可能麻烦。
 - metadata filter 需要先筛候选或维护分片。
 
-建议：**业务层只依赖 `RagVectorStore` 接口，第一实现可用 Chroma；metadata/checksum/trace 仍落 SQLite。**
+原始建议：**业务层只依赖 `RagVectorStore` 接口，候选实现可用 Chroma；metadata/checksum/trace 仍落 SQLite。**
+
+当前实现更新：截至 2026-05-24，仓库默认仍是 `sqlite_mock`，真实
+Chroma/FAISS 切换未启用。后续实施应先保持现有接口和 mock/SQLite 回退，再
+灰度真实 embedding/vector backend。
 
 ### 7.3 本地目录
 
@@ -1076,6 +1208,10 @@ CREATE TABLE chunks (
 
 - `rag.enabled=false` 时所有新增代码只作为 CLI/debug 能力存在。
 - `fallback_to_legacy=true` 时任何 RAG 错误都不阻断 Copilot 和 daily pipeline。
+
+当前实现更新：`config/rag.toml` 已存在，且当前仓库配置为
+`rag.enabled=true`、`rag.agent_default.enabled=true`、`rag.agent_shadow.enabled=false`。
+因此本小节描述的是原始 Phase 0 设计验收，不是当前默认配置。
 
 ### Phase 1：Source Adapter 与标准文档抽取
 
@@ -1930,7 +2066,8 @@ tests/fixtures/rag_questions/execution_boundary.json
 完成标准：
 
 - 能初始化 `db/rag/rag.sqlite`。
-- 默认不开启 RAG。
+- 原始设计目标是默认不开启 RAG；当前仓库已经将 `rag.enabled=true` 和
+  `rag.agent_default.enabled=true` 作为配置状态，仍保留 legacy fallback。
 - dry-run 不需要 API key。
 
 ### Task 2：long_memory adapter
