@@ -44,11 +44,11 @@ notes for the refactor.
 
 ## Pending Implementation Tasks
 
-- [pending] Create or commit planning checkpoint before implementation branches.
-- [pending] Create Phase 0.5 golden slice fixtures and expected outputs.
-- [pending] Implement `scripts/replay_refactor_slice.py` and
+- [done] Create or commit planning checkpoint before implementation branches.
+- [done] Create Phase 0.5 golden slice fixtures and expected outputs.
+- [done] Implement `scripts/replay_refactor_slice.py` and
   `scripts/diff_refactor_slice.py`.
-- [pending] Implement or stub `scripts/artifact_boundary.py` for runtime
+- [done] Implement or stub `scripts/artifact_boundary.py` for runtime
   `shadow_only`, `learning_only`, and `non_executable` checks.
 - [pending] Create `codex/action-ticket-shadow-foundation` only after Phase
   0.5 golden slice passes and the planning checkpoint is safe.
@@ -89,6 +89,7 @@ notes for the refactor.
 | RAG current-status update | 2/RAG | `docs/okra_unified_rag_architecture.md` | Implemented/partial/design-only status recorded |
 | Workbench API contract update | 7/UI | `docs/modern_workbench.md` | Current envelope, routes, DTOs, error behavior, and compatibility risks recorded |
 | Review refinement | 0.5/all | `11_review_refinement_and_vertical_slice.md` | User review incorporated into route, KPIs, core fields, boundary checks, and replacement/fallback strategy |
+| Phase 0.5 golden vertical slice | 0.5 | `tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, `scripts/artifact_boundary.py` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` passed; replay diff verdict PASS |
 
 ## Phase Execution Board Template
 
@@ -96,5 +97,5 @@ Use this structure once implementation branches begin:
 
 | Phase | Status | Owner / agent | Depends on | Write scope | Output artifact | Validation command | Completion evidence | Notes |
 |---|---|---|---|---|---|---|---|---|
-| Phase 0.5 | pending | unassigned | Phase 0 | `tests/fixtures/golden_slices/*`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, optional `scripts/artifact_boundary.py` | `db/refactor_shadow_runs/<slice_id>/`, `diff_report.md` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` | to be filled after implementation | One date, one fund, one action type |
+| Phase 0.5 | done | Codex | Phase 0 | `tests/fixtures/golden_slices/*`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, optional `scripts/artifact_boundary.py` | `db/refactor_shadow_runs/2026-05-22__017641__scheduled_dca/`, `diff_report.md` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` | PASS; `2026-05-22 + 017641 + scheduled_dca` locked | One date, one fund, one action type |
 | Phase 1 | pending | unassigned | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | to be filled after implementation | Keep standalone first |

@@ -199,9 +199,9 @@ def build_report(agent_home, report_date: str, portfolio: dict, strategy: dict, 
     for alert in exposure.get("alerts", []) or ["当前没有额外高优先风险提醒。"]:
         lines.append(f"- {alert}")
 
-    lines.extend(["", "## ?????", render_provider_health(agent_home, report_date)])
-    lines.extend(["", "## ????????", render_committee(committee)])
-    lines.extend(["", "## ?????????", render_decision_watch(agent_home, report_date)])
+    lines.extend(["", "## 数据源健康", render_provider_health(agent_home, report_date)])
+    lines.extend(["", "## 投委会摘要", render_committee(committee)])
+    lines.extend(["", "## 决策跟踪", render_decision_watch(agent_home, report_date)])
 
     lines.extend(
         [

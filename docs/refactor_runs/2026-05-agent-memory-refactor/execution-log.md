@@ -108,3 +108,32 @@ No implementation entries have been added yet.
 - Added KPI/exit metrics, replay/diff expectations, runtime boundary-check
   expectations, CLI/Markdown early review, and Phase 8 replacement/fallback
   semantics.
+
+## 2026-05-24 Phase 0.5 Implemented
+
+- Committed the planning checkpoint before code implementation:
+  `ed4b8b8 docs: checkpoint agent memory refactor plan`.
+- Per user decision, locked the first golden slice to
+  `2026-05-22__017641__scheduled_dca`.
+- Added fixed minimal input fixtures under
+  `tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/`.
+- Added expected artifacts under the same slice's `expected/` directory:
+  `action_ticket.expected.json`, `retrieval_pack.expected.json`,
+  `outcome_event.expected.json`, and `diff_report.expected.md`.
+- Added `scripts/artifact_boundary.py` with runtime checks for `shadow_only`,
+  `learning_only`, forbidden official write paths, and `non_executable=true`.
+- Added `scripts/replay_refactor_slice.py` to generate shadow-only action
+  ticket and retrieval pack artifacts, plus a learning-only outcome event.
+- Added `scripts/diff_refactor_slice.py` to compare replay output with golden
+  expected artifacts and report Phase 0.5 KPIs.
+- Preserved official outputs: no writes under `db/validated_advice`,
+  `db/decision_latest`, `db/decision_ledger`, `db/portfolio_state`,
+  `db/execution_sync`, or `db/long_memory`.
+- Validation:
+  - `python scripts/check_repo_text_hygiene.py`
+  - `python -B -X utf8 -m py_compile scripts\artifact_boundary.py scripts\replay_refactor_slice.py scripts\diff_refactor_slice.py tests\test_refactor_golden_slice.py`
+  - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice`
+  - `python -B -X utf8 scripts\replay_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
+  - `python -B -X utf8 scripts\diff_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
+- Final replay diff verdict: PASS, with forbidden write count 0 and
+  non-executable violation count 0.

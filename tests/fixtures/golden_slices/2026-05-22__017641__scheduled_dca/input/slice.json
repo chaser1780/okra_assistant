@@ -1,0 +1,16 @@
+{
+  "slice_id": "2026-05-22__017641__scheduled_dca",
+  "fixture_kind": "synthetic_minimal_from_2026-05-22_runtime",
+  "report_date": "2026-05-22",
+  "fund_code": "017641",
+  "fund_name": "摩根标普500指数(QDII)人民币A",
+  "action_verb": "scheduled_dca",
+  "horizon": "T+1",
+  "evaluation_date": "2026-05-23",
+  "generated_at": "2026-05-22T21:30:00+08:00",
+  "decision_cutoff": "2026-05-22T21:30:00+08:00",
+  "notes": [
+    "First Phase 0.5 slice is locked to one fund and one scheduled DCA action.",
+    "The NAV benchmark fixture is intentionally minimal and synthetic for deterministic replay."
+  ]
+}

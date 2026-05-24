@@ -17,6 +17,7 @@ DEFAULT_GLOBS = [
 ]
 
 MOJIBAKE_TOKENS = [
+    "????",
     "鍩閲",
     "鏃鏀",
     "璇鎴",

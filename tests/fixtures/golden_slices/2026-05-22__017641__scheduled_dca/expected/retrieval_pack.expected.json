@@ -1,0 +1,203 @@
+{
+  "schema_version": "retrieval_pack.v1",
+  "pack_id": "pack:2026-05-22:017641:scheduled_dca:001",
+  "report_date": "2026-05-22",
+  "generated_at": "2026-05-22T21:30:00+08:00",
+  "decision_cutoff": "2026-05-22T21:30:00+08:00",
+  "write_scope": "shadow_only",
+  "non_executable": true,
+  "target": {
+    "fund_code": "017641",
+    "fund_name": "摩根标普500指数(QDII)人民币A",
+    "role": "core_dca",
+    "category": "qdii_index",
+    "portfolio_bucket": "core_long_term"
+  },
+  "visibility": {
+    "include_execution": false,
+    "include_private_position_details": true,
+    "reason": "Phase 0.5 reads strategy and portfolio fixtures only; execution sync is excluded."
+  },
+  "source_manifests": [
+    {
+      "kind": "validated_advice",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/validated_advice.json",
+      "content_sha256": "b231495187f2453b2c81e01f973b84ffdbdbb45afa63b943a542fc1638a4d16c"
+    },
+    {
+      "kind": "portfolio_state",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/portfolio_state.json",
+      "content_sha256": "4d2f337da43ecdd74b8c0d4e31585f1d5cc3fff72d4d7f32ced31678cba6025e"
+    },
+    {
+      "kind": "context_evidence",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/context_evidence.json",
+      "content_sha256": "04e0c3a25e065cca5e605c63fd09df32524fde2d4291611c9663bc101db5b8e6"
+    },
+    {
+      "kind": "official_nav_benchmark",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/official_nav_benchmark.json",
+      "content_sha256": "197851d2aed0e109d997d3c62d3e0aa905ab04b118c1c6b521f71591729d6fc7"
+    }
+  ],
+  "canonical_facts": [
+    {
+      "fact_id": "fact:portfolio:017641:position",
+      "layer": "canonical_fact",
+      "domain": "portfolio",
+      "source_kind": "portfolio_state",
+      "source_path": "input/portfolio_state.json",
+      "source_record_id": "017641",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T15:45:42+08:00",
+      "status": "present",
+      "value": {
+        "current_value": 2388.88,
+        "holding_units": 1514.153515,
+        "cost_basis_value": 2250.0,
+        "portfolio_total_value": 15125.05,
+        "fixed_daily_buy_amount": 25.0
+      },
+      "trust_level": "structured_fixture"
+    },
+    {
+      "fact_id": "fact:validated:017641:scheduled_dca",
+      "layer": "canonical_fact",
+      "domain": "decision",
+      "source_kind": "validated_advice",
+      "source_path": "input/validated_advice.json",
+      "source_record_id": "2026-05-22:017641:scheduled_dca",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T21:30:00+08:00",
+      "status": "present",
+      "value": {
+        "action_verb": "scheduled_dca",
+        "validated_amount": 25.0,
+        "execution_mode": "scheduled",
+        "decision_mode": "hold_only",
+        "execution_eligible": false
+      },
+      "trust_level": "validated_fixture"
+    },
+    {
+      "fact_id": "fact:nav:017641:start",
+      "layer": "canonical_fact",
+      "domain": "market_data",
+      "source_kind": "official_nav",
+      "source_path": "input/official_nav_benchmark.json",
+      "source_record_id": "2026-05-20",
+      "as_of_date": "2026-05-20",
+      "available_from": "2026-05-22T10:57:33+08:00",
+      "status": "present",
+      "value": {
+        "nav_date": "2026-05-20",
+        "nav": 1.6664,
+        "source_path": "raw/quotes/2026-05-22.json",
+        "available_from": "2026-05-22T10:57:33+08:00"
+      },
+      "trust_level": "official_or_structured_fixture"
+    },
+    {
+      "fact_id": "fact:nav:017641:end",
+      "layer": "canonical_fact",
+      "domain": "market_data",
+      "source_kind": "official_nav",
+      "source_path": "input/official_nav_benchmark.json",
+      "source_record_id": "2026-05-21",
+      "as_of_date": "2026-05-21",
+      "available_from": "2026-05-23T17:32:02+08:00",
+      "status": "present",
+      "value": {
+        "nav_date": "2026-05-21",
+        "nav": 1.6679,
+        "source_path": "raw/quotes/2026-05-23.json",
+        "available_from": "2026-05-23T17:32:02+08:00"
+      },
+      "trust_level": "official_or_structured_fixture"
+    }
+  ],
+  "derived_signals": [
+    {
+      "signal_id": "signal:017641:intraday_proxy_same_day",
+      "layer": "derived_signal",
+      "source_kind": "llm_context",
+      "source_path": "input/context_evidence.json",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T11:04:11+08:00",
+      "status": "present",
+      "signal_type": "intraday_proxy",
+      "direction": "positive",
+      "strength": 0.72,
+      "summary": "Proxy ETF sh513500 was same-day and up 1.18% at 11:04."
+    },
+    {
+      "signal_id": "signal:017641:official_nav_delayed",
+      "layer": "derived_signal",
+      "source_kind": "quote_snapshot",
+      "source_path": "input/context_evidence.json",
+      "as_of_date": "2026-05-20",
+      "available_from": "2026-05-22T10:57:33+08:00",
+      "status": "present",
+      "signal_type": "official_nav_freshness",
+      "direction": "neutral",
+      "strength": 0.85,
+      "summary": "Official NAV was delayed by two trading days, nav=1.6664."
+    }
+  ],
+  "decision_history": [
+    {
+      "decision_id": "2026-05-21:017641:scheduled_dca",
+      "layer": "decision_event",
+      "source_kind": "validated_advice",
+      "source_path": "db/validated_advice/2026-05-21.json",
+      "as_of_date": "2026-05-21",
+      "available_from": "2026-05-21T21:30:00+08:00",
+      "action_verb": "scheduled_dca",
+      "summary": "Previous day also emitted the fixed scheduled DCA action."
+    }
+  ],
+  "outcome_history": [],
+  "similar_cases": [
+    {
+      "case_id": "memory:execution:degraded_dca_source_of_truth_until_qdii_confirmation",
+      "layer": "retrieved_memory",
+      "source_kind": "long_memory",
+      "source_path": "input/context_evidence.json",
+      "source_record_id": "execution:degraded_dca_source_of_truth_until_qdii_confirmation",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T10:51:18+08:00",
+      "retrieval_profile": "portfolio_trader",
+      "score": 0.82,
+      "summary": "When hold-only and execution_eligible=false, fixed QDII DCA remains sourced from validated.dca_actions."
+    }
+  ],
+  "policy_context": {
+    "legacy_policy_id": "portfolio:core_qdii_fixed_dca_only",
+    "legacy_statement": "Core QDII funds execute fixed DCA only.",
+    "user_override": "User confirmed fixed DCA should no longer be a hard recommendation constraint; any recommendation can receive a non-executable ticket."
+  },
+  "critical_data_checks": [
+    {
+      "name": "validated_action",
+      "status": "present"
+    },
+    {
+      "name": "portfolio_position",
+      "status": "present"
+    },
+    {
+      "name": "official_nav_start",
+      "status": "present"
+    },
+    {
+      "name": "official_nav_end",
+      "status": "present"
+    }
+  ],
+  "missing_critical_data": [],
+  "audit": {
+    "builder": "scripts/replay_refactor_slice.py",
+    "slice_id": "2026-05-22__017641__scheduled_dca",
+    "ticket_id": "ticket:2026-05-22:017641:scheduled_dca:001"
+  }
+}

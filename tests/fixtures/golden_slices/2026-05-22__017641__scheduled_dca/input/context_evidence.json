@@ -1,0 +1,76 @@
+{
+  "schema_version": "context_evidence.slice_fixture.v1",
+  "target": {
+    "fund_code": "017641",
+    "fund_name": "摩根标普500指数(QDII)人民币A",
+    "role": "core_dca",
+    "category": "qdii_index",
+    "style_group": "sp500_core"
+  },
+  "constraints": {
+    "daily_max_trade_amount": 1000.0,
+    "fixed_dca_total": 50.0,
+    "cash_hub_floor": 1000.0,
+    "dca_rule": "标普500和纳指100仅允许固定定投，不允许额外加仓。",
+    "user_override_for_new_ticketing": "DCA-only hard restriction is removed for ticket generation; old rule remains context only."
+  },
+  "derived_signals": [
+    {
+      "signal_id": "signal:017641:intraday_proxy_same_day",
+      "layer": "derived_signal",
+      "source_kind": "llm_context",
+      "source_path": "input/context_evidence.json",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T11:04:11+08:00",
+      "status": "present",
+      "signal_type": "intraday_proxy",
+      "direction": "positive",
+      "strength": 0.72,
+      "summary": "Proxy ETF sh513500 was same-day and up 1.18% at 11:04."
+    },
+    {
+      "signal_id": "signal:017641:official_nav_delayed",
+      "layer": "derived_signal",
+      "source_kind": "quote_snapshot",
+      "source_path": "input/context_evidence.json",
+      "as_of_date": "2026-05-20",
+      "available_from": "2026-05-22T10:57:33+08:00",
+      "status": "present",
+      "signal_type": "official_nav_freshness",
+      "direction": "neutral",
+      "strength": 0.85,
+      "summary": "Official NAV was delayed by two trading days, nav=1.6664."
+    }
+  ],
+  "decision_history": [
+    {
+      "decision_id": "2026-05-21:017641:scheduled_dca",
+      "layer": "decision_event",
+      "source_kind": "validated_advice",
+      "source_path": "db/validated_advice/2026-05-21.json",
+      "as_of_date": "2026-05-21",
+      "available_from": "2026-05-21T21:30:00+08:00",
+      "action_verb": "scheduled_dca",
+      "summary": "Previous day also emitted the fixed scheduled DCA action."
+    }
+  ],
+  "similar_cases": [
+    {
+      "case_id": "memory:execution:degraded_dca_source_of_truth_until_qdii_confirmation",
+      "layer": "retrieved_memory",
+      "source_kind": "long_memory",
+      "source_path": "input/context_evidence.json",
+      "source_record_id": "execution:degraded_dca_source_of_truth_until_qdii_confirmation",
+      "as_of_date": "2026-05-22",
+      "available_from": "2026-05-22T10:51:18+08:00",
+      "retrieval_profile": "portfolio_trader",
+      "score": 0.82,
+      "summary": "When hold-only and execution_eligible=false, fixed QDII DCA remains sourced from validated.dca_actions."
+    }
+  ],
+  "policy_context": {
+    "legacy_policy_id": "portfolio:core_qdii_fixed_dca_only",
+    "legacy_statement": "Core QDII funds execute fixed DCA only.",
+    "user_override": "User confirmed fixed DCA should no longer be a hard recommendation constraint; any recommendation can receive a non-executable ticket."
+  }
+}

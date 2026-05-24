@@ -1,0 +1,81 @@
+{
+  "schema_version": "validated_advice.slice_fixture.v1",
+  "report_date": "2026-05-22",
+  "generated_at": "2026-05-22T11:08:18+08:00",
+  "portfolio_name": "我的基金组合",
+  "decision_mode": "hold_only",
+  "degradation_mode": "decision_degraded",
+  "execution_eligible": false,
+  "advice_mode": "validated",
+  "advice_is_mock": true,
+  "fixed_dca_total": 50.0,
+  "dca_actions": [
+    {
+      "fund_code": "017641",
+      "fund_name": "摩根标普500指数(QDII)人民币A",
+      "strategy_bucket": "core_long_term",
+      "validated_action": "scheduled_dca",
+      "validated_amount": 25.0,
+      "suggestion_id": "2026-05-22:017641:scheduled_dca",
+      "model_action": "scheduled_dca",
+      "priority": 10,
+      "confidence": 0.0,
+      "thesis": "Execute scheduled DCA plan.",
+      "evidence": [
+        "摩根标普500指数(QDII)人民币A is treated as core DCA.",
+        "Fixed DCA amount = 25.00."
+      ],
+      "risks": [
+        "Short-term timing noise remains possible after execution.",
+        "DCA policy deliberately avoids discretionary intraday overfitting."
+      ],
+      "agent_support": [
+        "research_manager",
+        "risk_manager",
+        "portfolio_trader"
+      ],
+      "policy_rule_hits": [
+        "core_dca_only"
+      ],
+      "constraint_hits": [
+        "core_dca_fixed_rule"
+      ],
+      "allocation_impact": "core_long_term + scheduled_dca",
+      "cash_impact": "cash_hub -25.00",
+      "change_vs_prev_day": {
+        "previous_action": "scheduled_dca",
+        "previous_amount": 25.0,
+        "changed": false,
+        "reason_category": "unchanged"
+      },
+      "execution_friction": [
+        "purchase_confirm_days=T+2"
+      ],
+      "validation_notes": [
+        "Core DCA funds only execute fixed scheduled buys."
+      ],
+      "execution_status": "pending",
+      "executed_amount": 0.0
+    }
+  ],
+  "committee_decision_bundle": {
+    "schema_version": "committee_decision_bundle.v1",
+    "report_date": "2026-05-22",
+    "decision_mode": "hold_only",
+    "degradation_mode": "decision_degraded",
+    "execution_eligible": false,
+    "fund_decisions": [
+      {
+        "fund_code": "017641",
+        "fund_name": "摩根标普500指数(QDII)人民币A",
+        "role": "core_dca",
+        "proposed_action": "hold",
+        "size_bucket": "0",
+        "suggest_amount": 0.0,
+        "confidence": 0.0,
+        "thesis": "",
+        "execution_eligible": false
+      }
+    ]
+  }
+}

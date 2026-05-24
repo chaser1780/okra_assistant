@@ -1,0 +1,124 @@
+{
+  "schema_version": "outcome_event.v1",
+  "artifact_id": "outcome_events:2026-05-22__017641__scheduled_dca:T+1",
+  "base_date": "2026-05-22",
+  "evaluation_date": "2026-05-23",
+  "horizon": "T+1",
+  "generated_at": "2026-05-22T21:30:00+08:00",
+  "write_scope": "learning_only",
+  "non_executable": true,
+  "source_artifacts": [
+    {
+      "kind": "action_ticket",
+      "path": "action_ticket.json",
+      "content_sha256": "abde0ec600488c5ca79310367b37ac116d0ce6a4f380054a365f81fd47c8cff4"
+    },
+    {
+      "kind": "validated_advice",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/validated_advice.json",
+      "content_sha256": "b231495187f2453b2c81e01f973b84ffdbdbb45afa63b943a542fc1638a4d16c"
+    },
+    {
+      "kind": "portfolio_state",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/portfolio_state.json",
+      "content_sha256": "4d2f337da43ecdd74b8c0d4e31585f1d5cc3fff72d4d7f32ced31678cba6025e"
+    },
+    {
+      "kind": "context_evidence",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/context_evidence.json",
+      "content_sha256": "04e0c3a25e065cca5e605c63fd09df32524fde2d4291611c9663bc101db5b8e6"
+    },
+    {
+      "kind": "official_nav_benchmark",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/official_nav_benchmark.json",
+      "content_sha256": "197851d2aed0e109d997d3c62d3e0aa905ab04b118c1c6b521f71591729d6fc7"
+    }
+  ],
+  "events": [
+    {
+      "outcome_id": "outcome:2026-05-22:T+1:017641:scheduled_dca:001",
+      "ticket_id": "ticket:2026-05-22:017641:scheduled_dca:001",
+      "base_date": "2026-05-22",
+      "evaluation_date": "2026-05-23",
+      "horizon": "T+1",
+      "fund_code": "017641",
+      "fund_name": "摩根标普500指数(QDII)人民币A",
+      "action_verb": "scheduled_dca",
+      "execution_mode": "scheduled",
+      "amount": 25.0,
+      "amount_currency": "CNY",
+      "scoring_status": "scored",
+      "blocked_reason": "",
+      "official_nav_start": {
+        "nav_date": "2026-05-20",
+        "nav": 1.6664,
+        "source_path": "raw/quotes/2026-05-22.json",
+        "available_from": "2026-05-22T10:57:33+08:00"
+      },
+      "official_nav_end": {
+        "nav_date": "2026-05-21",
+        "nav": 1.6679,
+        "source_path": "raw/quotes/2026-05-23.json",
+        "available_from": "2026-05-23T17:32:02+08:00"
+      },
+      "benchmark": {
+        "benchmark_id": "proxy:sp500_core",
+        "benchmark_name": "S&P 500 core proxy",
+        "return_pct": 0.09,
+        "source_path": "input/official_nav_benchmark.json",
+        "available_from": "2026-05-23T17:32:02+08:00"
+      },
+      "actual_return_pct": 0.09,
+      "benchmark_return_pct": 0.09,
+      "excess_return_pct": 0.0,
+      "no_action_baseline": {
+        "baseline_type": "hold_cash",
+        "return_pct": 0.0,
+        "excess_vs_baseline_pct": 0.09
+      },
+      "outcome_label": "helped",
+      "diagnostic_label": "scheduled_dca_positive_nav_follow_through",
+      "confidence": 0.6,
+      "cashflow_checks": {
+        "cashflow_between_nav_dates": false,
+        "units_trusted": true,
+        "position_authoritative": true
+      },
+      "learning_implications": [
+        {
+          "target_type": "strategy_skill",
+          "target_id": "skill:scheduled_dca_shadow_review:v0",
+          "effect": "support",
+          "notes": "Phase 0.5 records the outcome for audit only; it does not promote or mutate strategy memory."
+        }
+      ],
+      "source_refs": [
+        {
+          "kind": "action_ticket",
+          "path": "action_ticket.json",
+          "json_pointer": "/tickets/0"
+        },
+        {
+          "kind": "official_nav_start",
+          "path": "input/official_nav_benchmark.json",
+          "record_id": "2026-05-20"
+        },
+        {
+          "kind": "official_nav_end",
+          "path": "input/official_nav_benchmark.json",
+          "record_id": "2026-05-21"
+        }
+      ],
+      "audit": {
+        "builder": "scripts/replay_refactor_slice.py",
+        "content_basis": "fixed golden fixture"
+      }
+    }
+  ],
+  "summary": {
+    "event_count": 1,
+    "scored_count": 1,
+    "pending_count": 0,
+    "blocked_count": 0
+  }
+}

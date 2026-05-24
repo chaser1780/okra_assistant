@@ -1,0 +1,161 @@
+{
+  "schema_version": "action_ticket.v1",
+  "artifact_id": "action_tickets:2026-05-22__017641__scheduled_dca",
+  "artifact_kind": "action_ticket_shadow",
+  "report_date": "2026-05-22",
+  "generated_at": "2026-05-22T21:30:00+08:00",
+  "write_scope": "shadow_only",
+  "non_executable": true,
+  "source_artifacts": [
+    {
+      "kind": "validated_advice",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/validated_advice.json",
+      "content_sha256": "b231495187f2453b2c81e01f973b84ffdbdbb45afa63b943a542fc1638a4d16c"
+    },
+    {
+      "kind": "portfolio_state",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/portfolio_state.json",
+      "content_sha256": "4d2f337da43ecdd74b8c0d4e31585f1d5cc3fff72d4d7f32ced31678cba6025e"
+    },
+    {
+      "kind": "context_evidence",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/context_evidence.json",
+      "content_sha256": "04e0c3a25e065cca5e605c63fd09df32524fde2d4291611c9663bc101db5b8e6"
+    },
+    {
+      "kind": "official_nav_benchmark",
+      "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/official_nav_benchmark.json",
+      "content_sha256": "197851d2aed0e109d997d3c62d3e0aa905ab04b118c1c6b521f71591729d6fc7"
+    }
+  ],
+  "summary": {
+    "ticket_count": 1,
+    "action_count": 1,
+    "hold_ticket_count": 0,
+    "blocked_count": 0,
+    "degraded_count": 0,
+    "official_advice_unchanged": true
+  },
+  "tickets": [
+    {
+      "ticket_id": "ticket:2026-05-22:017641:scheduled_dca:001",
+      "schema_version": "action_ticket.v1",
+      "report_date": "2026-05-22",
+      "generated_at": "2026-05-22T21:30:00+08:00",
+      "fund_code": "017641",
+      "fund_name": "摩根标普500指数(QDII)人民币A",
+      "role": "core_dca",
+      "category": "qdii_index",
+      "portfolio_bucket": "core_long_term",
+      "action_verb": "scheduled_dca",
+      "execution_mode": "scheduled",
+      "ticket_status": "shadow_only",
+      "decision_kind": "core_dca_action",
+      "non_executable": true,
+      "write_scope": "shadow_only",
+      "amount_currency": "CNY",
+      "requested_amount": 25.0,
+      "validated_amount": 25.0,
+      "size_bucket": "fixed_daily_buy",
+      "percent_of_position": 0.010465,
+      "percent_of_portfolio": 0.001653,
+      "confidence": 0.0,
+      "confidence_reason": "Source advice was degraded/mock and assigned zero confidence; Phase 0.5 preserves that value instead of inventing confidence.",
+      "thesis": "Execute scheduled DCA plan.",
+      "hard_guardrail_results": [
+        {
+          "rule_id": "shadow_non_executable",
+          "result": "pass",
+          "reason": "Phase 0.5 artifacts are display-only and cannot be sent to execution."
+        },
+        {
+          "rule_id": "hold_only_execution_gate",
+          "result": "pass",
+          "reason": "decision_mode=hold_only is preserved as source context, but ticket generation remains allowed because the ticket is non-executable."
+        },
+        {
+          "rule_id": "core_dca_fixed_only",
+          "result": "not_checked",
+          "reason": "User confirmed the DCA-only hard restriction is removed for new action tickets; keep the old rule only as historical context."
+        }
+      ],
+      "soft_policy_adjustments": [
+        {
+          "policy_id": "legacy_context:core_dca_fixed_only",
+          "effect_type": "note",
+          "effect_value": "retained_as_context_not_hard_block",
+          "reason": "User confirmed fixed DCA should no longer be a hard recommendation constraint; any recommendation can receive a non-executable ticket."
+        }
+      ],
+      "supporting_evidence_refs": [
+        {
+          "ref_id": "validated:2026-05-22:017641:scheduled_dca",
+          "source_kind": "validated_advice",
+          "source_path": "input/validated_advice.json",
+          "source_record_id": "2026-05-22:017641:scheduled_dca",
+          "as_of_date": "2026-05-22",
+          "available_from": "2026-05-22T21:30:00+08:00",
+          "summary": "Validated action scheduled_dca for CNY 25.00."
+        },
+        {
+          "ref_id": "portfolio:2026-05-22:017641:position",
+          "source_kind": "portfolio_state",
+          "source_path": "input/portfolio_state.json",
+          "source_record_id": "017641",
+          "as_of_date": "2026-05-22",
+          "available_from": "2026-05-22T15:45:42+08:00",
+          "summary": "Current value CNY 2388.88; fixed_daily_buy_amount CNY 25.00."
+        }
+      ],
+      "opposing_evidence_refs": [
+        {
+          "ref_id": "committee:hold_only:execution_ineligible",
+          "source_kind": "committee_decision_bundle",
+          "source_path": "input/validated_advice.json",
+          "source_record_id": "committee:017641",
+          "as_of_date": "2026-05-22",
+          "available_from": "2026-05-22T21:30:00+08:00",
+          "summary": "Committee bundle was hold_only and execution_eligible=false; this is audit context, not a shadow ticket blocker."
+        }
+      ],
+      "invalidation_conditions": [
+        "User disables the scheduled DCA plan.",
+        "The fund becomes unavailable for purchase before execution.",
+        "Cash allocation policy changes before this ticket is promoted beyond shadow review."
+      ],
+      "source_artifacts": [
+        {
+          "kind": "validated_advice",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/validated_advice.json",
+          "content_sha256": "b231495187f2453b2c81e01f973b84ffdbdbb45afa63b943a542fc1638a4d16c"
+        },
+        {
+          "kind": "portfolio_state",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/portfolio_state.json",
+          "content_sha256": "4d2f337da43ecdd74b8c0d4e31585f1d5cc3fff72d4d7f32ced31678cba6025e"
+        },
+        {
+          "kind": "context_evidence",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/context_evidence.json",
+          "content_sha256": "04e0c3a25e065cca5e605c63fd09df32524fde2d4291611c9663bc101db5b8e6"
+        },
+        {
+          "kind": "official_nav_benchmark",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/official_nav_benchmark.json",
+          "content_sha256": "197851d2aed0e109d997d3c62d3e0aa905ab04b118c1c6b521f71591729d6fc7"
+        }
+      ],
+      "legacy_mapping": {
+        "suggestion_id": "2026-05-22:017641:scheduled_dca",
+        "source_bucket": "dca_actions",
+        "model_action": "scheduled_dca",
+        "validated_action": "scheduled_dca",
+        "execution_status": "pending"
+      },
+      "audit": {
+        "builder": "scripts/replay_refactor_slice.py",
+        "slice_id": "2026-05-22__017641__scheduled_dca"
+      }
+    }
+  ]
+}

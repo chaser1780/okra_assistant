@@ -1,0 +1,25 @@
+{
+  "schema_version": "official_nav_benchmark.slice_fixture.v1",
+  "fixture_kind": "synthetic_minimal",
+  "fund_code": "017641",
+  "fund_name": "摩根标普500指数(QDII)人民币A",
+  "official_nav_start": {
+    "nav_date": "2026-05-20",
+    "nav": 1.6664,
+    "source_path": "raw/quotes/2026-05-22.json",
+    "available_from": "2026-05-22T10:57:33+08:00"
+  },
+  "official_nav_end": {
+    "nav_date": "2026-05-21",
+    "nav": 1.6679,
+    "source_path": "raw/quotes/2026-05-23.json",
+    "available_from": "2026-05-23T17:32:02+08:00"
+  },
+  "benchmark": {
+    "benchmark_id": "proxy:sp500_core",
+    "benchmark_name": "S&P 500 core proxy",
+    "return_pct": 0.09,
+    "source_path": "input/official_nav_benchmark.json",
+    "available_from": "2026-05-23T17:32:02+08:00"
+  }
+}

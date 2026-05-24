@@ -124,7 +124,7 @@ REQUIRED_DIRS = (
     "cache",
 )
 
-MOJIBAKE_HINTS = set("?��")
+MOJIBAKE_HINTS = set("?\ufffd")
 COMMON_TEXT_HINTS = set("基金收益建议组合持仓实时详情智能体复盘夜间设置数据金额买卖现金回写估值策略研究市场风格主题新闻置信度风险")
 
 
