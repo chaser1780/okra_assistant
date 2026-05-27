@@ -19,8 +19,27 @@ def action_ticket_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "action_tickets" / f"{report_date}.json"
 
 
-def portfolio_state_path(agent_home: Path) -> Path:
+def current_portfolio_state_path(agent_home: Path) -> Path:
     return agent_home / "db" / "portfolio_state" / "current.json"
+
+
+def portfolio_state_snapshot_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "portfolio_state" / "snapshots" / f"{report_date}.json"
+
+
+def portfolio_as_of_date(portfolio: dict[str, Any]) -> str:
+    return str(portfolio.get("as_of_date", "") or portfolio.get("state_metadata", {}).get("as_of_date", "") or "").strip()
+
+
+def select_portfolio_state_path(agent_home: Path, report_date: str) -> Path:
+    snapshot_path = portfolio_state_snapshot_path(agent_home, report_date)
+    if snapshot_path.exists():
+        return snapshot_path
+    current_path = current_portfolio_state_path(agent_home)
+    current = load_json_if_exists(current_path)
+    if current and portfolio_as_of_date(current) == report_date:
+        return current_path
+    return snapshot_path
 
 
 def content_sha256(path: Path) -> str:
@@ -150,6 +169,13 @@ def source_record_id(action: dict[str, Any]) -> str:
     return str(action.get("suggestion_id") or f"{action.get('fund_code', '')}:{normalize_action(action.get('validated_action'))}")
 
 
+def portfolio_source_path(source_artifacts: list[dict[str, Any]]) -> str:
+    for item in source_artifacts:
+        if item.get("kind") == "portfolio_state":
+            return str(item.get("path", "") or "")
+    return ""
+
+
 def build_guardrails(validated: dict[str, Any], action: dict[str, Any], committee: dict[str, Any]) -> list[GuardrailResult]:
     action_verb = normalize_action(action.get("validated_action"))
     validated_amount = safe_float(action.get("validated_amount"))
@@ -191,7 +217,7 @@ def build_guardrails(validated: dict[str, Any], action: dict[str, Any], committe
     return guardrails
 
 
-def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], position: dict[str, Any], *, kind: str) -> list[EvidenceRef]:
+def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], position: dict[str, Any], portfolio_source_path: str, *, kind: str) -> list[EvidenceRef]:
     refs: list[EvidenceRef] = []
     if kind == "support":
         refs.append(
@@ -210,7 +236,7 @@ def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], p
                 EvidenceRef(
                     ref_id=f"portfolio:{report_date}:{position.get('fund_code')}",
                     source_kind="portfolio_state",
-                    source_path="db/portfolio_state/current.json",
+                    source_path=portfolio_source_path,
                     source_record_id=str(position.get("fund_code", "")),
                     as_of_date=str(position.get("as_of_date", report_date) or report_date),
                     available_from=generated_at,
@@ -343,8 +369,8 @@ def ticket_from_action(
         confidence=safe_float(action.get("confidence")),
         thesis=thesis,
         hard_guardrail_results=build_guardrails(validated, action, committee),
-        supporting_evidence_refs=evidence_refs(report_date, generated_at, action, position, kind="support"),
-        opposing_evidence_refs=evidence_refs(report_date, generated_at, action, position, kind="oppose"),
+        supporting_evidence_refs=evidence_refs(report_date, generated_at, action, position, portfolio_source_path(root_source_artifacts), kind="support"),
+        opposing_evidence_refs=evidence_refs(report_date, generated_at, action, position, portfolio_source_path(root_source_artifacts), kind="oppose"),
         soft_policy_adjustments=soft_adjustments(action),
         opportunity_cost={
             "status": "not_estimated" if action_verb == "hold" else "not_applicable",
@@ -369,7 +395,7 @@ def build_action_ticket_artifact(agent_home: Path, report_date: str, *, generate
     validated_path = validated_advice_path(agent_home, report_date)
     if not validated_path.exists():
         raise FileNotFoundError(f"validated advice not found: {validated_path}")
-    portfolio_path = portfolio_state_path(agent_home)
+    portfolio_path = select_portfolio_state_path(agent_home, report_date)
     validated = load_json(validated_path)
     portfolio = load_json_if_exists(portfolio_path)
     generated_at = generated_at or str(validated.get("generated_at", "") or timestamp_now())

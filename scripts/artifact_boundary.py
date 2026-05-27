@@ -63,11 +63,8 @@ def _iter_nested_artifacts(artifact: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(artifact, dict):
         found.append(artifact)
-        for key in ("tickets", "packs", "events", "policies", "recent_events"):
-            value = artifact.get(key)
-            if isinstance(value, list):
-                for item in value:
-                    found.extend(_iter_nested_artifacts(item))
+        for value in artifact.values():
+            found.extend(_iter_nested_artifacts(value))
     elif isinstance(artifact, list):
         for item in artifact:
             found.extend(_iter_nested_artifacts(item))
@@ -78,7 +75,7 @@ def assert_non_executable(artifact: dict[str, Any]) -> BoundaryCheck:
     violations: list[str] = []
     for index, item in enumerate(_iter_nested_artifacts(artifact)):
         if "non_executable" in item and item.get("non_executable") is not True:
-            identifier = item.get("ticket_id") or item.get("outcome_id") or item.get("artifact_id") or f"item:{index}"
+            identifier = item.get("ticket_id") or item.get("debate_id") or item.get("outcome_id") or item.get("artifact_id") or f"item:{index}"
             violations.append(str(identifier))
     if violations:
         raise BoundaryViolation("non_executable=false is not allowed for refactor shadow artifacts: " + ", ".join(violations))

@@ -46,6 +46,7 @@ class LayeredRetrievalPackTests(unittest.TestCase):
             "db/long_memory/exports/all_memory.json",
         ):
             self.agent.write_json(relative, _load_repo_json(relative))
+        self.agent.write_json(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", _load_repo_json("db/portfolio_state/current.json"))
 
     def build_artifact(self):
         self.copy_real_inputs()
@@ -166,6 +167,23 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertEqual(15, artifact.summary["pack_count"])
         self.assertEqual(before_validated, _sha256(validated_path))
         self.assertEqual(before_portfolio, _sha256(portfolio_path))
+
+    def test_historical_build_uses_snapshot_portfolio_source(self) -> None:
+        self.copy_real_inputs()
+        future_current = _load_repo_json("db/portfolio_state/current.json")
+        future_current["as_of_date"] = "2026-05-27"
+        future_current["funds"] = []
+        self.agent.write_json("db/portfolio_state/current.json", future_current)
+
+        artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+        payload = artifact.to_dict()
+        portfolio_source = next(item for item in payload["source_artifacts"] if item["kind"] == "portfolio_state")
+        pack = next(item for item in artifact.packs if item.target["fund_code"] == "017641")
+        portfolio_facts = [item for item in pack.canonical_facts if item.source_kind == "portfolio_state"]
+
+        self.assertEqual(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", portfolio_source["path"])
+        self.assertTrue(portfolio_facts)
+        self.assertTrue(all(item.source_path == f"db/portfolio_state/snapshots/{REPORT_DATE}.json" for item in portfolio_facts))
 
     def test_boundary_rejects_retrieval_pack_payload_on_official_path(self) -> None:
         artifact = self.build_artifact()

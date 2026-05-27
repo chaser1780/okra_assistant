@@ -97,6 +97,7 @@ class ActionTicketBuilderTests(unittest.TestCase):
     def copy_real_slice_inputs(self) -> None:
         self.agent.write_json(f"db/validated_advice/{REPORT_DATE}.json", _load_repo_json(f"db/validated_advice/{REPORT_DATE}.json"))
         self.agent.write_json("db/portfolio_state/current.json", _load_repo_json("db/portfolio_state/current.json"))
+        self.agent.write_json(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", _load_repo_json("db/portfolio_state/current.json"))
 
     def test_builds_all_fund_tickets_for_2026_05_22_shadow_only(self) -> None:
         self.copy_real_slice_inputs()
@@ -171,6 +172,33 @@ class ActionTicketBuilderTests(unittest.TestCase):
         self.assertEqual(before_validated, _sha256(validated_path))
         self.assertEqual(before_portfolio, _sha256(portfolio_path))
         self.assertTrue(artifact.to_dict()["summary"]["official_advice_unchanged"])
+
+    def test_historical_build_prefers_date_snapshot_over_future_current(self) -> None:
+        self.copy_real_slice_inputs()
+        future_current = _load_repo_json("db/portfolio_state/current.json")
+        future_current["as_of_date"] = "2026-05-27"
+        future_current["funds"] = [
+            {
+                "fund_code": "FUTURE",
+                "fund_name": "Future Fund",
+                "role": "tactical",
+                "current_value": 999.0,
+            }
+        ]
+        self.agent.write_json("db/portfolio_state/current.json", future_current)
+
+        artifact = build_action_ticket_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+        payload = artifact.to_dict()
+        portfolio_source = next(item for item in payload["source_artifacts"] if item["kind"] == "portfolio_state")
+        by_code = {item["fund_code"]: item for item in payload["tickets"]}
+
+        self.assertEqual(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", portfolio_source["path"])
+        self.assertIn("017641", by_code)
+        self.assertNotIn("FUTURE", by_code)
+        self.assertEqual(
+            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
+            by_code["017641"]["supporting_evidence_refs"][1]["source_path"],
+        )
 
     def test_boundary_rejects_action_ticket_payload_on_official_path(self) -> None:
         self.copy_real_slice_inputs()

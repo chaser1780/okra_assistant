@@ -67,4 +67,3 @@ def compact_missing_ref(item: dict[str, Any]) -> dict[str, Any]:
         "impact": truncate_text(item.get("impact", ""), 140),
         "blocks_debate": bool(item.get("blocks_debate")),
     }
-

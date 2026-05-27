@@ -289,3 +289,52 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_action_debate_graph tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
   - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
   - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+
+## 2026-05-27 Phase 2/3 Review Fixes Applied
+
+- Applied the code-review findings before moving to UI, long-memory, or Phase 4
+  work.
+- Fixed historical replay portfolio sourcing in Phase 1 and Phase 2 builders:
+  `db/portfolio_state/snapshots/<report_date>.json` is preferred when present;
+  `db/portfolio_state/current.json` is used only when its `as_of_date` matches
+  the report date. This prevents older report dates from silently reading a
+  future current portfolio state.
+- Updated action-ticket and retrieval-pack source refs so historical
+  `2026-05-22` shadow artifacts now cite
+  `db/portfolio_state/snapshots/2026-05-22.json`.
+- Added Phase 3 input contract checks before graph node execution:
+  root artifact schema, report date, `write_scope=shadow_only`,
+  `non_executable=true`, child ticket/pack contracts, retrieval-pack
+  source-artifact hash for the action-ticket file, and ticket id alignment.
+  Contract mismatches now produce degraded shadow artifacts instead of `ok`.
+- Changed the refactor artifact boundary walker to recursively scan all nested
+  dictionaries and lists, so `debates[*]` and nested proposed ticket patches
+  are covered by `non_executable=true` enforcement.
+- Fixed graph failure metadata so natural node failures record the current node
+  name instead of the generic `graph` label.
+- Removed EOF blank-line issues previously reported by `git diff --check`.
+- Regenerated local ignored shadow artifacts for `2026-05-22`:
+  action tickets, retrieval packs, and action debates. Debate summary remained
+  `debate_count=15`, `degraded_count=0`, `node_failure_count=0`,
+  `state_size_bytes=5960`, and `writes_ticket_file=false`.
+- Confirmed official inputs were unchanged after regeneration:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Added focused tests for:
+  - historical replay using snapshot instead of future `current.json`;
+  - debate graph input hash mismatch degradation;
+  - natural node failure using the concrete node name;
+  - nested debate/proposed-patch `non_executable=false` boundary rejection.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\artifact_boundary.py scripts\build_action_ticket_shadow.py scripts\build_layered_retrieval_pack.py scripts\action_debate_graph.py scripts\action_debate_prompts.py scripts\run_action_debate_shadow.py tests\test_action_tickets.py tests\test_layered_retrieval_pack.py tests\test_action_debate_graph.py tests\test_refactor_golden_slice.py`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `python -B -X utf8 -m unittest tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+  - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice tests.test_layered_retrieval_pack tests.test_action_debate_graph`
+  - `python -B -X utf8 scripts\build_action_ticket_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:30:00+08:00`
+  - `python -B -X utf8 scripts\build_layered_retrieval_pack.py --date 2026-05-22 --generated-at 2026-05-22T21:35:00+08:00`
+  - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
+  - `git diff --check`

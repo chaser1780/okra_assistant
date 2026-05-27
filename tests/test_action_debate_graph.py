@@ -114,6 +114,34 @@ class ActionDebateGraphTests(unittest.TestCase):
         self.assertEqual(before_validated, _sha256(validated_path))
         self.assertEqual(before_portfolio, _sha256(portfolio_path))
 
+    def test_input_hash_mismatch_degrades_instead_of_ok(self) -> None:
+        self.build_phase2_inputs()
+        ticket_path = self.agent.root / "db" / "action_tickets" / f"{REPORT_DATE}.json"
+        ticket_payload = json.loads(ticket_path.read_text(encoding="utf-8"))
+        ticket_payload["tickets"][0]["confidence"] = 0.1234
+        ticket_path.write_text(json.dumps(ticket_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        _, artifact = run_debate_graph(self.agent.root, REPORT_DATE, generated_at=DEBATE_GENERATED_AT)
+
+        self.assertEqual("degraded", artifact["summary"]["status"])
+        self.assertGreater(artifact["summary"]["node_failure_count"], 0)
+        self.assertEqual("degraded", artifact["runtime"]["node_status"]["input_contract_check"])
+        self.assertIn("hash mismatch", artifact["debates"][0]["failure"]["error"])
+
+    def test_natural_node_failure_records_actual_node_name(self) -> None:
+        self.build_phase2_inputs()
+        pack_path = self.agent.root / "db" / "retrieval_packs" / f"{REPORT_DATE}.json"
+        pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+        for pack in pack_payload["packs"]:
+            pack["missing_data"] = "bad"
+        pack_path.write_text(json.dumps(pack_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        _, artifact = run_debate_graph(self.agent.root, REPORT_DATE, generated_at=DEBATE_GENERATED_AT)
+
+        self.assertEqual("degraded", artifact["summary"]["status"])
+        self.assertEqual("degraded", artifact["runtime"]["node_status"]["analyst_evidence_view"])
+        self.assertNotIn("graph", artifact["runtime"]["node_status"])
+
     def test_rerun_is_idempotent_for_same_inputs_and_fixed_clock(self) -> None:
         self.build_phase2_inputs()
         _, first = run_debate_graph(self.agent.root, REPORT_DATE, generated_at=DEBATE_GENERATED_AT)
@@ -184,4 +212,3 @@ class ActionDebateGraphTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -117,6 +117,10 @@ def load_json_dict(path: Path) -> dict[str, Any]:
     return payload
 
 
+def degraded_contract_error(message: str) -> ActionDebateGraphError:
+    return ActionDebateGraphError(message)
+
+
 def source_artifacts(agent_home: Path, report_date: str) -> list[dict[str, Any]]:
     paths = [action_ticket_path(agent_home, report_date), retrieval_pack_path(agent_home, report_date)]
     artifacts: list[dict[str, Any]] = []
@@ -139,6 +143,88 @@ def source_hashes_from_artifacts(artifacts: list[dict[str, Any]]) -> dict[str, s
         for item in artifacts
         if item.get("content_sha256")
     }
+
+
+def source_hash_for(artifact: dict[str, Any], path: str) -> str:
+    for item in artifact.get("source_artifacts", []) or []:
+        if item.get("path") == path:
+            return str(item.get("content_sha256", "") or "")
+    return ""
+
+
+def validate_root_artifact_contract(artifact: dict[str, Any], *, report_date: str, schema_version: str, artifact_name: str) -> None:
+    if artifact.get("schema_version") != schema_version:
+        raise degraded_contract_error(f"{artifact_name} schema mismatch: {artifact.get('schema_version')!r}")
+    if artifact.get("report_date") != report_date:
+        raise degraded_contract_error(f"{artifact_name} report_date mismatch: {artifact.get('report_date')!r}")
+    if artifact.get("write_scope") != "shadow_only":
+        raise degraded_contract_error(f"{artifact_name} write_scope must be shadow_only")
+    if artifact.get("non_executable") is not True:
+        raise degraded_contract_error(f"{artifact_name} non_executable must be true")
+
+
+def validate_child_artifact_contracts(ticket_artifact: dict[str, Any], pack_artifact: dict[str, Any], report_date: str) -> None:
+    for ticket in ticket_artifact.get("tickets", []) or []:
+        if ticket.get("schema_version") != "action_ticket.v1":
+            raise degraded_contract_error(f"ticket schema mismatch: {ticket.get('ticket_id', '<missing-id>')}")
+        if ticket.get("report_date") != report_date:
+            raise degraded_contract_error(f"ticket report_date mismatch: {ticket.get('ticket_id', '<missing-id>')}")
+        if ticket.get("write_scope") != "shadow_only":
+            raise degraded_contract_error(f"ticket write_scope must be shadow_only: {ticket.get('ticket_id', '<missing-id>')}")
+        if ticket.get("non_executable") is not True:
+            raise degraded_contract_error(f"ticket non_executable must be true: {ticket.get('ticket_id', '<missing-id>')}")
+    for pack in pack_artifact.get("packs", []) or []:
+        if pack.get("schema_version") != "retrieval_pack.v1":
+            raise degraded_contract_error(f"pack schema mismatch: {pack.get('pack_id', '<missing-id>')}")
+        if pack.get("report_date") != report_date:
+            raise degraded_contract_error(f"pack report_date mismatch: {pack.get('pack_id', '<missing-id>')}")
+        if pack.get("write_scope") != "shadow_only":
+            raise degraded_contract_error(f"pack write_scope must be shadow_only: {pack.get('pack_id', '<missing-id>')}")
+        if pack.get("non_executable") is not True:
+            raise degraded_contract_error(f"pack non_executable must be true: {pack.get('pack_id', '<missing-id>')}")
+
+
+def validate_input_contracts(
+    *,
+    report_date: str,
+    ticket_path: Path,
+    pack_path: Path,
+    ticket_artifact: dict[str, Any],
+    pack_artifact: dict[str, Any],
+    agent_home: Path,
+) -> None:
+    validate_root_artifact_contract(ticket_artifact, report_date=report_date, schema_version="action_ticket.v1", artifact_name="action_ticket")
+    validate_root_artifact_contract(pack_artifact, report_date=report_date, schema_version="retrieval_pack.v1", artifact_name="retrieval_pack")
+    validate_child_artifact_contracts(ticket_artifact, pack_artifact, report_date)
+    expected_ticket_hash = content_sha256(ticket_path)
+    expected_ticket_ref = relative_posix(ticket_path, agent_home)
+    referenced_ticket_hash = source_hash_for(pack_artifact, expected_ticket_ref)
+    if referenced_ticket_hash != expected_ticket_hash:
+        raise degraded_contract_error(
+            "retrieval_pack source action_ticket hash mismatch: "
+            f"expected {expected_ticket_hash}, got {referenced_ticket_hash or '<missing>'}"
+        )
+    ticket_ids = {
+        str(item.get("ticket_id", ""))
+        for item in ticket_artifact.get("tickets", []) or []
+        if isinstance(item, dict) and item.get("ticket_id")
+    }
+    pack_ticket_ids = {
+        str((item.get("target", {}) or {}).get("ticket_id", ""))
+        for item in pack_artifact.get("packs", []) or []
+        if isinstance(item, dict) and (item.get("target", {}) or {}).get("ticket_id")
+    }
+    if ticket_ids != pack_ticket_ids:
+        missing_in_pack = sorted(ticket_ids - pack_ticket_ids)
+        missing_in_ticket = sorted(pack_ticket_ids - ticket_ids)
+        raise degraded_contract_error(
+            "retrieval_pack ticket ids do not match action_ticket ids: "
+            f"missing_in_pack={missing_in_pack[:3]}, missing_in_ticket={missing_in_ticket[:3]}"
+        )
+    if not pack_ticket_ids:
+        raise degraded_contract_error("retrieval_pack contains no ticket refs")
+    if not pack_path.exists():
+        raise degraded_contract_error("retrieval_pack file disappeared during contract validation")
 
 
 def ticket_by_id(ticket_artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -566,7 +652,10 @@ def degraded_debates(state: ActionDebateState, context: dict[str, Any], error: s
         for sequence, pack in enumerate(packs, start=1):
             target = pack.get("target", {}) or {}
             ticket = tickets.get(str(target.get("ticket_id", "") or ""), {})
-            view = build_evidence_view(pack, ticket) if ticket else {}
+            try:
+                view = build_evidence_view(pack, ticket) if ticket else {}
+            except Exception:
+                view = {}
             debates.append(
                 build_debate_record(
                     state=state,
@@ -737,15 +826,25 @@ def run_debate_graph(
     }
     status = "ok"
     debates: list[dict[str, Any]] = []
+    current_node = "input_contract_check"
     try:
+        validate_input_contracts(
+            report_date=report_date,
+            ticket_path=ticket_path,
+            pack_path=pack_path,
+            ticket_artifact=context["ticket_artifact"],
+            pack_artifact=context["pack_artifact"],
+            agent_home=agent_home,
+        )
         for node_name in NODE_SEQUENCE:
+            current_node = node_name
             if fail_node and node_name == fail_node:
                 raise RuntimeError(f"injected failure at node {node_name}")
             result = NODE_FUNCTIONS[node_name](state, context)
             state.mark(result)
         debates = list(context.get("debates", []) or [])
     except Exception as exc:
-        failed_node = fail_node or "graph"
+        failed_node = fail_node or current_node
         status = "degraded"
         state.mark(
             DebateNodeResult(

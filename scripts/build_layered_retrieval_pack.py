@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
-from build_action_ticket_shadow import action_ticket_path, run_builder as run_action_ticket_builder, safe_float
+from build_action_ticket_shadow import action_ticket_path, run_builder as run_action_ticket_builder, safe_float, select_portfolio_state_path
 from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from layered_context_models import (
     SCHEMA_VERSION,
@@ -22,10 +22,6 @@ from layered_context_models import (
 
 def retrieval_pack_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "retrieval_packs" / f"{report_date}.json"
-
-
-def portfolio_state_path(agent_home: Path) -> Path:
-    return agent_home / "db" / "portfolio_state" / "current.json"
 
 
 def llm_context_path(agent_home: Path, report_date: str) -> Path:
@@ -167,7 +163,7 @@ def make_item(
     )
 
 
-def portfolio_fact(ticket: dict[str, Any], portfolio: dict[str, Any], generated_at: str) -> LayeredContextItem | None:
+def portfolio_fact(ticket: dict[str, Any], portfolio: dict[str, Any], generated_at: str, portfolio_source_path: str) -> LayeredContextItem | None:
     positions = fund_lookup(portfolio.get("funds", []) or [])
     fund_code = str(ticket.get("fund_code", "") or "")
     position = positions.get(fund_code)
@@ -181,7 +177,7 @@ def portfolio_fact(ticket: dict[str, Any], portfolio: dict[str, Any], generated_
         item_id=f"fact:portfolio:{fund_code}:position",
         layer="canonical_fact",
         source_kind="portfolio_state",
-        source_path="db/portfolio_state/current.json",
+        source_path=portfolio_source_path,
         source_record_id=f"fund:{fund_code}",
         as_of_date_value=as_of,
         available_from=available,
@@ -537,7 +533,7 @@ def rag_noncanonical_evidence(agent_home: Path, ticket: dict[str, Any], report_d
 def missing_data_for_pack(ticket: dict[str, Any], portfolio_fact_item: LayeredContextItem | None, context: dict[str, Any], report_date: str) -> list[MissingDataItem]:
     missing: list[MissingDataItem] = []
     if portfolio_fact_item is None:
-        missing.append(MissingDataItem("portfolio_position", "missing", "No matching fund in portfolio_state/current.json.", "Position sizing and exposure facts are unavailable.", True))
+        missing.append(MissingDataItem("portfolio_position", "missing", "No matching fund in date-matched portfolio state.", "Position sizing and exposure facts are unavailable.", True))
     fund = context_fund(context, str(ticket.get("fund_code", "") or ""))
     if not fund:
         missing.append(MissingDataItem("llm_context_fund", "missing", "No matching fund in llm_context.", "Market and evidence context are unavailable.", False))
@@ -567,10 +563,11 @@ def build_pack_for_ticket(
     context: dict[str, Any],
     memory_export: dict[str, Any],
     root_sources: list[dict[str, Any]],
+    portfolio_source_path: str,
     use_rag: bool,
 ) -> RetrievalPack:
     fund_code = str(ticket.get("fund_code", "") or "")
-    p_fact = portfolio_fact(ticket, portfolio, generated_at)
+    p_fact = portfolio_fact(ticket, portfolio, generated_at, portfolio_source_path)
     canonical = [ticket_fact(ticket, report_date), validated_decision_fact(ticket, validated, report_date)]
     if p_fact is not None:
         canonical.insert(0, p_fact)
@@ -648,7 +645,7 @@ def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generat
     action_artifact = action_ticket_artifact(agent_home, report_date, generated_at=generated_at)
     action_path = action_ticket_path(agent_home, report_date)
     validated_path = validated_advice_path(agent_home, report_date)
-    portfolio_path = portfolio_state_path(agent_home)
+    portfolio_path = select_portfolio_state_path(agent_home, report_date)
     context_path = llm_context_path(agent_home, report_date)
     evidence_path = evidence_index_path(agent_home, report_date)
     memory_path = long_memory_export_path(agent_home)
@@ -671,6 +668,7 @@ def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generat
             context=context,
             memory_export=memory_export,
             root_sources=root_sources,
+            portfolio_source_path=relative_posix(portfolio_path, agent_home) if portfolio_path.exists() else "",
             use_rag=use_rag,
         )
         for ticket in action_artifact.get("tickets", []) or []
