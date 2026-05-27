@@ -22,6 +22,7 @@ SHADOW_ALLOWED_PREFIXES = (
     "db/refactor_shadow_runs/",
     "db/action_tickets/",
     "db/action_debates/",
+    "db/retrieval_packs/",
     "tests/fixtures/golden_slices/",
 )
 
@@ -62,7 +63,7 @@ def _iter_nested_artifacts(artifact: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(artifact, dict):
         found.append(artifact)
-        for key in ("tickets", "events", "policies", "recent_events"):
+        for key in ("tickets", "packs", "events", "policies", "recent_events"):
             value = artifact.get(key)
             if isinstance(value, list):
                 for item in value:

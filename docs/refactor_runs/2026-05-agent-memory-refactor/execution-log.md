@@ -188,3 +188,54 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\diff_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
   - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
 - Final golden-slice diff verdict remained PASS.
+
+## 2026-05-27 Phase 2 Layered Retrieval Pack Implemented
+
+- Implemented the standalone Phase 2 layered retrieval-pack shadow foundation
+  without wiring it into `scripts/run_daily_pipeline.py`, LangGraph, or the
+  Workbench UI.
+- Added `scripts/layered_context_models.py` with dataclasses for
+  `RetrievalPackArtifact`, `RetrievalPack`, `LayeredContextItem`,
+  `MissingDataItem`, `RagTraceRef`, and `Visibility`.
+- Enforced Phase 2 artifact boundaries:
+  `write_scope=shadow_only`, `non_executable=true`, `include_execution=false`,
+  source refs on every layered item, and no-future validation against
+  `decision_cutoff`.
+- Extended `scripts/artifact_boundary.py` so `shadow_only` writes can target
+  `db/retrieval_packs/`.
+- Added `scripts/build_layered_retrieval_pack.py` as a standalone CLI:
+  `python scripts\build_layered_retrieval_pack.py --date YYYY-MM-DD`.
+- The builder reads Phase 1 action tickets, validated advice, portfolio state,
+  LLM context, evidence index, and long-memory export as inputs only, then
+  writes only `db/retrieval_packs/<date>.json`.
+- Canonical facts are built from structured sources only:
+  `portfolio_state`, `action_ticket`, `validated_advice`, and structured
+  `llm_context` fields. RAG is never used as a canonical fact source.
+- RAG is optional and limited to non-canonical evidence. By default it is
+  disabled for deterministic Phase 2 builds and recorded as an explicit
+  fallback trace ref. If enabled and retrieval fails, the pack records missing
+  non-canonical evidence instead of raising into the official chain.
+- Execution-only, archived, and rejected memory are excluded by default.
+- Generated local shadow artifact:
+  `db/retrieval_packs/2026-05-22.json` with summary
+  `pack_count=15`, `canonical_fact_count=103`, `derived_signal_count=43`,
+  `long_text_evidence_count=65`, `trace_item_count=546`,
+  `trace_completeness_rate=1.0`, `no_future_violation_count=0`,
+  `execution_included_count=0`, and `canonical_from_rag_count=0`.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Added `tests/test_layered_retrieval_pack.py` covering round-trip stability,
+  no-future validation, fund-specific canonical facts, structured canonical
+  source enforcement, memory visibility filtering, RAG failure fallback,
+  trace-field requirements, CLI write behavior, and forbidden official write
+  rejection.
+- Validation:
+  - `python scripts\check_repo_text_hygiene.py`
+  - `python -B -X utf8 -m py_compile scripts\layered_context_models.py scripts\build_layered_retrieval_pack.py scripts\artifact_boundary.py tests\test_layered_retrieval_pack.py`
+  - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack`
+  - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
