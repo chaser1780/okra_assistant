@@ -239,3 +239,53 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
   - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
   - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
+
+## 2026-05-27 Phase 3 Action Debate Shadow Graph Implemented
+
+- Implemented the standalone Phase 3 debate-to-action shadow graph without
+  wiring it into `scripts/run_daily_pipeline.py`, the Workbench UI, official
+  advice generation, portfolio state, execution sync, or long memory.
+- Added `scripts/action_debate_prompts.py` with compact prompt/role constants
+  and deterministic reference compaction helpers for the graph nodes.
+- Added `scripts/action_debate_graph.py` with the required node sequence:
+  `load_retrieval_pack -> analyst_evidence_view -> bull_case -> bear_case ->
+  debate_referee -> action_former -> hard_guardrail_check ->
+  soft_policy_reprice -> ticket_writer`.
+- Dependency decision for this phase: no external `langgraph` package was
+  introduced because no dependency/version is declared in the repo. The graph
+  runs as a local file-backed shadow graph and records this explicitly in the
+  runtime metadata. Migration to a LangGraph checkpoint backend remains a later
+  dependency decision after rerun/recovery needs are clearer.
+- The graph state is intentionally compact: run id, report date, artifact refs,
+  source hashes, node status, compact summaries, trace refs, and failure
+  metadata. It does not store full retrieval packs, portfolio state, raw news,
+  official NAV, execution sync, or secrets.
+- Added `scripts/run_action_debate_shadow.py` as a standalone CLI:
+  `python scripts\run_action_debate_shadow.py --date YYYY-MM-DD`.
+- The writer node writes only `db/action_debates/<date>.json` plus
+  `db/action_debates/runtime/<date>.json`. It does not rewrite
+  `db/action_tickets/<date>.json`; ticket changes are recorded only as
+  non-executable `proposed_ticket_patch` entries inside the debate artifact.
+- Failure behavior is visible and non-destructive: an injected node failure
+  writes a degraded debate artifact and preserves official inputs.
+- Generated local shadow artifact:
+  `db/action_debates/2026-05-22.json` with summary `debate_count=15`,
+  `degraded_count=0`, `node_failure_count=0`, `state_size_bytes=5960`,
+  `official_output_unchanged=true`, and `writes_ticket_file=false`.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Added `tests/test_action_debate_graph.py` covering graph execution from
+  retrieval packs, node output capture, failure degradation, rerun idempotency,
+  compact state boundary, forbidden official write rejection, missing input
+  behavior, and CLI execution.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\action_debate_graph.py scripts\action_debate_prompts.py scripts\run_action_debate_shadow.py tests\test_action_debate_graph.py`
+  - `python -B -X utf8 -m unittest tests.test_action_debate_graph`
+  - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `python -B -X utf8 -m unittest tests.test_action_debate_graph tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`

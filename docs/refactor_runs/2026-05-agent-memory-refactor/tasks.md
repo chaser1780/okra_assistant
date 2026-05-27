@@ -70,10 +70,10 @@ notes for the refactor.
 - [pending] Design Skill Curator Agent input/output contract.
 - [pending] Design skill-pack builder and skill usage tracking.
 - [pending] Design skill outcome evaluation and promotion/revision rules.
-- [pending] Decide LangGraph dependency/version and checkpoint backend before
+- [done] Decide LangGraph dependency/version and checkpoint backend before
   Phase 3 coding.
-- [pending] Define graph state schema for `debate_to_action_graph`.
-- [pending] Implement `run_action_debate_shadow.py` as non-mutating shadow entry.
+- [done] Define graph state schema for `debate_to_action_graph`.
+- [done] Implement `run_action_debate_shadow.py` as non-mutating shadow entry.
 - [pending] Add CLI/Markdown refactor review before full Workbench UI.
 - [pending] Add read-only Workbench comparison only after shadow artifacts
   stabilize.
@@ -100,3 +100,4 @@ Use this structure once implementation branches begin:
 | Phase 0.5 | done | Codex | Phase 0 | `tests/fixtures/golden_slices/*`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, optional `scripts/artifact_boundary.py` | `db/refactor_shadow_runs/2026-05-22__017641__scheduled_dca/`, `diff_report.md` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` | PASS; `2026-05-22 + 017641 + scheduled_dca` locked | One date, one fund, one action type |
 | Phase 1 | partial | Codex | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | PASS; `2026-05-22` produced 15 shadow-only tickets, including `017641` scheduled DCA | Standalone only; not integrated into daily pipeline/UI |
 | Phase 2 | partial | Codex | Phase 1 | `scripts/layered_context_models.py`, `scripts/build_layered_retrieval_pack.py`, `tests/test_layered_retrieval_pack.py` | `db/retrieval_packs/<date>.json` | `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack` | PASS; `2026-05-22` produced 15 packs, trace completeness 1.0, no-future violations 0 | Standalone only; RAG non-canonical and disabled by default |
+| Phase 3 | partial | Codex | Phase 1 + Phase 2 | `scripts/action_debate_graph.py`, `scripts/action_debate_prompts.py`, `scripts/run_action_debate_shadow.py`, `tests/test_action_debate_graph.py` | `db/action_debates/<date>.json`, `db/action_debates/runtime/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_debate_graph` | PASS; `2026-05-22` produced 15 shadow debates, node failures 0, state size 5960 bytes | Local file-backed shadow graph; no external LangGraph dependency yet; no ticket rewrite |
