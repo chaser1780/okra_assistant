@@ -74,7 +74,7 @@ notes for the refactor.
   Phase 3 coding.
 - [done] Define graph state schema for `debate_to_action_graph`.
 - [done] Implement `run_action_debate_shadow.py` as non-mutating shadow entry.
-- [pending] Add CLI/Markdown refactor review before full Workbench UI.
+- [done] Add CLI/Markdown refactor review before full Workbench UI.
 - [pending] Add read-only Workbench comparison only after shadow artifacts
   stabilize.
 
@@ -101,3 +101,4 @@ Use this structure once implementation branches begin:
 | Phase 1 | partial | Codex | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | PASS; `2026-05-22` produced 15 shadow-only tickets, including `017641` scheduled DCA | Standalone only; not integrated into daily pipeline/UI |
 | Phase 2 | partial | Codex | Phase 1 | `scripts/layered_context_models.py`, `scripts/build_layered_retrieval_pack.py`, `tests/test_layered_retrieval_pack.py` | `db/retrieval_packs/<date>.json` | `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack` | PASS; `2026-05-22` produced 15 packs, trace completeness 1.0, no-future violations 0 | Standalone only; RAG non-canonical and disabled by default |
 | Phase 3 | partial | Codex | Phase 1 + Phase 2 | `scripts/action_debate_graph.py`, `scripts/action_debate_prompts.py`, `scripts/run_action_debate_shadow.py`, `tests/test_action_debate_graph.py` | `db/action_debates/<date>.json`, `db/action_debates/runtime/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_debate_graph` | PASS; `2026-05-22` produced 15 shadow debates, node failures 0, state size 5960 bytes | Local file-backed shadow graph; no external LangGraph dependency yet; no ticket rewrite |
+| Phase 7 early review | partial | Codex | Phase 1 + Phase 2 + Phase 3 | `scripts/render_refactor_review.py`, `tests/test_refactor_review_markdown.py`, `scripts/artifact_boundary.py` | `db/refactor_reviews/<date>.md` | `python -B -X utf8 -m unittest tests.test_refactor_review_markdown` | PASS; `2026-05-22` Markdown review rendered ready status and chained official advice, tickets, packs, and debates | CLI/Markdown only; no API, UI, execution, or long-memory writes |

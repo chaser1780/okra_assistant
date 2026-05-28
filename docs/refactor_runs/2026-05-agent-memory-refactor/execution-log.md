@@ -361,3 +361,47 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_action_tickets`
   - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack`
   - `git diff --check`
+
+## 2026-05-28 Early CLI/Markdown Shadow Review
+
+- Added `scripts/render_refactor_review.py` as the pre-UI review layer required
+  by `11_review_refinement_and_vertical_slice.md` and Phase 7 checklist.
+- The renderer reads only:
+  - `db/validated_advice/<report_date>.json`
+  - `db/action_tickets/<report_date>.json`
+  - `db/retrieval_packs/<report_date>.json`
+  - `db/action_debates/<report_date>.json`
+- It writes only `db/refactor_reviews/<report_date>.md` after passing the
+  `shadow_only` and `non_executable=true` artifact boundary check.
+- The Markdown report includes:
+  - official validated advice summary;
+  - shadow action-ticket summary;
+  - retrieval trace completeness;
+  - action debate status;
+  - per-fund review tickets;
+  - guardrail map;
+  - diff versus official validated actions;
+  - boundary check result;
+  - open questions.
+- Missing shadow artifacts render as `partial`/`not_run` empty states, and
+  invalid JSON renders as `failed` without surfacing a stack trace.
+- Extended shadow allowed write roots to include `db/refactor_reviews/`, and
+  added the new shadow directories to `common.REQUIRED_DIRS` and test
+  `TempAgentHome` layout.
+- Generated local ignored Markdown review:
+  `db/refactor_reviews/2026-05-22.md` with `status=ready`,
+  `compared_fund_count=15`, `matched_action_count=15`, and
+  `mismatched_action_count=0`.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\artifact_boundary.py scripts\common.py scripts\render_refactor_review.py tests\helpers.py tests\test_refactor_review_markdown.py`
+  - `python -B -X utf8 -m unittest tests.test_refactor_review_markdown`
+  - `python -B -X utf8 -m unittest tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph`
+  - `python -B -X utf8 scripts\build_action_ticket_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:30:00+08:00`
+  - `python -B -X utf8 scripts\build_layered_retrieval_pack.py --date 2026-05-22 --generated-at 2026-05-22T21:35:00+08:00`
+  - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
+  - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-22T21:45:00+08:00`
