@@ -28,6 +28,11 @@ def action_debate_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "action_debates" / f"{report_date}.json"
 
 
+def outcome_event_path(agent_home: Path, report_date: str, horizon: str) -> Path:
+    safe_horizon = str(horizon).replace("/", "_").replace("\\", "_").replace(":", "_")
+    return agent_home / "db" / "outcome_events" / f"{report_date}__{safe_horizon}.json"
+
+
 def read_json_artifact(path: Path) -> tuple[dict[str, Any], str, str]:
     if not path.exists():
         return {}, "not_run", "missing artifact"
@@ -126,6 +131,18 @@ def debates_by_ticket_id(action_debates: dict[str, Any]) -> dict[str, dict[str, 
     }
 
 
+def outcomes_by_ticket_id(outcome_artifacts: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for horizon, artifact in outcome_artifacts.items():
+        for item in artifact.get("events", []) or []:
+            if not isinstance(item, dict) or not item.get("ticket_id"):
+                continue
+            copied = dict(item)
+            copied["_horizon"] = horizon
+            result.setdefault(str(copied["ticket_id"]), []).append(copied)
+    return result
+
+
 def guardrail_counts(ticket: dict[str, Any]) -> dict[str, int]:
     counts = {"pass": 0, "adjust": 0, "block": 0, "not_checked": 0}
     for item in ticket.get("hard_guardrail_results", []) or []:
@@ -171,6 +188,20 @@ def proposed_patch_status(debate: dict[str, Any]) -> str:
         f"non_executable={fmt_bool(patch.get('non_executable'))}; "
         f"writes_ticket_file={fmt_bool(writer.get('writes_ticket_file'))}"
     )
+
+
+def outcome_status(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return "not_run"
+    parts = []
+    for event in sorted(events, key=lambda item: str(item.get("_horizon", ""))):
+        parts.append(
+            f"{event.get('_horizon')}:"
+            f"{event.get('scoring_status', '')}/"
+            f"{event.get('outcome_label', '')}/"
+            f"{fmt_num(event.get('actual_return_pct'))}"
+        )
+    return "; ".join(parts)
 
 
 def official_action_label(action: dict[str, Any]) -> str:
@@ -294,21 +325,24 @@ def fund_review_rows(
     action_tickets: dict[str, Any],
     retrieval_packs: dict[str, Any],
     action_debates: dict[str, Any],
+    outcome_artifacts: dict[str, dict[str, Any]],
 ) -> list[str]:
     official_by_code = official_action_by_code(validated)
     ticket_map = tickets_by_code(action_tickets)
     pack_map = packs_by_ticket_id(retrieval_packs)
     debate_map = debates_by_ticket_id(action_debates)
+    outcome_map = outcomes_by_ticket_id(outcome_artifacts)
     codes = sorted(set(official_by_code) | set(ticket_map))
     rows = [
-        "| Fund | Official | Shadow Ticket | Amount | Guardrails | Retrieval Trace | Debate | Proposed Patch | Thesis |",
-        "|---|---|---|---:|---|---|---|---|---|",
+        "| Fund | Official | Shadow Ticket | Amount | Guardrails | Retrieval Trace | Debate | Outcome | Proposed Patch | Thesis |",
+        "|---|---|---|---:|---|---|---|---|---|---|",
     ]
     for code in codes:
         official = official_by_code.get(code, {})
         ticket = ticket_map.get(code, {})
-        pack = pack_map.get(str(ticket.get("ticket_id", "") or ""))
-        debate = debate_map.get(str(ticket.get("ticket_id", "") or ""))
+        ticket_id = str(ticket.get("ticket_id", "") or "")
+        pack = pack_map.get(ticket_id)
+        debate = debate_map.get(ticket_id)
         counts = guardrail_counts(ticket)
         guardrails = f"block={counts.get('block', 0)}, adjust={counts.get('adjust', 0)}, not_checked={counts.get('not_checked', 0)}"
         rows.append(
@@ -323,6 +357,7 @@ def fund_review_rows(
                     guardrails,
                     pack_trace_status(pack or {}),
                     debate_status(debate or {}),
+                    outcome_status(outcome_map.get(ticket_id, [])),
                     proposed_patch_status(debate or {}),
                     short_text(ticket.get("thesis", "") or official.get("thesis", ""), 90),
                 )
@@ -330,7 +365,30 @@ def fund_review_rows(
             + " |"
         )
     if len(rows) == 2:
-        rows.append("| _none_ |  |  |  |  |  |  |  |  |")
+        rows.append("| _none_ |  |  |  |  |  |  |  |  |  |")
+    return rows
+
+
+def outcome_summary_lines(outcome_artifacts: dict[str, tuple[Path, dict[str, Any], str, str]]) -> list[str]:
+    rows = ["| Horizon | State | Event Count | Scored | Pending | Blocked | Detail |", "|---|---|---:|---:|---:|---:|---|"]
+    for horizon, (_path, payload, state, detail) in outcome_artifacts.items():
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+        rows.append(
+            "| "
+            + " | ".join(
+                md_escape(value)
+                for value in (
+                    horizon,
+                    state,
+                    summary.get("event_count", 0),
+                    summary.get("scored_count", 0),
+                    summary.get("pending_count", 0),
+                    summary.get("blocked_count", 0),
+                    detail,
+                )
+            )
+            + " |"
+        )
     return rows
 
 
@@ -339,6 +397,7 @@ def open_questions(
     action_tickets: dict[str, Any],
     retrieval_packs: dict[str, Any],
     action_debates: dict[str, Any],
+    outcome_payloads: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     questions: list[str] = []
     for name, (_path, _payload, state, detail) in artifact_states.items():
@@ -355,13 +414,21 @@ def open_questions(
         questions.append(f"- action_debates: node_failure_count={debate_summary.get('node_failure_count')}")
     if debate_summary.get("writes_ticket_file") is not False and action_debates:
         questions.append("- action_debates: writes_ticket_file is not false")
+    for horizon, payload in (outcome_payloads or {}).items():
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+        if summary.get("pending_count"):
+            questions.append(f"- outcome_events {horizon}: pending_count={summary.get('pending_count')}")
+        if summary.get("blocked_count"):
+            questions.append(f"- outcome_events {horizon}: blocked_count={summary.get('blocked_count')}")
     if not questions:
         questions.append("- No blocking review question detected by the Markdown renderer.")
     return questions
 
 
-def overall_status(artifact_states: dict[str, tuple[Path, dict[str, Any], str, str]]) -> str:
+def overall_status(artifact_states: dict[str, tuple[Path, dict[str, Any], str, str]], optional_states: dict[str, tuple[Path, dict[str, Any], str, str]] | None = None) -> str:
     states = [state for _path, _payload, state, _detail in artifact_states.values()]
+    optional_loaded_states = [state for _path, _payload, state, _detail in (optional_states or {}).values() if state != "not_run"]
+    states.extend(optional_loaded_states)
     if any(state == "failed" for state in states):
         return "failed"
     if any(state == "degraded" for state in states):
@@ -392,15 +459,24 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "retrieval_packs": retrieval_pack_path(agent_home, report_date),
         "action_debates": action_debate_path(agent_home, report_date),
     }
+    outcome_paths = {
+        "T+1": outcome_event_path(agent_home, report_date, "T+1"),
+        "T+5": outcome_event_path(agent_home, report_date, "T+5"),
+    }
     artifact_states = {
         name: (path, *read_json_artifact(path))
         for name, path in paths.items()
+    }
+    outcome_states = {
+        horizon: (path, *read_json_artifact(path))
+        for horizon, path in outcome_paths.items()
     }
     validated = artifact_states["validated_advice"][1]
     action_tickets = artifact_states["action_tickets"][1]
     retrieval_packs = artifact_states["retrieval_packs"][1]
     action_debates = artifact_states["action_debates"][1]
-    review_status = overall_status(artifact_states)
+    outcome_payloads = {horizon: item[1] for horizon, item in outcome_states.items() if item[2] != "not_run"}
+    review_status = overall_status(artifact_states, outcome_states)
 
     lines = [
         f"# Refactor Shadow Review {report_date}",
@@ -410,10 +486,13 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- display_only: true",
         "- non_executable: true",
         "- writes_official_outputs: false",
-        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate",
+        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event",
         "",
         "## Artifact Status",
         *artifact_rows(artifact_states, agent_home),
+        "",
+        "## Outcome Event Status",
+        *outcome_summary_lines(outcome_states),
         "",
         "## Official Validated Advice Summary",
         *artifact_summary_lines("validated_advice", *artifact_states["validated_advice"][1:]),
@@ -428,7 +507,7 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         *artifact_summary_lines("action_debates", *artifact_states["action_debates"][1:]),
         "",
         "## Fund Review Tickets",
-        *fund_review_rows(validated, action_tickets, retrieval_packs, action_debates),
+        *fund_review_rows(validated, action_tickets, retrieval_packs, action_debates, outcome_payloads),
         "",
         "## Guardrail Map",
         *guardrail_map_lines(tickets_by_code(action_tickets)),
@@ -444,7 +523,7 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- execution mutation path: none",
         "",
         "## Open Questions",
-        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates),
+        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates, outcome_payloads),
         "",
     ]
     return "\n".join(lines)

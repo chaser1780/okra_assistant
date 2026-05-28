@@ -405,3 +405,58 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\build_layered_retrieval_pack.py --date 2026-05-22 --generated-at 2026-05-22T21:35:00+08:00`
   - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-22T21:45:00+08:00`
+
+## 2026-05-28 Phase 4 Outcome Event Shadow Evaluation
+
+- Added `scripts/outcome_event_models.py` with strict dataclass validation for
+  `outcome_event.v1` learning-only, non-executable artifacts.
+- Added `scripts/evaluate_action_ticket_outcomes.py` as the standalone Phase 4
+  evaluator:
+  - reads `db/action_tickets/<base_date>.json`;
+  - reads `db/portfolio_state/snapshots/<base_date>.json` through the strict
+    dated portfolio-state helper;
+  - reads official NAV from `raw/quotes/<base_date>.json` and
+    `raw/quotes/<evaluation_date>.json`;
+  - optionally reads `db/benchmark_history/<benchmark>.json`;
+  - writes only `db/outcome_events/<base_date>__<horizon>.json`.
+- Outcome artifacts use `write_scope=learning_only` and `non_executable=true`.
+  They do not mutate official NAV, revaluation output, portfolio state,
+  execution sync, long-memory records, adaptive policies, or skills.
+- Implemented explicit states:
+  - `scored` when official NAV start/end are available and reliability checks
+    pass;
+  - `pending` when required evaluation-date quote data is missing;
+  - `blocked` when scoring would be unreliable due to stale/fallback quotes,
+    cashflow between NAV dates, or untrusted units for unit-sensitive actions;
+  - `not_applicable` for unsupported action verbs.
+- Added focused tests in `tests/test_action_outcomes.py` for scored add/reduce
+  and hold outcomes, benchmark excess return, pending missing NAV, blocked
+  cashflow, blocked untrusted units, idempotent rerun, ticket-id linkage,
+  artifact round-trip, boundary rejection, CLI execution, and no mutation of
+  official inputs.
+- Extended the CLI/Markdown review renderer so available outcome events are
+  shown in:
+  - the scope chain;
+  - an `Outcome Event Status` table for `T+1` and `T+5`;
+  - each fund review ticket row;
+  - open questions when pending or blocked outcomes exist.
+- Generated local ignored outcome artifacts for `2026-05-22`:
+  - `db/outcome_events/2026-05-22__T+1.json` with `event_count=15`,
+    `scored_count=15`, `pending_count=0`, `blocked_count=0`;
+  - `db/outcome_events/2026-05-22__T+5.json` with `event_count=15`,
+    `scored_count=0`, `pending_count=15`, `blocked_count=0`.
+- Regenerated local ignored Markdown review:
+  `db/refactor_reviews/2026-05-22.md`, now showing outcome status.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\outcome_event_models.py scripts\evaluate_action_ticket_outcomes.py scripts\render_refactor_review.py tests\test_action_outcomes.py tests\test_refactor_review_markdown.py`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_refactor_review_markdown`
+  - `python -B -X utf8 -m unittest tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-23T23:30:00+08:00`
+  - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+5 --generated-at 2026-05-27T23:30:00+08:00`
+  - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-22T21:50:00+08:00`

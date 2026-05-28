@@ -21,6 +21,7 @@ sys.path.insert(0, str(TESTS_DIR))
 from action_debate_graph import run_debate_graph
 from artifact_boundary import BoundaryViolation, assert_refactor_write_allowed
 from build_action_ticket_shadow import run_builder as run_action_ticket_builder
+from evaluate_action_ticket_outcomes import run_builder as run_outcome_builder
 from build_layered_retrieval_pack import run_builder as run_retrieval_pack_builder
 from helpers import TempAgentHome
 from render_refactor_review import refactor_review_path, review_payload, run_renderer
@@ -53,6 +54,17 @@ class RefactorReviewMarkdownTests(unittest.TestCase):
         run_retrieval_pack_builder(self.agent.root, REPORT_DATE, generated_at=PACK_GENERATED_AT)
         run_debate_graph(self.agent.root, REPORT_DATE, generated_at=DEBATE_GENERATED_AT)
 
+    def add_real_outcome_inputs(self) -> None:
+        for relative in (
+            f"raw/quotes/{REPORT_DATE}.json",
+            "raw/quotes/2026-05-23.json",
+            "config/benchmark_mappings.json",
+        ):
+            self.agent.write_json(relative, _load_repo_json(relative))
+        benchmark_dir = PROJECT_ROOT / "db" / "benchmark_history"
+        for path in benchmark_dir.glob("*.json"):
+            self.agent.write_json(f"db/benchmark_history/{path.name}", _load_repo_json(f"db/benchmark_history/{path.name}"))
+
     def test_ready_review_markdown_chains_shadow_artifacts(self) -> None:
         self.build_ready_artifacts()
 
@@ -71,6 +83,18 @@ class RefactorReviewMarkdownTests(unittest.TestCase):
         self.assertIn("trace=1", markdown)
         self.assertIn("- compared_fund_count: 15", markdown)
         self.assertIn("- mismatched_action_count:", markdown)
+
+    def test_review_includes_outcome_event_status_when_available(self) -> None:
+        self.build_ready_artifacts()
+        self.add_real_outcome_inputs()
+        run_outcome_builder(self.agent.root, REPORT_DATE, "T+1", generated_at="2026-05-23T23:30:00+08:00")
+
+        _path, markdown = run_renderer(self.agent.root, REPORT_DATE, generated_at=REVIEW_GENERATED_AT)
+
+        self.assertIn("validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event", markdown)
+        self.assertIn("## Outcome Event Status", markdown)
+        self.assertIn("| T+1 | ready | 15 |", markdown)
+        self.assertIn("T+1:", markdown)
 
     def test_partial_review_renders_missing_shadow_artifacts_without_exception(self) -> None:
         self.agent.write_json(f"db/validated_advice/{REPORT_DATE}.json", _load_repo_json(f"db/validated_advice/{REPORT_DATE}.json"))

@@ -72,6 +72,7 @@ REQUIRED_DIRS = (
     "db/retrieval_packs",
     "db/action_debates",
     "db/action_debates/runtime",
+    "db/outcome_events",
     "db/refactor_reviews",
     "db/decisions",
     "db/decision_ledger",
