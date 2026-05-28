@@ -651,3 +651,45 @@ No implementation entries have been added yet.
   - `npm run tauri:check`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check`
+
+## 2026-05-28 Phase 8 Pre-Promotion Consumer Map
+
+- Entered Phase 8 only as a pre-promotion audit. No official-path replacement
+  was started because the current instruction did not explicitly approve
+  promoting shadow-chain output into the official daily chain.
+- Added `docs/refactor_runs/2026-05-agent-memory-refactor/phase8_downstream_consumer_map.md`
+  to map downstream consumers before changing any legacy responsibility:
+  - `db/validated_advice/<date>.json`;
+  - `db/daily_workspace/<date>/*`;
+  - `db/decisions`, `db/decision_ledger`, and `db/decision_latest`;
+  - official review/report outputs;
+  - execution sync and execution status;
+  - RAG/Copilot source collectors;
+  - Workbench API and frontend DTOs.
+- Added `scripts/audit_phase8_readiness.py` as a read-only audit command. It
+  prints JSON or Markdown to stdout and does not write `db/validated_advice`,
+  `db/decision_ledger`, `db/portfolio_state`, `db/execution_sync`,
+  `db/long_memory`, or any shadow artifact.
+- The audit records:
+  - `official_path_mutation_allowed=false`;
+  - `promotion_ready=false` by default;
+  - required evidence gates;
+  - mutation boundaries that must reject shadow artifacts;
+  - the first future replacement candidate:
+    `scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle`
+    behind a fallback switch.
+- Added `tests/test_phase8_readiness.py` covering:
+  - consumer-map area coverage;
+  - default promotion block;
+  - execution and ledger mutation boundaries rejecting shadow inputs;
+  - ready shadow artifacts not being enough for promotion;
+  - JSON CLI output and Markdown rendering.
+- Updated refactor README, accepted-plan index, and task board so the Phase 8
+  pre-promotion audit is discoverable.
+- Official-path mutation remained untouched:
+  - no edits to `scripts/run_daily_pipeline.py`;
+  - no edits to `scripts/generate_llm_advice.py`;
+  - no edits to `scripts/validate_llm_advice.py`;
+  - no edits to `scripts/execution_sync.py`;
+  - no edits to portfolio-state, execution-sync, or long-memory mutation
+    endpoints.

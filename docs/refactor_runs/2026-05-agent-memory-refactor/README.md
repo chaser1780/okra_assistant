@@ -25,6 +25,7 @@ Current status:
   - `hard_constraints_inventory.md`
   - `phase_checklists/`
   - `api_contracts_shadow_review.md`
+  - `phase8_downstream_consumer_map.md`
 - Accepted plan index: `accepted_plan_index.md`
 
 Use the sibling files in this folder for detailed planning, task execution

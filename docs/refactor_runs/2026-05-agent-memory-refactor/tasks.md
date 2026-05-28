@@ -78,6 +78,10 @@ notes for the refactor.
 - [done] Add CLI/Markdown refactor review before full Workbench UI.
 - [done] Add read-only Workbench comparison only after shadow artifacts
   stabilize.
+- [done] Build Phase 8 downstream consumer map before official-path
+  replacement.
+- [done] Add read-only Phase 8 readiness audit before compatibility adapter or
+  fallback switch work.
 
 ## Completed Documentation Tasks
 
@@ -91,6 +95,7 @@ notes for the refactor.
 | Workbench API contract update | 7/UI | `docs/modern_workbench.md` | Current envelope, routes, DTOs, error behavior, and compatibility risks recorded |
 | Review refinement | 0.5/all | `11_review_refinement_and_vertical_slice.md` | User review incorporated into route, KPIs, core fields, boundary checks, and replacement/fallback strategy |
 | Phase 0.5 golden vertical slice | 0.5 | `tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, `scripts/artifact_boundary.py` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` passed; replay diff verdict PASS |
+| Phase 8 downstream consumer map | 8 | `phase8_downstream_consumer_map.md`, `scripts/audit_phase8_readiness.py`, `tests/test_phase8_readiness.py` | Read-only audit marks `promotion_ready=false` until official-compatible adapter, fallback switch, broader outcome evidence, regression baselines, rollback path, and explicit promotion are present |
 
 ## Phase Execution Board Template
 
@@ -107,3 +112,4 @@ Use this structure once implementation branches begin:
 | Phase 6 | partial | Codex | Phase 5 policy clusters + Phase 4 outcomes | `scripts/strategy_skill_models.py`, `scripts/strategy_skill_store.py`, `scripts/run_skill_curator.py`, `tests/test_strategy_skills.py` | `db/strategy_skills/registry.json`, `db/strategy_skills/<skill_id>/skill.md`, `db/strategy_skills/<skill_id>/events.jsonl` | `python -B -X utf8 -m unittest tests.test_strategy_skills` | PASS; `2026-05-22` generated 2 strategy skills (`draft=1`, `candidate=1`, `active=0`) with append-only lifecycle events | Learning-only, non-executable; auto active promotion disabled; no hard constraints, official advice, portfolio state, execution sync, policy events, or direct graph outputs |
 | Phase 7 early review | partial | Codex | Phase 1 + Phase 2 + Phase 3 + optional Phase 4/5/6 | `scripts/render_refactor_review.py`, `tests/test_refactor_review_markdown.py`, `scripts/artifact_boundary.py` | `db/refactor_reviews/<date>.md` | `python -B -X utf8 -m unittest tests.test_refactor_review_markdown` | PASS; `2026-05-22` Markdown review rendered ready status and chained official advice, tickets, packs, debates, outcome events, adaptive policy summary, and strategy skill registry summary | CLI/Markdown only; no API, UI, execution, or long-memory writes |
 | Phase 7 Workbench review surface | partial | Codex | Phase 1 + Phase 2 + Phase 3 + optional Phase 4/5/6 | `app/api_contracts.py`, `app/shadow_review_service.py`, `app/web_api.py`, `frontend/src/lib/schemas.ts`, `frontend/src/lib/workbenchApi.ts`, `frontend/src/lib/workbenchQuery.ts`, `frontend/src/lib/types.ts`, `frontend/src/app/routes.tsx`, `frontend/src/app/routeMeta.ts`, `frontend/src/components/okra/WorkbenchLayout.tsx`, `frontend/src/app/pages/ShadowReviewPage.tsx`, `tests/test_web_api_action_tickets.py` | `GET /api/shadow-review?date=YYYY-MM-DD`, `/shadow-review` Workbench page | `python -B -X utf8 -m unittest tests.test_web_api_action_tickets`; `npm run build` | PASS; `2026-05-22` API DTO status `ready`, 15 items, agreement 1.0, `nonExecutable=true`, `displayOnly=true`, `executionDisabled=true` | Read-only API/UI only; no execution buttons, portfolio mutation, official advice mutation, long-memory action, policy/skill promotion, or snapshot-synthesized review items |
+| Phase 8 pre-promotion audit | partial | Codex | Phase 1-7 evidence | `docs/refactor_runs/2026-05-agent-memory-refactor/phase8_downstream_consumer_map.md`, `scripts/audit_phase8_readiness.py`, `tests/test_phase8_readiness.py` | JSON/Markdown readiness audit on stdout | `python -B -X utf8 -m unittest tests.test_phase8_readiness` | PASS; consumer map covers validated advice, daily workspace, decision ledger, review, execution sync, RAG/Copilot, and Workbench API; promotion remains blocked by design | No official-path mutation; first future replacement candidate is `generate_llm_advice.py` committee-bundle-to-final-advice adapter behind fallback |
