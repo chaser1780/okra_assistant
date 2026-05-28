@@ -8,6 +8,7 @@ import {
   realtimePageSchema,
   researchPageSchema,
   reviewPageSchema,
+  shadowReviewPageSchema,
   shellPayloadSchema,
   systemPageSchema,
   todayPageSchema
@@ -20,6 +21,7 @@ import type {
   RealtimePagePayload,
   ResearchPagePayload,
   ReviewPagePayload,
+  ShadowReviewPagePayload,
   ShellPayload,
   Snapshot,
   SystemPagePayload,
@@ -125,6 +127,10 @@ export function getReviewPage(date?: string): Promise<ReviewPagePayload> {
     review: snapshot.review,
     longMemory: snapshot.longMemory
   }), date);
+}
+
+export function getShadowReviewPage(date?: string): Promise<ShadowReviewPagePayload> {
+  return requestWithSchema(`/api/shadow-review${buildDateQuery(date)}`, shadowReviewPageSchema);
 }
 
 export function getSystemPage(date?: string): Promise<SystemPagePayload> {

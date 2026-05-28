@@ -589,3 +589,65 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:45:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check`
+
+## 2026-05-28 Phase 7 Workbench Review Surface
+
+- Added `app/shadow_review_service.py` as a read-only DTO normalizer for:
+  - `db/validated_advice/<date>.json`;
+  - `db/action_tickets/<date>.json`;
+  - `db/retrieval_packs/<date>.json`;
+  - `db/action_debates/<date>.json`;
+  - optional outcome events, adaptive policies, strategy skill registry, and
+    Markdown review status.
+- Extended `app/api_contracts.py` with additive Pydantic DTOs for
+  `ShadowReviewPageDto`, item rows, artifact status, and missing-artifact
+  notes. DTOs remain `extra="allow"` through the existing `ContractModel`.
+- Added `GET /api/shadow-review?date=YYYY-MM-DD` and the compatibility alias
+  `/api/workbench/shadow-review` through the current API envelope:
+  - invalid dates return `400 bad_request`;
+  - missing shadow artifacts return `200 ok` with
+    `status=missing/not_run/partial/failed`;
+  - invalid JSON is reported in `artifacts.missing[]` without stack traces.
+- Added a dedicated read-only Workbench page at `/shadow-review`:
+  - frontend Zod schema and TypeScript payload types;
+  - workbench query helper without snapshot fallback;
+  - sidebar route entry and `ShadowReviewPage` display surface;
+  - summary metrics, artifact states, missing/degraded notes, and official
+    versus shadow ticket comparison cards.
+- Kept Phase 7 mutation boundary intact:
+  - no execution sync endpoints are called;
+  - no portfolio or official advice mutation;
+  - no long-memory approve/reject/archive/demote action;
+  - no policy or strategy skill promotion;
+  - no review items synthesized from `/api/snapshot`.
+- Added `tests/test_web_api_action_tickets.py` covering:
+  - missing artifacts as a 200 empty state;
+  - invalid date as a 400 envelope;
+  - legacy-only `not_run`;
+  - partial shadow ticket display without retrieval/debate traces;
+  - invalid JSON as failed/degraded DTO state without tracebacks;
+  - ready payload non-executable/display-only markers;
+  - `/api/workbench/shadow-review` alias and meta fields;
+  - mutation-path methods not being called.
+- Checked the real local `2026-05-22` DTO:
+  - `status=ready`;
+  - `items=15`;
+  - `legacyCount=15`, `shadowCount=15`, `comparableCount=15`;
+  - `changedCount=0`, `agreementRate=1.0`, `highRiskDiffCount=0`;
+  - `nonExecutable=true`, `displayOnly=true`, `executionDisabled=true`;
+  - `missing_count=0`.
+- Confirmed official inputs were unchanged after the read-only check:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python -B -X utf8 -m py_compile app\api_contracts.py app\shadow_review_service.py app\web_api.py tests\test_web_api_action_tickets.py`
+  - `python -B -X utf8 -m unittest tests.test_web_api_action_tickets`
+  - `python -B -X utf8 -m unittest tests.test_web_api_action_tickets tests.test_web_api_rag_admin tests.test_web_api_rag_copilot`
+  - `python -B -X utf8 -m unittest tests.test_refactor_review_markdown tests.test_strategy_skills`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `npm run build`
+  - `npm run tauri:check`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `git diff --check`

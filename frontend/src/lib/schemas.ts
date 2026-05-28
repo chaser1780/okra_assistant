@@ -365,6 +365,84 @@ export const reviewPageSchema = z.object({
   longMemory: longMemorySchema
 }).passthrough();
 
+const shadowReviewStatusSchema = z.enum(["missing", "not_run", "running", "ready", "partial", "degraded", "failed"]);
+
+const shadowReviewBadgeSchema = z.object({
+  label: z.string().catch(""),
+  tone: z.string().catch("neutral")
+}).passthrough();
+
+const shadowReviewItemSchema = z.object({
+  reviewId: z.string().catch(""),
+  fundCode: z.string().catch(""),
+  fundName: z.string().catch(""),
+  category: z.string().catch("missing"),
+  severity: z.string().catch("info"),
+  displayLabel: z.string().catch(""),
+  nonExecutable: z.literal(true).catch(true),
+  displayOnly: z.literal(true).catch(true),
+  legacy: unknownRecordSchema.nullable().optional(),
+  shadow: unknownRecordSchema.nullable().optional(),
+  diff: z.object({
+    actionChanged: z.boolean().catch(false),
+    confidenceDelta: z.number().nullable().optional(),
+    riskChanged: z.boolean().optional(),
+    evidenceChanged: z.boolean().optional(),
+    notes: z.array(z.string()).catch([])
+  }).passthrough(),
+  display: z.object({
+    primaryText: z.string().optional(),
+    secondaryText: z.string().optional(),
+    badges: z.array(shadowReviewBadgeSchema).catch([])
+  }).passthrough(),
+  guardrails: unknownRecordSchema.optional(),
+  retrieval: unknownRecordSchema.optional(),
+  debate: unknownRecordSchema.optional(),
+  outcomeEvents: z.array(unknownRecordSchema).catch([])
+}).passthrough();
+
+const shadowReviewMissingArtifactSchema = z.object({
+  kind: z.string().catch(""),
+  path: z.string().nullable().optional(),
+  reason: z.string().catch(""),
+  message: z.string().catch("")
+}).passthrough();
+
+export const shadowReviewPageSchema = z.object({
+  selectedDate: z.string(),
+  status: shadowReviewStatusSchema.catch("missing"),
+  generatedAt: z.string().catch(""),
+  nonExecutable: z.literal(true).catch(true),
+  displayOnly: z.literal(true).catch(true),
+  summary: z.object({
+    legacyCount: z.number().catch(0),
+    shadowCount: z.number().catch(0),
+    comparableCount: z.number().catch(0),
+    changedCount: z.number().catch(0),
+    agreementRate: z.number().nullable().optional(),
+    highRiskDiffCount: z.number().catch(0)
+  }).passthrough(),
+  artifacts: z.object({
+    legacyAdvicePath: z.string().nullable().optional(),
+    shadowAdvicePath: z.string().nullable().optional(),
+    shadowTracePath: z.string().nullable().optional(),
+    evalReportPath: z.string().nullable().optional(),
+    exists: z.record(z.string(), z.boolean()).catch({}),
+    states: z.record(z.string(), z.string()).optional(),
+    missing: z.array(shadowReviewMissingArtifactSchema).catch([])
+  }).passthrough(),
+  items: z.array(shadowReviewItemSchema).catch([]),
+  runtime: unknownRecordSchema.catch({}),
+  guardrails: z.object({
+    nonExecutable: z.literal(true).catch(true),
+    executionDisabled: z.literal(true).catch(true),
+    affectsPortfolio: z.literal(false).catch(false),
+    affectsAdviceAccuracy: z.literal(false).catch(false),
+    affectsLongMemoryPromotion: z.literal(false).catch(false),
+    allowExecutionEvidence: z.literal(false).catch(false)
+  }).passthrough()
+}).passthrough();
+
 export const systemPageSchema = z.object({
   selectedDate: z.string(),
   summary: unknownRecordSchema,

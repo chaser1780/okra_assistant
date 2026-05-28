@@ -1,4 +1,4 @@
-import { Activity, BarChart3, BrainCircuit, Gauge, Newspaper, PlayCircle, ReceiptText, Settings, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, Gauge, Newspaper, PlayCircle, ReceiptText, SearchCheck, Settings, WalletCards } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import type { SystemPayload } from "../../lib/types";
@@ -6,7 +6,7 @@ import { getTodayAnalysisSystem } from "../../lib/todayAnalysis";
 import { Button } from "../ui";
 import { CopilotPanel } from "./CopilotPanel";
 
-export type PageKey = "today" | "portfolio" | "execution" | "research" | "intelligence" | "realtime" | "review" | "system" | "fundDetail";
+export type PageKey = "today" | "portfolio" | "execution" | "research" | "intelligence" | "realtime" | "review" | "shadowReview" | "system" | "fundDetail";
 
 const nav = [
   { key: "today", label: "今日", icon: Gauge },
@@ -16,6 +16,7 @@ const nav = [
   { key: "intelligence", label: "资讯", icon: Newspaper },
   { key: "realtime", label: "实时", icon: Activity },
   { key: "review", label: "记忆", icon: BrainCircuit },
+  { key: "shadowReview", label: "Shadow", icon: SearchCheck },
   { key: "system", label: "系统", icon: Settings }
 ] as const;
 
@@ -64,7 +65,7 @@ export function WorkbenchLayout({
             return (
               <NavLink
                 key={item.key}
-                to={`/${item.key}${selectedDateQuery}`}
+                to={`${item.key === "shadowReview" ? "/shadow-review" : `/${item.key}`}${selectedDateQuery}`}
                 className={({ isActive }) =>
                   `flex h-10 min-w-0 items-center justify-center gap-2 rounded-md px-2 text-sm font-semibold transition xl:justify-start xl:gap-3 xl:px-3 ${
                     isActive ? "border border-cyan-500/40 bg-cyan-950/40 text-cyan-100" : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"

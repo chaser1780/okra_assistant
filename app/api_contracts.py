@@ -94,6 +94,50 @@ class ReviewPageDto(ContractModel):
     longMemory: dict[str, Any] = Field(default_factory=dict)
 
 
+class ShadowReviewMissingArtifactDto(ContractModel):
+    kind: str = ""
+    path: str | None = None
+    reason: str = ""
+    message: str = ""
+
+
+class ShadowReviewArtifactsDto(ContractModel):
+    legacyAdvicePath: str | None = None
+    shadowAdvicePath: str | None = None
+    shadowTracePath: str | None = None
+    evalReportPath: str | None = None
+    exists: dict[str, bool] = Field(default_factory=dict)
+    missing: list[ShadowReviewMissingArtifactDto] = Field(default_factory=list)
+
+
+class ShadowReviewItemDto(ContractModel):
+    reviewId: str = ""
+    fundCode: str = ""
+    fundName: str = ""
+    category: str = "missing"
+    severity: str = "info"
+    displayLabel: str = ""
+    nonExecutable: bool = True
+    displayOnly: bool = True
+    legacy: dict[str, Any] | None = None
+    shadow: dict[str, Any] | None = None
+    diff: dict[str, Any] = Field(default_factory=dict)
+    display: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShadowReviewPageDto(ContractModel):
+    selectedDate: str = ""
+    status: str = "missing"
+    generatedAt: str = ""
+    nonExecutable: bool = True
+    displayOnly: bool = True
+    summary: dict[str, Any] = Field(default_factory=dict)
+    artifacts: ShadowReviewArtifactsDto = Field(default_factory=ShadowReviewArtifactsDto)
+    items: list[ShadowReviewItemDto] = Field(default_factory=list)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    guardrails: dict[str, Any] = Field(default_factory=dict)
+
+
 class SystemPageDto(ContractModel):
     selectedDate: str = ""
     summary: dict[str, Any] = Field(default_factory=dict)

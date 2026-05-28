@@ -8,6 +8,7 @@ export const pageTitles: Record<PageKey, { eyebrow: string; title: string }> = {
   intelligence: { eyebrow: "Intelligence", title: "资讯与情绪面板" },
   realtime: { eyebrow: "Realtime", title: "实时估值监控" },
   review: { eyebrow: "Memory", title: "长期记忆与复盘" },
+  shadowReview: { eyebrow: "Shadow Review", title: "影子决策只读审查" },
   system: { eyebrow: "System", title: "系统运行状态" },
   fundDetail: { eyebrow: "Fund", title: "基金详情" }
 };
@@ -19,6 +20,7 @@ export function pageKeyFromPath(pathname: string): PageKey {
   if (pathname.startsWith("/intelligence")) return "intelligence";
   if (pathname.startsWith("/realtime")) return "realtime";
   if (pathname.startsWith("/review")) return "review";
+  if (pathname.startsWith("/shadow-review")) return "shadowReview";
   if (pathname.startsWith("/system")) return "system";
   if (pathname.startsWith("/fund/")) return "fundDetail";
   return "today";
@@ -40,9 +42,11 @@ export function routeForPage(page: PageKey, selectedDate: string) {
                 ? "/realtime"
                 : page === "review"
                   ? "/review"
-                  : page === "system"
-                    ? "/system"
-                    : "/today";
+                  : page === "shadowReview"
+                    ? "/shadow-review"
+                    : page === "system"
+                      ? "/system"
+                      : "/today";
   return selectedDate ? `${path}?date=${encodeURIComponent(selectedDate)}` : path;
 }
 
