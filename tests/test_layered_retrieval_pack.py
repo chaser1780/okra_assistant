@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from artifact_boundary import BoundaryViolation, assert_refactor_write_allowed
+from build_action_ticket_shadow import MissingPortfolioStateError
 from build_layered_retrieval_pack import build_retrieval_pack_artifact, retrieval_pack_path, run_builder
 from layered_context_models import LayeredContextItem, LayeredContextValidationError, RetrievalPackArtifact
 from helpers import TempAgentHome
@@ -184,6 +185,21 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertEqual(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", portfolio_source["path"])
         self.assertTrue(portfolio_facts)
         self.assertTrue(all(item.source_path == f"db/portfolio_state/snapshots/{REPORT_DATE}.json" for item in portfolio_facts))
+
+    def test_historical_build_fails_when_snapshot_missing_and_current_is_future(self) -> None:
+        self.copy_real_inputs()
+        build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+        (self.agent.root / "db" / "portfolio_state" / "snapshots" / f"{REPORT_DATE}.json").unlink()
+        future_current = _load_repo_json("db/portfolio_state/current.json")
+        future_current["as_of_date"] = "2026-05-27"
+        self.agent.write_json("db/portfolio_state/current.json", future_current)
+
+        with self.assertRaises(MissingPortfolioStateError) as caught:
+            build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+
+        message = str(caught.exception)
+        self.assertIn("portfolio_state snapshot missing", message)
+        self.assertIn("current.as_of_date=2026-05-27", message)
 
     def test_boundary_rejects_retrieval_pack_payload_on_official_path(self) -> None:
         artifact = self.build_artifact()

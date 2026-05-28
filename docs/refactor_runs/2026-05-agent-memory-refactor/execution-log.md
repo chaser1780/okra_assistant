@@ -338,3 +338,26 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\build_layered_retrieval_pack.py --date 2026-05-22 --generated-at 2026-05-22T21:35:00+08:00`
   - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
   - `git diff --check`
+
+## 2026-05-28 Missing Portfolio Snapshot Boundary Fix
+
+- Closed the remaining review gap where a historical shadow replay could select
+  `db/portfolio_state/snapshots/<report_date>.json`, fail to find it, and then
+  silently continue with an empty `{}` portfolio state.
+- Added `MissingPortfolioStateError` and a strict
+  `load_portfolio_state_for_report()` helper in
+  `scripts/build_action_ticket_shadow.py`.
+- Phase 1 action-ticket and Phase 2 retrieval-pack builders now:
+  - prefer `db/portfolio_state/snapshots/<report_date>.json` when it exists;
+  - allow `db/portfolio_state/current.json` only when `current.as_of_date`
+    equals `report_date`;
+  - fail with a clear message when the date snapshot is missing and current is
+    from another date.
+- Added focused regression tests for the missing-snapshot/future-current case
+  in both `tests/test_action_tickets.py` and
+  `tests/test_layered_retrieval_pack.py`.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\build_action_ticket_shadow.py scripts\build_layered_retrieval_pack.py tests\test_action_tickets.py tests\test_layered_retrieval_pack.py`
+  - `python -B -X utf8 -m unittest tests.test_action_tickets`
+  - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack`
+  - `git diff --check`

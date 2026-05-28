@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
-from build_action_ticket_shadow import action_ticket_path, run_builder as run_action_ticket_builder, safe_float, select_portfolio_state_path
+from build_action_ticket_shadow import action_ticket_path, load_portfolio_state_for_report, run_builder as run_action_ticket_builder, safe_float
 from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from layered_context_models import (
     SCHEMA_VERSION,
@@ -645,12 +645,11 @@ def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generat
     action_artifact = action_ticket_artifact(agent_home, report_date, generated_at=generated_at)
     action_path = action_ticket_path(agent_home, report_date)
     validated_path = validated_advice_path(agent_home, report_date)
-    portfolio_path = select_portfolio_state_path(agent_home, report_date)
+    portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
     context_path = llm_context_path(agent_home, report_date)
     evidence_path = evidence_index_path(agent_home, report_date)
     memory_path = long_memory_export_path(agent_home)
     validated = load_json_if_exists(validated_path)
-    portfolio = load_json_if_exists(portfolio_path)
     context = load_json_if_exists(context_path)
     memory_export = load_json_if_exists(memory_path)
     generated_at = generated_at or str(action_artifact.get("generated_at", "") or timestamp_now())

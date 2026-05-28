@@ -15,6 +15,10 @@ ACTION_SECTIONS = ("tactical_actions", "dca_actions", "hold_actions")
 SCHEMA_VERSION = "action_ticket.v1"
 
 
+class MissingPortfolioStateError(FileNotFoundError):
+    """Raised when a historical shadow replay has no matching portfolio state."""
+
+
 def action_ticket_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "action_tickets" / f"{report_date}.json"
 
@@ -40,6 +44,25 @@ def select_portfolio_state_path(agent_home: Path, report_date: str) -> Path:
     if current and portfolio_as_of_date(current) == report_date:
         return current_path
     return snapshot_path
+
+
+def load_portfolio_state_for_report(agent_home: Path, report_date: str) -> tuple[Path, dict[str, Any]]:
+    snapshot_path = portfolio_state_snapshot_path(agent_home, report_date)
+    if snapshot_path.exists():
+        return snapshot_path, load_json(snapshot_path)
+
+    current_path = current_portfolio_state_path(agent_home)
+    current = load_json_if_exists(current_path)
+    current_as_of = portfolio_as_of_date(current) if current else ""
+    if current and current_as_of == report_date:
+        return current_path, current
+
+    raise MissingPortfolioStateError(
+        "portfolio_state snapshot missing for "
+        f"report_date={report_date}: expected {snapshot_path}; "
+        f"current.as_of_date={current_as_of or '<missing>'}; "
+        "current.json fallback is allowed only when current.as_of_date matches report_date"
+    )
 
 
 def content_sha256(path: Path) -> str:
@@ -395,9 +418,8 @@ def build_action_ticket_artifact(agent_home: Path, report_date: str, *, generate
     validated_path = validated_advice_path(agent_home, report_date)
     if not validated_path.exists():
         raise FileNotFoundError(f"validated advice not found: {validated_path}")
-    portfolio_path = select_portfolio_state_path(agent_home, report_date)
+    portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
     validated = load_json(validated_path)
-    portfolio = load_json_if_exists(portfolio_path)
     generated_at = generated_at or str(validated.get("generated_at", "") or timestamp_now())
     root_sources = source_artifacts(agent_home, report_date, validated_path, portfolio_path)
     actions, by_code = collect_legacy_actions(validated)
