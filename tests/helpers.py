@@ -352,6 +352,7 @@ class TempAgentHome:
             "db/action_debates/runtime",
             "db/outcome_events",
             "db/strategy_memory",
+            "db/strategy_skills",
             "db/refactor_reviews",
             "db/agent_outputs",
             "db/agent_snapshots",

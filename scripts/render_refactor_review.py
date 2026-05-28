@@ -37,6 +37,10 @@ def policy_store_path(agent_home: Path) -> Path:
     return agent_home / "db" / "strategy_memory" / "policies.json"
 
 
+def skill_registry_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "strategy_skills" / "registry.json"
+
+
 def read_json_artifact(path: Path) -> tuple[dict[str, Any], str, str]:
     if not path.exists():
         return {}, "not_run", "missing artifact"
@@ -435,6 +439,45 @@ def policy_summary_lines(policy_state: tuple[Path, dict[str, Any], str, str], ag
     return rows
 
 
+def skill_summary_lines(skill_state: tuple[Path, dict[str, Any], str, str], agent_home: Path) -> list[str]:
+    path, payload, state, detail = skill_state
+    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+    rows = [
+        f"- path: {relative_posix(path, agent_home)}",
+        f"- state: {state} ({detail})",
+        f"- write_scope: {payload.get('write_scope', '')}",
+        f"- non_executable: {fmt_bool(payload.get('non_executable'))}",
+        f"- auto_activation_allowed: {fmt_bool(payload.get('auto_activation_allowed'))}",
+        f"- skill_count: {summary.get('skill_count', 0)}",
+        f"- active_skill_count: {summary.get('active_skill_count', 0)}",
+        f"- auto_active_promotion_count: {summary.get('auto_active_promotion_count', 0)}",
+        f"- status_counts: {json.dumps(summary.get('status_counts', {}), ensure_ascii=False, sort_keys=True)}",
+    ]
+    entries = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
+    if entries:
+        rows.extend(["", "| Skill | Status | Scope | Support | Source Policies |", "|---|---|---|---:|---|"])
+        for entry in entries[:10]:
+            if not isinstance(entry, dict):
+                continue
+            rows.append(
+                "| "
+                + " | ".join(
+                    md_escape(value)
+                    for value in (
+                        entry.get("skill_id", ""),
+                        entry.get("status", ""),
+                        entry.get("scope", ""),
+                        entry.get("support_count", 0),
+                        ", ".join(entry.get("source_policy_ids", []) or []),
+                    )
+                )
+                + " |"
+            )
+        if len(entries) > 10:
+            rows.append(f"| ... {len(entries) - 10} more | | | | |")
+    return rows
+
+
 def open_questions(
     artifact_states: dict[str, tuple[Path, dict[str, Any], str, str]],
     action_tickets: dict[str, Any],
@@ -442,6 +485,7 @@ def open_questions(
     action_debates: dict[str, Any],
     outcome_payloads: dict[str, dict[str, Any]] | None = None,
     policy_payload: dict[str, Any] | None = None,
+    skill_payload: dict[str, Any] | None = None,
 ) -> list[str]:
     questions: list[str] = []
     for name, (_path, _payload, state, detail) in artifact_states.items():
@@ -470,6 +514,12 @@ def open_questions(
             questions.append(f"- adaptive_policies: invalid_event_count={summary.get('invalid_event_count')}")
         if policy_payload.get("hard_block_allowed") is not False:
             questions.append("- adaptive_policies: hard_block_allowed is not false")
+    if skill_payload:
+        summary = skill_payload.get("summary", {}) if isinstance(skill_payload.get("summary"), dict) else {}
+        if summary.get("auto_active_promotion_count"):
+            questions.append(f"- strategy_skills: auto_active_promotion_count={summary.get('auto_active_promotion_count')}")
+        if skill_payload.get("auto_activation_allowed") is not False:
+            questions.append("- strategy_skills: auto_activation_allowed is not false")
     if not questions:
         questions.append("- No blocking review question detected by the Markdown renderer.")
     return questions
@@ -522,12 +572,13 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         for horizon, path in outcome_paths.items()
     }
     policy_state = (policy_store_path(agent_home), *read_json_artifact(policy_store_path(agent_home)))
+    skill_state = (skill_registry_path(agent_home), *read_json_artifact(skill_registry_path(agent_home)))
     validated = artifact_states["validated_advice"][1]
     action_tickets = artifact_states["action_tickets"][1]
     retrieval_packs = artifact_states["retrieval_packs"][1]
     action_debates = artifact_states["action_debates"][1]
     outcome_payloads = {horizon: item[1] for horizon, item in outcome_states.items() if item[2] != "not_run"}
-    review_status = overall_status(artifact_states, {**outcome_states, "adaptive_policies": policy_state})
+    review_status = overall_status(artifact_states, {**outcome_states, "adaptive_policies": policy_state, "strategy_skills": skill_state})
 
     lines = [
         f"# Refactor Shadow Review {report_date}",
@@ -537,7 +588,7 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- display_only: true",
         "- non_executable: true",
         "- writes_official_outputs: false",
-        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event -> adaptive_policy",
+        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event -> adaptive_policy -> strategy_skill",
         "",
         "## Artifact Status",
         *artifact_rows(artifact_states, agent_home),
@@ -547,6 +598,9 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "",
         "## Adaptive Policy Status",
         *policy_summary_lines(policy_state, agent_home),
+        "",
+        "## Strategy Skill Status",
+        *skill_summary_lines(skill_state, agent_home),
         "",
         "## Official Validated Advice Summary",
         *artifact_summary_lines("validated_advice", *artifact_states["validated_advice"][1:]),
@@ -577,7 +631,7 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- execution mutation path: none",
         "",
         "## Open Questions",
-        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates, outcome_payloads, policy_state[1]),
+        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates, outcome_payloads, policy_state[1], skill_state[1]),
         "",
     ]
     return "\n".join(lines)

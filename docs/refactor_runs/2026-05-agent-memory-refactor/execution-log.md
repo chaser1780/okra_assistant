@@ -527,3 +527,65 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:25:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check`
+
+## 2026-05-28 Phase 6 Strategy Skill Curator
+
+- Added `scripts/strategy_skill_models.py` with strict validation for:
+  - `strategy_skill.v1` Markdown frontmatter and required sections;
+  - `strategy_skill_event.v1` append-only lifecycle events;
+  - `strategy_skill_registry.v1` registry entries and summaries;
+  - allowed skill outputs versus forbidden `hard_block`, `force_trade`,
+    direct mutation, and execution commands.
+- Added `scripts/strategy_skill_store.py` for:
+  - deterministic strategy-skill paths under `db/strategy_skills/<skill_id>/`;
+  - registry/Markdown consistency checks;
+  - append-only skill event logs;
+  - default skill-pack construction that excludes archived skills and caps
+    active skills by scope;
+  - in-memory action-ticket skill ref/output recording helper without writing
+    ticket files.
+- Added `scripts/run_skill_curator.py` as the standalone Phase 6 curator:
+  - reads `db/strategy_memory/policies.json`;
+  - skips archived policies and unsupported/no-support clusters;
+  - writes draft/candidate strategy skills by default;
+  - keeps automatic active promotion disabled.
+- Extended artifact boundary and project/test layouts so
+  `db/strategy_skills/` is allowed only under `learning_only` writes.
+- Extended the CLI/Markdown review renderer with a `Strategy Skill Status`
+  section so the shadow review can display registry status, active count, and
+  auto-active promotion count.
+- Added `tests/test_strategy_skills.py` for:
+  - skill Markdown frontmatter validation;
+  - registry-to-skill-file matching;
+  - draft/candidate creation from a policy-cluster fixture;
+  - active promotion staying disabled with auto-active count zero;
+  - archived skill exclusion from the default skill pack;
+  - hard-block/force-trade output rejection;
+  - action-ticket skill refs/outputs recorded in memory only;
+  - append-only idempotent event logs;
+  - registry round-trip/boundary checks;
+  - CLI execution.
+- Generated local ignored strategy skill artifacts for `2026-05-22`:
+  - `db/strategy_skills/registry.json` with 2 skills:
+    `draft=1`, `candidate=1`, `active=0`;
+  - `db/strategy_skills/portfolio_cash_defense_repeat_hold_review_v1/skill.md`;
+  - `db/strategy_skills/portfolio_cash_defense_repeat_hold_review_v1/events.jsonl`;
+  - `db/strategy_skills/portfolio_core_long_term_repeat_scheduled_dca_review_v1/skill.md`;
+  - `db/strategy_skills/portfolio_core_long_term_repeat_scheduled_dca_review_v1/events.jsonl`.
+- Regenerated local ignored Markdown review:
+  `db/refactor_reviews/2026-05-22.md`, now showing strategy skill status.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\strategy_skill_models.py scripts\strategy_skill_store.py scripts\run_skill_curator.py scripts\render_refactor_review.py tests\test_strategy_skills.py tests\test_refactor_review_markdown.py`
+  - `python -B -X utf8 -m unittest tests.test_strategy_skills tests.test_refactor_review_markdown`
+  - `python -B -X utf8 -m unittest tests.test_adaptive_policies tests.test_action_tickets`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 scripts\run_skill_curator.py --generated-at 2026-05-28T00:40:00+08:00`
+  - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:45:00+08:00`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `git diff --check`
