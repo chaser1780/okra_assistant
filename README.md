@@ -178,6 +178,16 @@ Run today analysis:
 python "F:\okra_assistant\scripts\run_today_analysis.py" --date 2026-05-08
 ```
 
+Build the Phase 8 official-advice compatibility preview from shadow artifacts:
+
+```powershell
+python -B -X utf8 "F:\okra_assistant\scripts\build_official_advice_compat_preview.py" --date 2026-05-22 --format json
+```
+
+This writes only under `db/refactor_shadow_runs/` and does not replace
+`db/llm_advice/`, `db/validated_advice/`, ledger, execution sync, portfolio
+state, or long memory.
+
 Run long-memory analysis manually:
 
 ```powershell

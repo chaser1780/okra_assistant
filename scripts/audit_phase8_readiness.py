@@ -333,12 +333,47 @@ def _count_json_array(path: Path, key: str) -> int:
     return len(value) if isinstance(value, list) else 0
 
 
+def _compat_preview_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "refactor_shadow_runs" / f"{report_date}__official_advice_compat_preview" / "official_advice_compat_preview.json"
+
+
+def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]:
+    path = _compat_preview_path(agent_home, report_date)
+    if not path.exists():
+        return {
+            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
+            "exists": False,
+            "official_compatible_advice": False,
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
+            "exists": True,
+            "official_compatible_advice": False,
+            "error": str(exc),
+        }
+    summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
+    return {
+        "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
+        "exists": True,
+        "official_compatible_advice": bool(summary.get("official_compatible_advice")),
+        "committee_bundle_compatible": bool(summary.get("committee_bundle_compatible")),
+        "llm_advice_compatible": bool(summary.get("llm_advice_compatible")),
+        "official_output_unchanged": bool(summary.get("official_output_unchanged")),
+        "fallback_switch_active": bool(summary.get("fallback_switch_active")),
+        "missing_required_fields": list(summary.get("missing_required_fields", []) or []),
+    }
+
+
 def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved: bool) -> list[dict[str, Any]]:
     action_ticket_path = agent_home / "db" / "action_tickets" / f"{report_date}.json"
     retrieval_path = agent_home / "db" / "retrieval_packs" / f"{report_date}.json"
     debate_path = agent_home / "db" / "action_debates" / f"{report_date}.json"
     review_path = agent_home / "db" / "refactor_reviews" / f"{report_date}.md"
     outcome_count = len(list((agent_home / "db" / "outcome_events").glob(f"{report_date}__*.json")))
+    compat_preview = _compat_preview_status(agent_home, report_date)
 
     shadow_chain_ready = all(path.exists() for path in (action_ticket_path, retrieval_path, debate_path, review_path))
     action_ticket_count = _count_json_array(action_ticket_path, "tickets")
@@ -348,13 +383,14 @@ def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved
     return [
         {
             "gate_id": "new_chain_official_compatible_advice",
-            "status": "partial" if shadow_chain_ready else "missing",
-            "detail": "Shadow chain exists, but no official-compatible adapter/fallback switch is active.",
+            "status": "ready" if compat_preview["official_compatible_advice"] else ("partial" if shadow_chain_ready else "missing"),
+            "detail": "Official-compatible shadow preview exists; fallback switch is still separate." if compat_preview["official_compatible_advice"] else "Shadow chain exists, but no official-compatible adapter preview is available.",
             "evidence": {
                 "action_ticket_count": action_ticket_count,
                 "retrieval_pack_count": pack_count,
                 "debate_count": debate_count,
                 "markdown_review_exists": review_path.exists(),
+                "compat_preview": compat_preview,
             },
         },
         {
@@ -381,7 +417,7 @@ def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved
         {
             "gate_id": "fallback_switch",
             "status": "missing",
-            "detail": "No official-path fallback switch has been added yet.",
+            "detail": "No official-path fallback switch has been added yet; preview records only the future switch design.",
         },
         {
             "gate_id": "rollback_path",
@@ -426,6 +462,7 @@ def build_phase8_audit(
             _artifact_status(home, f"db/retrieval_packs/{date_text}.json"),
             _artifact_status(home, f"db/action_debates/{date_text}.json"),
             _artifact_status(home, f"db/refactor_reviews/{date_text}.md"),
+            _artifact_status(home, f"db/refactor_shadow_runs/{date_text}__official_advice_compat_preview/official_advice_compat_preview.json"),
         ],
         "consumer_map": CONSUMER_MAP,
         "mutation_boundaries": MUTATION_BOUNDARIES,

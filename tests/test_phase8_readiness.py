@@ -67,6 +67,47 @@ class Phase8ReadinessAuditTests(unittest.TestCase):
         self.assertIn("new_chain_official_compatible_advice", audit["blocking_gates"])
         self.assertNotIn("explicit_promotion_decision", audit["blocking_gates"])
 
+    def test_compat_preview_satisfies_adapter_gate_but_not_promotion(self) -> None:
+        for relative in (
+            f"db/validated_advice/{REPORT_DATE}.json",
+            f"db/action_tickets/{REPORT_DATE}.json",
+            f"db/retrieval_packs/{REPORT_DATE}.json",
+            f"db/action_debates/{REPORT_DATE}.json",
+        ):
+            self.agent.write_json(relative, {"report_date": REPORT_DATE})
+        self.agent.write_text(f"db/refactor_reviews/{REPORT_DATE}.md", "# ready\n")
+        self.agent.write_json(
+            f"db/refactor_shadow_runs/{REPORT_DATE}__official_advice_compat_preview/official_advice_compat_preview.json",
+            {
+                "schema_version": "official_advice_compat_preview.v1",
+                "report_date": REPORT_DATE,
+                "write_scope": "shadow_only",
+                "non_executable": True,
+                "summary": {
+                    "official_compatible_advice": True,
+                    "committee_bundle_compatible": True,
+                    "llm_advice_compatible": True,
+                    "official_output_unchanged": True,
+                    "fallback_switch_active": False,
+                    "missing_required_fields": [],
+                },
+            },
+        )
+
+        audit = build_phase8_audit(
+            self.agent.root,
+            REPORT_DATE,
+            generated_at="2026-05-28T10:00:00+08:00",
+            promotion_approved=True,
+        )
+
+        self.assertFalse(audit["promotion_ready"])
+        self.assertNotIn("new_chain_official_compatible_advice", audit["blocking_gates"])
+        self.assertIn("fallback_switch", audit["blocking_gates"])
+        compat_gate = next(item for item in audit["required_evidence"] if item["gate_id"] == "new_chain_official_compatible_advice")
+        self.assertEqual("ready", compat_gate["status"])
+        self.assertTrue(compat_gate["evidence"]["compat_preview"]["official_compatible_advice"])
+
     def test_markdown_renders_candidate_and_boundaries(self) -> None:
         audit = build_phase8_audit(self.agent.root, REPORT_DATE, generated_at="2026-05-28T10:00:00+08:00")
 

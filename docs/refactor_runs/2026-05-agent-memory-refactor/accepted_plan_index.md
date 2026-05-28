@@ -173,6 +173,7 @@ Implementation contract documents:
 - `schema_examples/strategy_skill.example.md`
 - `hard_constraints_inventory.md`
 - `phase8_downstream_consumer_map.md`
+- `scripts/build_official_advice_compat_preview.py`
 - `phase_checklists/phase_0_schema_lock.md`
 - `phase_checklists/phase_1_action_ticket_shadow.md`
 - `phase_checklists/phase_2_layered_retrieval_pack.md`
@@ -227,6 +228,9 @@ Accepted decisions:
   facts.
 - Strategy skills stay draft/candidate by default and require evidence or user
   approval before activation.
+- Phase 8 compatibility preview may prove official-advice shape compatibility,
+  but it is not a fallback switch and does not authorize official-path
+  promotion.
 
 ## Cross-File Coverage
 

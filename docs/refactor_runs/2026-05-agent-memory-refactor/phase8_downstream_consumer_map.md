@@ -5,6 +5,20 @@ Status: pre-promotion audit. No official-path replacement has started.
 This document satisfies Phase 8 step 1 and records the current downstream
 consumer map before any legacy daily-analysis responsibility is moved.
 
+Update after Phase 8 step 3 preview:
+
+- `scripts/build_official_advice_compat_preview.py` now builds a
+  non-executable official-advice compatibility preview from action tickets,
+  retrieval packs, and action debates.
+- The preview writes only to
+  `db/refactor_shadow_runs/<date>__official_advice_compat_preview/official_advice_compat_preview.json`.
+- It produces committee-bundle-like, final-advice-like, and
+  validated-section-like preview shapes for review.
+- It does not write `db/committee_decision_bundle`, `db/llm_advice`,
+  `db/validated_advice`, decision ledger, execution sync, portfolio state, or
+  long memory.
+- No fallback switch or official-path promotion is active yet.
+
 ## Boundary Decision
 
 Phase 8 is not ready for official-path mutation yet.
@@ -22,6 +36,10 @@ Current state:
 
 Therefore the next safe Phase 8 step is a read-only readiness audit and
 compatibility map, not a pipeline replacement.
+
+After the compatibility preview exists, the next safe step remains fallback
+switch design and explicit rollback documentation before any official-path
+mutation.
 
 ## Official Consumer Areas
 
@@ -133,7 +151,6 @@ Do not replace these first:
 The readiness audit currently marks promotion as blocked until all of these are
 true:
 
-- new chain has an official-compatible adapter;
 - fallback switch exists and is documented;
 - old/new comparison is available for more than a single golden date;
 - outcome examples cover enough real dates to expose obvious regressions;
@@ -154,4 +171,23 @@ Markdown output is available with:
 
 ```powershell
 python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --format markdown
+```
+
+## Compatibility Preview Command
+
+Use this command to regenerate the current preview evidence:
+
+```powershell
+python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --format json
+```
+
+For the current golden date, the preview reports:
+
+```text
+official_compatible_advice=true
+committee_bundle_compatible=true
+llm_advice_compatible=true
+fallback_switch_active=false
+promotion_ready=false
+official_paths_written=[]
 ```

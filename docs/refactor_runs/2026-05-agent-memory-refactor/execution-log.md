@@ -693,3 +693,76 @@ No implementation entries have been added yet.
   - no edits to `scripts/execution_sync.py`;
   - no edits to portfolio-state, execution-sync, or long-memory mutation
     endpoints.
+
+## 2026-05-28 Phase 8 Official Advice Compatibility Preview
+
+- Added `scripts/build_official_advice_compat_preview.py` as a standalone
+  shadow-only compatibility adapter preview:
+  - reads `db/action_tickets/<date>.json`;
+  - reads `db/retrieval_packs/<date>.json`;
+  - reads `db/action_debates/<date>.json`;
+  - optionally compares against `db/validated_advice/<date>.json`;
+  - validates source hashes so mixed old/new shadow inputs are rejected;
+  - writes only to
+    `db/refactor_shadow_runs/<date>__official_advice_compat_preview/official_advice_compat_preview.json`.
+- The preview produces three review-only compatibility shapes:
+  - `committee_decision_bundle_preview`, matching the fields expected by the
+    future replacement target
+    `scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle`;
+  - `final_advice_preview`, matching the `market_view`, `fund_decisions`, and
+    `cross_fund_observations` shape consumed before validation;
+  - `validated_action_sections_preview`, grouped into `tactical_actions`,
+    `dca_actions`, and `hold_actions` for downstream contract review only.
+- Extended `scripts/audit_phase8_readiness.py` so the
+  `new_chain_official_compatible_advice` gate becomes ready when the preview
+  exists and reports `official_compatible_advice=true`.
+- Promotion remains blocked by design:
+  - `fallback_switch_active=false`;
+  - `promotion_ready=false`;
+  - no explicit official-path promotion decision exists;
+  - outcome examples and regression baselines are still partial.
+- Generated the real local preview for `2026-05-22`:
+  - `ticket_count=15`;
+  - `committee_decision_count=15`;
+  - `final_advice_decision_count=15`;
+  - `validated_section_preview_count=15`;
+  - `official_compatible_advice=true`;
+  - `committee_bundle_compatible=true`;
+  - `llm_advice_compatible=true`;
+  - `official_paths_written=[]`.
+- The readiness audit for `2026-05-22` now reports:
+  - `official_path_mutation_allowed=false`;
+  - `promotion_ready=false`;
+  - `new_chain_official_compatible_advice=ready`;
+  - remaining blocking gates:
+    `outcome_examples`, `regression_baselines`, `fallback_switch`,
+    `rollback_path`, `explicit_promotion_decision`.
+- Added `tests/test_official_advice_compat_preview.py` covering:
+  - official-compatible preview shape;
+  - no official artifact mutation;
+  - golden `017641` scheduled-DCA mapping into final advice;
+  - source-hash mismatch rejection;
+  - CLI JSON summary output.
+- Extended `tests/test_phase8_readiness.py` to prove the compatibility preview
+  satisfies only the adapter gate and does not make promotion ready.
+- Updated README, accepted-plan index, task board, and Phase 8 consumer map.
+- Official-path mutation remained untouched:
+  - no edits to `scripts/run_daily_pipeline.py`;
+  - no edits to `scripts/generate_llm_advice.py`;
+  - no edits to `scripts/validate_llm_advice.py`;
+  - no edits to `scripts/execution_sync.py`;
+  - no edits to decision ledger, portfolio state, execution sync, or long
+    memory mutation paths.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\build_official_advice_compat_preview.py scripts\audit_phase8_readiness.py scripts\artifact_boundary.py tests\test_official_advice_compat_preview.py tests\test_phase8_readiness.py`
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness`
+  - `python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --generated-at 2026-05-28T11:00:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-28T11:05:00+08:00`
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_review_markdown`
+  - `python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_multiagent_and_review tests.test_validation_and_trade`
+  - `python -B -X utf8 -m unittest tests.test_execution_sync tests.test_revaluation_and_realtime tests.test_long_memory`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest discover -s tests -p "test_rag_*.py"`
+  - `npm run build`
+  - `npm run tauri:check`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `git diff --check` (CRLF warnings only; no whitespace errors)
