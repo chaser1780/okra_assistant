@@ -460,3 +460,70 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-23T23:30:00+08:00`
   - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+5 --generated-at 2026-05-27T23:30:00+08:00`
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-22T21:50:00+08:00`
+
+## 2026-05-28 Phase 5 Adaptive Policy Memory
+
+- Added `scripts/adaptive_policy_models.py` with strict validation for:
+  - append-only `adaptive_policy_event.v1` records;
+  - materialized `adaptive_policy.v1` current policy records;
+  - `adaptive_policy_store.v1` policy-store artifacts.
+- Added `scripts/update_adaptive_policies.py` as the standalone Phase 5 updater:
+  - reads `db/outcome_events/<base_date>__<horizon>.json`;
+  - reads matching `db/action_tickets/<base_date>.json` for ticket scope;
+  - appends only new policy events to
+    `db/strategy_memory/policy_events.jsonl`;
+  - materializes `db/strategy_memory/policies.json` from the full event log.
+- Policy memory remains learning-only and non-executable:
+  - allowed effects are `confidence_delta`, `size_multiplier`,
+    `wait_trigger`, and `note`;
+  - forbidden effects are `block`, `force_trade`, and
+    `change_hard_constraint`;
+  - `policies.json` sets `hard_block_allowed=false`;
+  - active promotion requires five supportive outcomes or explicit
+    `user_approve` event.
+- Implemented lifecycle/cap behavior:
+  - one supportive outcome remains `draft`;
+  - repeated support promotes to `candidate`;
+  - enough support or explicit user approval promotes to `active`;
+  - contradictions weaken a policy and can archive it when the contradiction
+    ratio exceeds the configured threshold;
+  - per-scope caps downgrade/archive excess policies without deleting event
+    history.
+- Extended artifact boundary and project/test layouts so
+  `db/strategy_memory/` is allowed only under `learning_only` writes.
+- Extended the CLI/Markdown review renderer with an `Adaptive Policy Status`
+  section so the shadow review can display the policy-store summary after
+  outcome evaluation.
+- Added `tests/test_adaptive_policies.py` for:
+  - supportive outcome promotion;
+  - active promotion threshold and user approval;
+  - contradiction weakening/archive behavior;
+  - pending/neutral outcome no-op behavior;
+  - per-scope policy caps;
+  - append-only idempotence;
+  - hard-block effect rejection;
+  - malformed JSONL isolation;
+  - round-trip/boundary checks;
+  - CLI execution.
+- Generated local ignored policy artifacts for `2026-05-22` from T+1/T+5
+  outcomes:
+  - `db/strategy_memory/policy_events.jsonl` with 14 valid events;
+  - `db/strategy_memory/policies.json` with 4 materialized policies:
+    `draft=1`, `candidate=1`, `weakened=1`, `archived=1`.
+- Regenerated local ignored Markdown review:
+  `db/refactor_reviews/2026-05-22.md`, now showing adaptive policy status.
+- Confirmed official inputs were unchanged after generation:
+  - `db/validated_advice/2026-05-22.json` SHA256
+    `2C90266F95CD28474A7AF8030B924E4574FF67E44DED8665BE60627D96B831A8`
+  - `db/portfolio_state/current.json` SHA256
+    `BD5FE613BF72FB7973FBB96038910B111D2EDBAB5D2AD63C48E65E5E61B4A3F0`
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\adaptive_policy_models.py scripts\update_adaptive_policies.py scripts\render_refactor_review.py tests\test_adaptive_policies.py tests\test_refactor_review_markdown.py`
+  - `python -B -X utf8 -m unittest tests.test_adaptive_policies tests.test_refactor_review_markdown`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
+  - `python -B -X utf8 -m unittest tests.test_long_memory tests.test_action_outcomes`
+  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 scripts\update_adaptive_policies.py --date 2026-05-22 --horizon T+1 --horizon T+5 --generated-at 2026-05-28T00:20:00+08:00`
+  - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:25:00+08:00`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `git diff --check`

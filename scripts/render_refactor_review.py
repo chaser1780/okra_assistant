@@ -33,6 +33,10 @@ def outcome_event_path(agent_home: Path, report_date: str, horizon: str) -> Path
     return agent_home / "db" / "outcome_events" / f"{report_date}__{safe_horizon}.json"
 
 
+def policy_store_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "strategy_memory" / "policies.json"
+
+
 def read_json_artifact(path: Path) -> tuple[dict[str, Any], str, str]:
     if not path.exists():
         return {}, "not_run", "missing artifact"
@@ -392,12 +396,52 @@ def outcome_summary_lines(outcome_artifacts: dict[str, tuple[Path, dict[str, Any
     return rows
 
 
+def policy_summary_lines(policy_state: tuple[Path, dict[str, Any], str, str], agent_home: Path) -> list[str]:
+    path, payload, state, detail = policy_state
+    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+    rows = [
+        f"- path: {relative_posix(path, agent_home)}",
+        f"- state: {state} ({detail})",
+        f"- write_scope: {payload.get('write_scope', '')}",
+        f"- non_executable: {fmt_bool(payload.get('non_executable'))}",
+        f"- hard_block_allowed: {fmt_bool(payload.get('hard_block_allowed'))}",
+        f"- policy_count: {summary.get('policy_count', 0)}",
+        f"- status_counts: {json.dumps(summary.get('status_counts', {}), ensure_ascii=False, sort_keys=True)}",
+        f"- invalid_event_count: {summary.get('invalid_event_count', 0)}",
+    ]
+    policies = payload.get("policies", []) if isinstance(payload.get("policies"), list) else []
+    if policies:
+        rows.extend(["", "| Policy | Status | Scope | Support | Contradiction | Effect |", "|---|---|---|---:|---:|---|"])
+        for policy in policies[:10]:
+            if not isinstance(policy, dict):
+                continue
+            rows.append(
+                "| "
+                + " | ".join(
+                    md_escape(value)
+                    for value in (
+                        policy.get("policy_id", ""),
+                        policy.get("status", ""),
+                        policy.get("scope", ""),
+                        policy.get("support_count", 0),
+                        policy.get("contradiction_count", 0),
+                        f"{policy.get('effect_type', '')}={policy.get('effect_value', '')}",
+                    )
+                )
+                + " |"
+            )
+        if len(policies) > 10:
+            rows.append(f"| ... {len(policies) - 10} more | | | | | |")
+    return rows
+
+
 def open_questions(
     artifact_states: dict[str, tuple[Path, dict[str, Any], str, str]],
     action_tickets: dict[str, Any],
     retrieval_packs: dict[str, Any],
     action_debates: dict[str, Any],
     outcome_payloads: dict[str, dict[str, Any]] | None = None,
+    policy_payload: dict[str, Any] | None = None,
 ) -> list[str]:
     questions: list[str] = []
     for name, (_path, _payload, state, detail) in artifact_states.items():
@@ -420,6 +464,12 @@ def open_questions(
             questions.append(f"- outcome_events {horizon}: pending_count={summary.get('pending_count')}")
         if summary.get("blocked_count"):
             questions.append(f"- outcome_events {horizon}: blocked_count={summary.get('blocked_count')}")
+    if policy_payload:
+        summary = policy_payload.get("summary", {}) if isinstance(policy_payload.get("summary"), dict) else {}
+        if summary.get("invalid_event_count"):
+            questions.append(f"- adaptive_policies: invalid_event_count={summary.get('invalid_event_count')}")
+        if policy_payload.get("hard_block_allowed") is not False:
+            questions.append("- adaptive_policies: hard_block_allowed is not false")
     if not questions:
         questions.append("- No blocking review question detected by the Markdown renderer.")
     return questions
@@ -471,12 +521,13 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         horizon: (path, *read_json_artifact(path))
         for horizon, path in outcome_paths.items()
     }
+    policy_state = (policy_store_path(agent_home), *read_json_artifact(policy_store_path(agent_home)))
     validated = artifact_states["validated_advice"][1]
     action_tickets = artifact_states["action_tickets"][1]
     retrieval_packs = artifact_states["retrieval_packs"][1]
     action_debates = artifact_states["action_debates"][1]
     outcome_payloads = {horizon: item[1] for horizon, item in outcome_states.items() if item[2] != "not_run"}
-    review_status = overall_status(artifact_states, outcome_states)
+    review_status = overall_status(artifact_states, {**outcome_states, "adaptive_policies": policy_state})
 
     lines = [
         f"# Refactor Shadow Review {report_date}",
@@ -486,13 +537,16 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- display_only: true",
         "- non_executable: true",
         "- writes_official_outputs: false",
-        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event",
+        "- scope: validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event -> adaptive_policy",
         "",
         "## Artifact Status",
         *artifact_rows(artifact_states, agent_home),
         "",
         "## Outcome Event Status",
         *outcome_summary_lines(outcome_states),
+        "",
+        "## Adaptive Policy Status",
+        *policy_summary_lines(policy_state, agent_home),
         "",
         "## Official Validated Advice Summary",
         *artifact_summary_lines("validated_advice", *artifact_states["validated_advice"][1:]),
@@ -523,7 +577,7 @@ def render_markdown(agent_home: Path, report_date: str, *, generated_at: str | N
         "- execution mutation path: none",
         "",
         "## Open Questions",
-        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates, outcome_payloads),
+        *open_questions(artifact_states, action_tickets, retrieval_packs, action_debates, outcome_payloads, policy_state[1]),
         "",
     ]
     return "\n".join(lines)

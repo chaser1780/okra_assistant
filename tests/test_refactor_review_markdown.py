@@ -25,6 +25,7 @@ from evaluate_action_ticket_outcomes import run_builder as run_outcome_builder
 from build_layered_retrieval_pack import run_builder as run_retrieval_pack_builder
 from helpers import TempAgentHome
 from render_refactor_review import refactor_review_path, review_payload, run_renderer
+from update_adaptive_policies import run_updater as run_policy_updater
 
 
 def _load_repo_json(relative: str) -> dict:
@@ -88,12 +89,16 @@ class RefactorReviewMarkdownTests(unittest.TestCase):
         self.build_ready_artifacts()
         self.add_real_outcome_inputs()
         run_outcome_builder(self.agent.root, REPORT_DATE, "T+1", generated_at="2026-05-23T23:30:00+08:00")
+        run_policy_updater(self.agent.root, REPORT_DATE, ["T+1"], generated_at="2026-05-23T23:45:00+08:00")
 
         _path, markdown = run_renderer(self.agent.root, REPORT_DATE, generated_at=REVIEW_GENERATED_AT)
 
-        self.assertIn("validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event", markdown)
+        self.assertIn("validated_advice -> action_ticket -> retrieval_pack -> action_debate -> outcome_event -> adaptive_policy", markdown)
         self.assertIn("## Outcome Event Status", markdown)
         self.assertIn("| T+1 | ready | 15 |", markdown)
+        self.assertIn("## Adaptive Policy Status", markdown)
+        self.assertIn("- hard_block_allowed: false", markdown)
+        self.assertIn("- policy_count:", markdown)
         self.assertIn("T+1:", markdown)
 
     def test_partial_review_renders_missing_shadow_artifacts_without_exception(self) -> None:

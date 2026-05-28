@@ -30,6 +30,7 @@ SHADOW_ALLOWED_PREFIXES = (
 LEARNING_ALLOWED_PREFIXES = (
     "db/refactor_shadow_runs/",
     "db/outcome_events/",
+    "db/strategy_memory/",
     "tests/fixtures/golden_slices/",
 )
 
