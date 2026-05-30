@@ -219,6 +219,29 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual("avoided_loss", event["outcome_label"])
         self.assertEqual("blocked_add_or_cash_hold", event["decision_context"]["exposure_context"])
 
+    def test_existing_position_blocked_add_hold_is_not_learning_eligible(self) -> None:
+        ticket_path = self.agent.root / "db" / "action_tickets" / f"{BASE_DATE}.json"
+        payload = json.loads(ticket_path.read_text(encoding="utf-8"))
+        payload["tickets"] = [self.ticket("HOLD", "hold", 0.0)]
+        payload["tickets"][0]["legacy_mapping"]["model_action"] = "add"
+        ticket_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.agent.write_json(
+            "raw/quotes/2026-03-11.json",
+            {
+                "report_date": "2026-03-11",
+                "generated_at": "2026-03-11T16:00:00+08:00",
+                "funds": [self.quote("HOLD", 2.1, "2026-03-11")],
+            },
+        )
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        event = artifact.to_dict()["events"][0]
+
+        self.assertEqual("neutral", event["outcome_label"])
+        self.assertEqual("blocked_add_with_existing_position", event["decision_context"]["exposure_context"])
+        self.assertFalse(event["decision_context"]["learning_eligible"])
+        self.assertEqual("blocked_add_with_existing_position_mixed_follow_through_not_scored_for_learning", event["diagnostic_label"])
+
     def test_uses_next_available_quote_after_calendar_target(self) -> None:
         (self.agent.root / "raw" / "quotes" / "2026-03-11.json").unlink()
         self.agent.write_json("raw/quotes/2026-03-12.json", {
@@ -240,6 +263,7 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual("2026-03-12", payload["evaluation_date"])
         self.assertEqual("2026-03-12", payload["evaluation_date_used"])
         self.assertEqual("next_available_official_nav", payload["date_match_type"])
+        self.assertEqual(["2026-03-12"], payload["summary"]["actual_evaluation_dates"])
         self.assertEqual(3, payload["summary"]["scored_count"])
 
     def test_uses_next_available_quote_when_fund_missing_on_target_quote_file(self) -> None:
@@ -265,6 +289,7 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual("2026-03-12", hold_event["evaluation_date"])
         self.assertEqual("2026-03-12", hold_event["official_nav_end"]["evaluation_date_used"])
         self.assertEqual("next_available_official_nav", hold_event["official_nav_end"]["evaluation_file_match_type"])
+        self.assertEqual(["2026-03-11", "2026-03-12"], payload["summary"]["actual_evaluation_dates"])
         self.assertIn("raw/quotes/2026-03-12.json", quote_sources)
 
     def test_pending_when_evaluation_quote_file_missing(self) -> None:

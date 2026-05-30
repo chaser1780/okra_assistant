@@ -115,6 +115,49 @@ class Phase8ReadinessAuditTests(unittest.TestCase):
         self.assertFalse(compat_gate["evidence"]["compat_preview"]["official_compatible_advice"])
         self.assertFalse(compat_gate["evidence"]["compat_preview"]["adapter_gate_ready"])
 
+    def test_damaged_preview_summary_cannot_pass_adapter_gate(self) -> None:
+        for relative in (
+            f"db/validated_advice/{REPORT_DATE}.json",
+            f"db/action_tickets/{REPORT_DATE}.json",
+            f"db/retrieval_packs/{REPORT_DATE}.json",
+            f"db/action_debates/{REPORT_DATE}.json",
+        ):
+            self.agent.write_json(relative, {"report_date": REPORT_DATE})
+        self.agent.write_text(f"db/refactor_reviews/{REPORT_DATE}.md", "# ready\n")
+        self.agent.write_json(
+            f"db/refactor_shadow_runs/{REPORT_DATE}__official_advice_compat_preview/official_advice_compat_preview.json",
+            {
+                "schema_version": "wrong",
+                "report_date": "2026-05-21",
+                "write_scope": "official",
+                "non_executable": False,
+                "display_only": False,
+                "source_artifacts": [],
+                "summary": {
+                    "official_shape_compatible": True,
+                    "official_behavior_comparable": True,
+                    "official_adapter_dry_run_passed": True,
+                    "source_hash_verified": True,
+                    "official_compatible_advice": True,
+                    "official_output_unchanged": True,
+                    "fallback_switch_active": True,
+                    "official_paths_written": [],
+                    "missing_required_fields": [],
+                },
+                "comparison_to_official": {"mismatched_count": 0},
+            },
+        )
+
+        audit = build_phase8_audit(self.agent.root, REPORT_DATE, promotion_approved=True)
+        compat_gate = next(item for item in audit["required_evidence"] if item["gate_id"] == "new_chain_official_compatible_advice")
+        compat_preview = compat_gate["evidence"]["compat_preview"]
+
+        self.assertEqual("partial", compat_gate["status"])
+        self.assertFalse(compat_preview["official_compatible_advice"])
+        self.assertFalse(compat_preview["adapter_gate_ready"])
+        self.assertFalse(compat_preview["preview_contract_valid"])
+        self.assertFalse(compat_preview["source_hash_verified"])
+
     def test_markdown_renders_candidate_and_boundaries(self) -> None:
         audit = build_phase8_audit(self.agent.root, REPORT_DATE, generated_at="2026-05-28T10:00:00+08:00")
 

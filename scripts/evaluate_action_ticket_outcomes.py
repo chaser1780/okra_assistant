@@ -260,7 +260,9 @@ def decision_context_for(ticket: dict[str, Any], position: dict[str, Any]) -> di
     }
     existing = has_existing_position(position)
     if action_verb == "hold":
-        if existing:
+        if existing and model_action and model_action != "hold":
+            exposure_context = "blocked_add_with_existing_position"
+        elif existing:
             exposure_context = "hold_existing_position"
         elif model_action and model_action != "hold":
             exposure_context = "blocked_add_or_cash_hold"
@@ -279,7 +281,7 @@ def decision_context_for(ticket: dict[str, Any], position: dict[str, Any]) -> di
         "has_existing_position": existing,
         "position_value": safe_float(position.get("current_value")) if position else None,
         "model_action": model_action,
-        "learning_eligible": exposure_context not in {"unclear_hold_context", "unknown"},
+        "learning_eligible": exposure_context not in {"blocked_add_with_existing_position", "unclear_hold_context", "unknown"},
     }
 
 
@@ -297,6 +299,8 @@ def outcome_label(action_verb: str, actual_return_pct: float, exposure_context: 
             if actual_return_pct > 0:
                 return "missed_opportunity", "blocked_add_or_cash_hold_missed_positive_nav_follow_through"
             return "neutral", "blocked_add_or_cash_hold_neutral_nav_follow_through"
+        if exposure_context == "blocked_add_with_existing_position":
+            return "neutral", "blocked_add_with_existing_position_mixed_follow_through_not_scored_for_learning"
         return "neutral", "unclear_hold_context_not_scored_for_learning"
     if action_verb in {"reduce", "switch_out"}:
         if actual_return_pct < 0:
@@ -642,6 +646,7 @@ def evaluate_ticket(
 def summarize(events: list[OutcomeEvent]) -> dict[str, Any]:
     statuses = [event.scoring_status for event in events]
     learning_eligible_count = sum(1 for event in events if event.scoring_status == "scored" and event.decision_context.get("learning_eligible") is True)
+    actual_evaluation_dates = sorted({event.evaluation_date for event in events if event.scoring_status == "scored" and event.evaluation_date})
     return {
         "event_count": len(events),
         "scored_count": statuses.count("scored"),
@@ -649,6 +654,12 @@ def summarize(events: list[OutcomeEvent]) -> dict[str, Any]:
         "blocked_count": statuses.count("blocked"),
         "not_applicable_count": statuses.count("not_applicable"),
         "learning_eligible_count": learning_eligible_count,
+        "actual_evaluation_dates": actual_evaluation_dates,
+        "event_date_range": {
+            "min": actual_evaluation_dates[0] if actual_evaluation_dates else "",
+            "max": actual_evaluation_dates[-1] if actual_evaluation_dates else "",
+        },
+        "evaluation_policy": "target_date_then_next_available_official_nav_per_fund",
         "non_executable_violation_count": 0,
         "official_output_unchanged": True,
     }

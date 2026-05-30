@@ -165,7 +165,10 @@ class OutcomeEventArtifact:
         self.base_date = _date(self.base_date, "base_date")
         self.evaluation_date = _date(self.evaluation_date, "evaluation_date")
         self.target_date = _date(self.target_date or self.evaluation_date, "target_date")
-        self.evaluation_date_used = _date(self.evaluation_date_used or self.evaluation_date, "evaluation_date_used")
+        if self.evaluation_date_used:
+            self.evaluation_date_used = _date(self.evaluation_date_used, "evaluation_date_used")
+        else:
+            self.evaluation_date_used = ""
         self.date_match_type = str(self.date_match_type or "")
         self.horizon = _require(self.horizon, "horizon")
         self.generated_at = _require(self.generated_at, "generated_at")

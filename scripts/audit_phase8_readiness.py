@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -337,6 +338,55 @@ def _compat_preview_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "refactor_shadow_runs" / f"{report_date}__official_advice_compat_preview" / "official_advice_compat_preview.json"
 
 
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _validate_preview_contract(agent_home: Path, payload: dict[str, Any], report_date: str) -> dict[str, Any]:
+    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+    failures: list[str] = []
+    if payload.get("schema_version") != "official_advice_compat_preview.v1":
+        failures.append("schema_version")
+    if payload.get("report_date") != report_date:
+        failures.append("report_date")
+    if payload.get("write_scope") != "shadow_only":
+        failures.append("write_scope")
+    if payload.get("non_executable") is not True:
+        failures.append("non_executable")
+    if payload.get("display_only") is not True:
+        failures.append("display_only")
+    if summary.get("official_output_unchanged") is not True:
+        failures.append("official_output_unchanged")
+    if list(summary.get("official_paths_written", []) or []):
+        failures.append("official_paths_written")
+
+    hash_failures: list[str] = []
+    checked_source_count = 0
+    for item in payload.get("source_artifacts", []) or []:
+        if not isinstance(item, dict) or item.get("kind") == "builder":
+            continue
+        checked_source_count += 1
+        relative = str(item.get("path", "") or "")
+        expected = str(item.get("content_sha256", "") or "")
+        if not relative or not expected:
+            hash_failures.append(relative or "<missing_path>")
+            continue
+        source_path = agent_home / relative
+        if not source_path.exists() or _hash_file(source_path) != expected:
+            hash_failures.append(relative)
+    if checked_source_count == 0:
+        hash_failures.append("<no_verifiable_sources>")
+    if hash_failures:
+        failures.append("source_artifacts")
+
+    return {
+        "valid": not failures,
+        "failures": failures,
+        "source_hash_verified": not hash_failures,
+        "source_hash_failures": hash_failures,
+    }
+
+
 def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]:
     path = _compat_preview_path(agent_home, report_date)
     if not path.exists():
@@ -368,13 +418,15 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
         }
     summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
     comparison = payload.get("comparison_to_official", {}) if isinstance(payload, dict) and isinstance(payload.get("comparison_to_official"), dict) else {}
+    contract = _validate_preview_contract(agent_home, payload, report_date)
     fallback_switch_active = bool(summary.get("fallback_switch_active"))
     adapter_gate_ready = all(
         [
+            contract["valid"],
             bool(summary.get("official_shape_compatible")),
             bool(summary.get("official_behavior_comparable")),
             bool(summary.get("official_adapter_dry_run_passed")),
-            bool(summary.get("source_hash_verified")),
+            bool(summary.get("source_hash_verified")) and contract["source_hash_verified"],
             int(comparison.get("mismatched_count", 1) or 0) == 0,
             fallback_switch_active,
         ]
@@ -387,7 +439,10 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
         "official_shape_compatible": bool(summary.get("official_shape_compatible")),
         "official_behavior_comparable": bool(summary.get("official_behavior_comparable")),
         "official_adapter_dry_run_passed": bool(summary.get("official_adapter_dry_run_passed")),
-        "source_hash_verified": bool(summary.get("source_hash_verified")),
+        "source_hash_verified": bool(summary.get("source_hash_verified")) and contract["source_hash_verified"],
+        "preview_contract_valid": contract["valid"],
+        "preview_contract_failures": contract["failures"],
+        "source_hash_failures": contract["source_hash_failures"],
         "committee_bundle_compatible": bool(summary.get("committee_bundle_compatible")),
         "llm_advice_compatible": bool(summary.get("llm_advice_compatible")),
         "official_output_unchanged": bool(summary.get("official_output_unchanged")),

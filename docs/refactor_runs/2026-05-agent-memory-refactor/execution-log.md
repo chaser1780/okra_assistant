@@ -713,9 +713,9 @@ No implementation entries have been added yet.
     `cross_fund_observations` shape consumed before validation;
   - `validated_action_sections_preview`, grouped into `tactical_actions`,
     `dca_actions`, and `hold_actions` for downstream contract review only.
-- Extended `scripts/audit_phase8_readiness.py` so the
-  `new_chain_official_compatible_advice` gate becomes ready when the preview
-  exists and reports `official_compatible_advice=true`.
+- Extended `scripts/audit_phase8_readiness.py` with an initial adapter-preview
+  gate. This was later tightened on 2026-05-30; the old
+  `official_compatible_advice=true` summary-only interpretation is obsolete.
 - Promotion remains blocked by design:
   - `fallback_switch_active=false`;
   - `promotion_ready=false`;
@@ -726,14 +726,16 @@ No implementation entries have been added yet.
   - `committee_decision_count=15`;
   - `final_advice_decision_count=15`;
   - `validated_section_preview_count=15`;
-  - `official_compatible_advice=true`;
+  - `official_compatible_advice=true` under the obsolete summary-only
+    interpretation;
   - `committee_bundle_compatible=true`;
   - `llm_advice_compatible=true`;
   - `official_paths_written=[]`.
 - The readiness audit for `2026-05-22` now reports:
   - `official_path_mutation_allowed=false`;
   - `promotion_ready=false`;
-  - `new_chain_official_compatible_advice=ready`;
+  - `new_chain_official_compatible_advice=ready` under the obsolete
+    summary-only interpretation;
   - remaining blocking gates:
     `outcome_examples`, `regression_baselines`, `fallback_switch`,
     `rollback_path`, `explicit_promotion_decision`.
@@ -766,6 +768,43 @@ No implementation entries have been added yet.
   - `npm run tauri:check`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check` (CRLF warnings only; no whitespace errors)
+
+## 2026-05-30 Review Fix: Blocked-Add Hold Attribution And Preview Contract Audit
+
+- Tightened hold outcome attribution again:
+  - added `blocked_add_with_existing_position` for the case where a fund
+    already has a position but the model wanted to add and the validator or
+    committee resolved the action to hold;
+  - this mixed exposure/opportunity-cost case is now `learning_eligible=false`
+    and receives a neutral diagnostic label, so it cannot support or
+    contradict adaptive policies or strategy-skill candidates;
+  - pure `hold_existing_position` and pure `blocked_add_or_cash_hold` semantics
+    remain separated.
+- Clarified outcome artifact date reporting:
+  - event-level `evaluation_date` remains the actual quote date used for that
+    fund;
+  - summary now includes `actual_evaluation_dates`, `event_date_range`, and
+    `evaluation_policy=target_date_then_next_available_official_nav_per_fund`;
+  - empty `evaluation_date_used` no longer defaults to `evaluation_date` in the
+    model layer, so missing-after-target states stay visibly missing.
+- Hardened Phase 8 readiness audit:
+  - `_compat_preview_status` now revalidates preview `schema_version`,
+    `report_date`, `write_scope`, `non_executable`, `display_only`,
+    `official_output_unchanged`, and `official_paths_written`;
+  - source artifact hashes are recomputed from local files, and missing
+    verifiable sources fail the gate;
+  - handwritten or damaged preview summaries cannot make
+    `new_chain_official_compatible_advice` ready.
+- Cleaned the earlier Phase 8 log entry so the obsolete
+  `official_compatible_advice=true` summary-only gate is explicitly marked as
+  superseded.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\evaluate_action_ticket_outcomes.py scripts\outcome_event_models.py scripts\audit_phase8_readiness.py tests\test_action_outcomes.py tests\test_phase8_readiness.py`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_adaptive_policies tests.test_phase8_readiness`
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness tests.test_refactor_review_markdown tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph`
+  - `python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --generated-at 2026-05-30T11:00:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-30T11:05:00+08:00`
+  - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-30T11:10:00+08:00`
 
 ## 2026-05-30 Review Fix: Outcome Semantics And Phase 8 Gate Tightening
 
