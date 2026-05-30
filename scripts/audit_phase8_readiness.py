@@ -342,6 +342,10 @@ def _compat_preview_path(agent_home: Path, report_date: str) -> Path:
     return agent_home / "db" / "refactor_shadow_runs" / f"{report_date}__official_advice_compat_preview" / "official_advice_compat_preview.json"
 
 
+def _fallback_contract_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "phase8" / "fallback_contract.json"
+
+
 def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -522,6 +526,66 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
     }
 
 
+def _fallback_contract_status(agent_home: Path) -> dict[str, Any]:
+    path = _fallback_contract_path(agent_home)
+    relative = "db/phase8/fallback_contract.json"
+    if not path.exists():
+        return {
+            "path": relative,
+            "exists": False,
+            "fallback_switch_designed": False,
+            "fallback_switch_active": False,
+            "rollback_command_documented": False,
+            "official_path_mutation_allowed": False,
+            "contract_valid": False,
+            "failures": ["missing_contract"],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "path": relative,
+            "exists": True,
+            "fallback_switch_designed": False,
+            "fallback_switch_active": False,
+            "rollback_command_documented": False,
+            "official_path_mutation_allowed": False,
+            "contract_valid": False,
+            "failures": [f"invalid_json:{exc}"],
+        }
+    failures: list[str] = []
+    if not isinstance(payload, dict):
+        failures.append("root_object")
+        payload = {}
+    if payload.get("schema_version") != "phase8_fallback_contract.v1":
+        failures.append("schema_version")
+    if payload.get("write_scope") != "shadow_only":
+        failures.append("write_scope")
+    if payload.get("non_executable") is not True:
+        failures.append("non_executable")
+    switch = payload.get("fallback_switch", {}) if isinstance(payload.get("fallback_switch"), dict) else {}
+    rollback = payload.get("rollback", {}) if isinstance(payload.get("rollback"), dict) else {}
+    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+    if switch.get("env_var") != "OKRA_USE_SHADOW_ADVICE_ADAPTER":
+        failures.append("fallback_switch.env_var")
+    if switch.get("active") is not False or summary.get("fallback_switch_active") is not False:
+        failures.append("fallback_switch_active")
+    if summary.get("official_path_mutation_allowed") is not False:
+        failures.append("official_path_mutation_allowed")
+    if not str(rollback.get("powershell_command_draft", "") or "").strip():
+        failures.append("rollback.powershell_command_draft")
+    return {
+        "path": relative,
+        "exists": True,
+        "fallback_switch_designed": summary.get("fallback_switch_designed") is True,
+        "fallback_switch_active": summary.get("fallback_switch_active") is True or switch.get("active") is True,
+        "rollback_command_documented": summary.get("rollback_command_documented") is True and "rollback.powershell_command_draft" not in failures,
+        "official_path_mutation_allowed": summary.get("official_path_mutation_allowed") is True,
+        "contract_valid": not failures,
+        "failures": failures,
+    }
+
+
 def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved: bool) -> list[dict[str, Any]]:
     action_ticket_path = agent_home / "db" / "action_tickets" / f"{report_date}.json"
     retrieval_path = agent_home / "db" / "retrieval_packs" / f"{report_date}.json"
@@ -529,6 +593,7 @@ def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved
     review_path = agent_home / "db" / "refactor_reviews" / f"{report_date}.md"
     outcome_count = len(list((agent_home / "db" / "outcome_events").glob(f"{report_date}__*.json")))
     compat_preview = _compat_preview_status(agent_home, report_date)
+    fallback_contract = _fallback_contract_status(agent_home)
 
     shadow_chain_ready = all(path.exists() for path in (action_ticket_path, retrieval_path, debate_path, review_path))
     action_ticket_count = _count_json_array(action_ticket_path, "tickets")
@@ -575,13 +640,19 @@ def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved
         },
         {
             "gate_id": "fallback_switch",
-            "status": "missing",
-            "detail": "No official-path fallback switch has been added yet; preview records only the future switch design.",
+            "status": "partial" if fallback_contract["fallback_switch_designed"] else "missing",
+            "detail": "Fallback switch contract is documented but inactive; official path remains on the legacy chain."
+            if fallback_contract["fallback_switch_designed"]
+            else "No official-path fallback switch contract exists yet.",
+            "evidence": {"fallback_contract": fallback_contract},
         },
         {
             "gate_id": "rollback_path",
-            "status": "partial",
-            "detail": "Rollback rules are documented; no concrete official replacement rollback command exists yet.",
+            "status": "ready" if fallback_contract["rollback_command_documented"] else "partial",
+            "detail": "Rollback command is documented for future promotion; no official replacement is active."
+            if fallback_contract["rollback_command_documented"]
+            else "Rollback rules are documented; no concrete official replacement rollback command exists yet.",
+            "evidence": {"fallback_contract": fallback_contract},
         },
         {
             "gate_id": "explicit_promotion_decision",
@@ -601,6 +672,7 @@ def build_phase8_audit(
     home = resolve_agent_home(str(agent_home) if agent_home is not None else None)
     date_text = resolve_date(report_date)
     evidence = _evidence_statuses(home, date_text, promotion_approved=promotion_approved)
+    fallback_contract = _fallback_contract_status(home)
     blocking = [item["gate_id"] for item in evidence if item.get("status") != "ready"]
     mutation_violations = [item["path"] for item in MUTATION_BOUNDARIES if item.get("shadow_allowed")]
     covered_areas = {item["area"] for item in CONSUMER_MAP}
@@ -622,12 +694,17 @@ def build_phase8_audit(
             _artifact_status(home, f"db/action_debates/{date_text}.json"),
             _artifact_status(home, f"db/refactor_reviews/{date_text}.md"),
             _artifact_status(home, f"db/refactor_shadow_runs/{date_text}__official_advice_compat_preview/official_advice_compat_preview.json"),
+            _artifact_status(home, "db/phase8/fallback_contract.json"),
         ],
         "consumer_map": CONSUMER_MAP,
         "mutation_boundaries": MUTATION_BOUNDARIES,
         "first_replacement_candidate": FIRST_REPLACEMENT_CANDIDATE,
         "required_evidence": evidence,
-        "next_safe_step": "Add a compatibility adapter and fallback switch design before any official-path mutation.",
+        "next_safe_step": (
+            "Collect multi-date old/new comparison evidence and name the Phase 8 regression baseline before any official-path mutation."
+            if fallback_contract["fallback_switch_designed"]
+            else "Add a compatibility adapter and fallback switch design before any official-path mutation."
+        ),
     }
 
 

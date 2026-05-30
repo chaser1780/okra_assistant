@@ -20,6 +20,8 @@ from strategy_skill_models import (
 
 
 MAX_ACTIVE_SKILLS_PER_SCOPE = 5
+SKILL_PACK_SCHEMA_VERSION = "strategy_skill_pack.v1"
+SKILL_USAGE_SCHEMA_VERSION = "strategy_skill_usage.v1"
 
 
 def strategy_skills_dir(agent_home: Path) -> Path:
@@ -28,6 +30,14 @@ def strategy_skills_dir(agent_home: Path) -> Path:
 
 def registry_path(agent_home: Path) -> Path:
     return strategy_skills_dir(agent_home) / "registry.json"
+
+
+def skill_pack_path(agent_home: Path) -> Path:
+    return strategy_skills_dir(agent_home) / "skill_pack.json"
+
+
+def skill_usage_path(agent_home: Path, report_date: str) -> Path:
+    return strategy_skills_dir(agent_home) / "usage" / f"{report_date}.json"
 
 
 def safe_skill_slug(skill_id: str) -> str:
@@ -254,7 +264,7 @@ def build_default_skill_pack(agent_home: Path) -> dict[str, Any]:
         active_skills.extend(item.to_dict() for item in entries[:MAX_ACTIVE_SKILLS_PER_SCOPE])
 
     return {
-        "schema_version": "strategy_skill_pack.v1",
+        "schema_version": SKILL_PACK_SCHEMA_VERSION,
         "write_scope": "learning_only",
         "non_executable": True,
         "active_skills": active_skills,
@@ -267,6 +277,13 @@ def build_default_skill_pack(agent_home: Path) -> dict[str, Any]:
             "auto_activation_allowed": False,
         },
     }
+
+
+def write_skill_pack(agent_home: Path, payload: dict[str, Any]) -> Path:
+    path = skill_pack_path(agent_home)
+    assert_refactor_write_allowed(path, payload, agent_home)
+    dump_json(path, payload)
+    return path
 
 
 def record_skill_output_on_ticket(ticket: dict[str, Any], skill_ref: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:

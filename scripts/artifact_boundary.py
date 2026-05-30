@@ -24,6 +24,7 @@ SHADOW_ALLOWED_PREFIXES = (
     "db/action_debates/",
     "db/retrieval_packs/",
     "db/refactor_reviews/",
+    "db/phase8/",
     "tests/fixtures/golden_slices/",
 )
 

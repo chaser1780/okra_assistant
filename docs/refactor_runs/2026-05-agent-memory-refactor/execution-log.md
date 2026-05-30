@@ -769,6 +769,43 @@ No implementation entries have been added yet.
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check` (CRLF warnings only; no whitespace errors)
 
+## 2026-05-30 Completion Pass: Remaining Shadow Contracts
+
+- Completed the remaining non-promotional documentation tasks as executable
+  shadow/learning artifacts:
+  - added `scripts/build_hard_constraint_catalog.py` to parse
+    `hard_constraints_inventory.md` into a machine-readable
+    `shadow_only` catalog at `db/refactor_shadow_runs/hard_constraint_catalog.json`;
+  - added `scripts/build_strategy_skill_pack.py` to materialize
+    `db/strategy_skills/skill_pack.json` and optional
+    `db/strategy_skills/usage/<date>.json`;
+  - added `scripts/build_phase8_fallback_contract.py` to write the Phase 8
+    fallback/rollback contract at `db/phase8/fallback_contract.json`.
+- Preserved boundaries:
+  - hard constraints remain deterministic and official validator-owned;
+  - strategy skill usage candidates keep `applied_to_ticket_file=false`;
+  - `OKRA_USE_SHADOW_ADVICE_ADAPTER` is documented as design-only and inactive;
+  - official path mutation remains disallowed.
+- Updated Phase 8 audit:
+  - rollback path becomes `ready` only when the fallback contract documents a
+    rollback command;
+  - fallback switch remains `partial`, because a designed but inactive switch
+    must not unlock promotion.
+- Updated `tasks.md`:
+  - hard-constraint classification, skill-pack/usage, skill outcome
+    promotion/revision design, and fallback/rollback contract are marked done;
+  - official fallback enablement, official daily-chain mutation, and legacy
+    deletion are explicitly `blocked-by-promotion`.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\build_hard_constraint_catalog.py scripts\build_strategy_skill_pack.py scripts\build_phase8_fallback_contract.py scripts\audit_phase8_readiness.py scripts\strategy_skill_store.py scripts\artifact_boundary.py tests\test_hard_constraint_catalog.py tests\test_strategy_skill_pack.py tests\test_phase8_fallback_contract.py`
+  - `python -B -X utf8 -m unittest tests.test_hard_constraint_catalog tests.test_strategy_skill_pack tests.test_phase8_fallback_contract`
+  - `python -B -X utf8 scripts\build_hard_constraint_catalog.py --generated-at 2026-05-30T13:30:00+08:00 --format json`
+  - `python -B -X utf8 scripts\build_strategy_skill_pack.py --date 2026-05-22 --generated-at 2026-05-30T13:35:00+08:00 --format json`
+  - `python -B -X utf8 scripts\build_phase8_fallback_contract.py --generated-at 2026-05-30T13:40:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-30T13:45:00+08:00`
+  - real-date audit result: `rollback_path=ready`, `fallback_switch=partial`,
+    `promotion_ready=false`.
+
 ## 2026-05-30 Review Fix: Complete Preview Contract And Blocked-Reduce Attribution
 
 - Hardened the Phase 8 official-advice compatibility audit against incomplete
