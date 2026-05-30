@@ -769,6 +769,42 @@ No implementation entries have been added yet.
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check` (CRLF warnings only; no whitespace errors)
 
+## 2026-05-30 Review Fix: Complete Preview Contract And Blocked-Reduce Attribution
+
+- Hardened the Phase 8 official-advice compatibility audit against incomplete
+  but hash-valid preview files:
+  - `new_chain_official_compatible_advice` now requires all four source
+    artifacts to be present and hash-verified:
+    `validated_advice`, `action_tickets`, `retrieval_packs`, and
+    `action_debates`;
+  - preview bodies must contain `committee_decision_bundle_preview`,
+    `final_advice_preview`, and `validated_action_sections_preview`;
+  - legal JSON with a non-object root, such as `[]`, now returns a damaged
+    preview contract instead of crashing the audit.
+- Split mixed hold attribution for existing positions:
+  - `validated_action=hold` plus an increase-side model action remains
+    `blocked_add_with_existing_position`;
+  - `validated_action=hold` plus `model_action=reduce/switch_out` is now
+    `blocked_reduce_kept_existing_position`;
+  - both mixed contexts are neutral and `learning_eligible=false`, so they
+    cannot flow into adaptive policies or skill curation.
+- Added regression coverage for:
+  - non-object Phase 8 preview JSON;
+  - a forged preview with only an action-ticket source and all summary booleans
+    set true;
+  - missing preview body sections;
+  - existing-position blocked reduce not being mislabeled as blocked add.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\audit_phase8_readiness.py scripts\evaluate_action_ticket_outcomes.py tests\test_phase8_readiness.py tests\test_action_outcomes.py`
+  - `python -B -X utf8 -m unittest tests.test_phase8_readiness`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_adaptive_policies tests.test_phase8_readiness`
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness tests.test_refactor_review_markdown tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph`
+  - `python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --generated-at 2026-05-30T12:10:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-30T12:15:00+08:00`
+  - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-30T12:20:00+08:00`
+  - `python -B -X utf8 scripts\check_repo_text_hygiene.py`
+
 ## 2026-05-30 Review Fix: Blocked-Add Hold Attribution And Preview Contract Audit
 
 - Tightened hold outcome attribution again:

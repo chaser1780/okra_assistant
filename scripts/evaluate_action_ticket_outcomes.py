@@ -29,6 +29,8 @@ from revalue_portfolio_official_nav import has_cashflow_between_nav_dates
 
 DEFAULT_HORIZONS = ("T+1", "T+5")
 SCORABLE_ACTIONS = {"add", "scheduled_dca", "reduce", "hold", "switch_in", "switch_out"}
+INCREASE_ACTIONS = {"add", "scheduled_dca", "switch_in"}
+REDUCE_ACTIONS = {"reduce", "switch_out"}
 UNIT_REQUIRED_ACTIONS = {"reduce", "switch_out"}
 
 
@@ -260,8 +262,12 @@ def decision_context_for(ticket: dict[str, Any], position: dict[str, Any]) -> di
     }
     existing = has_existing_position(position)
     if action_verb == "hold":
-        if existing and model_action and model_action != "hold":
+        if existing and model_action in INCREASE_ACTIONS:
             exposure_context = "blocked_add_with_existing_position"
+        elif existing and model_action in REDUCE_ACTIONS:
+            exposure_context = "blocked_reduce_kept_existing_position"
+        elif existing and model_action and model_action != "hold":
+            exposure_context = "blocked_non_hold_with_existing_position"
         elif existing:
             exposure_context = "hold_existing_position"
         elif model_action and model_action != "hold":
@@ -281,7 +287,14 @@ def decision_context_for(ticket: dict[str, Any], position: dict[str, Any]) -> di
         "has_existing_position": existing,
         "position_value": safe_float(position.get("current_value")) if position else None,
         "model_action": model_action,
-        "learning_eligible": exposure_context not in {"blocked_add_with_existing_position", "unclear_hold_context", "unknown"},
+        "learning_eligible": exposure_context
+        not in {
+            "blocked_add_with_existing_position",
+            "blocked_reduce_kept_existing_position",
+            "blocked_non_hold_with_existing_position",
+            "unclear_hold_context",
+            "unknown",
+        },
     }
 
 
@@ -301,8 +314,12 @@ def outcome_label(action_verb: str, actual_return_pct: float, exposure_context: 
             return "neutral", "blocked_add_or_cash_hold_neutral_nav_follow_through"
         if exposure_context == "blocked_add_with_existing_position":
             return "neutral", "blocked_add_with_existing_position_mixed_follow_through_not_scored_for_learning"
+        if exposure_context == "blocked_reduce_kept_existing_position":
+            return "neutral", "blocked_reduce_kept_existing_position_mixed_follow_through_not_scored_for_learning"
+        if exposure_context == "blocked_non_hold_with_existing_position":
+            return "neutral", "blocked_non_hold_with_existing_position_mixed_follow_through_not_scored_for_learning"
         return "neutral", "unclear_hold_context_not_scored_for_learning"
-    if action_verb in {"reduce", "switch_out"}:
+    if action_verb in REDUCE_ACTIONS:
         if actual_return_pct < 0:
             return "avoided_loss", "reduce_exposure_avoided_negative_nav_follow_through"
         if actual_return_pct > 0:

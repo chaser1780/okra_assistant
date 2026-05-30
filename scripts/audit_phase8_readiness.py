@@ -10,6 +10,10 @@ from common import resolve_agent_home, resolve_date, timestamp_now
 
 
 SCHEMA_VERSION = "phase8_readiness_audit.v1"
+PREVIEW_SCHEMA_VERSION = "official_advice_compat_preview.v1"
+REQUIRED_PREVIEW_SECTION_LISTS = {
+    "validated_action_sections_preview": ("tactical_actions", "dca_actions", "hold_actions"),
+}
 
 REQUIRED_CONSUMER_AREAS = {
     "validated_advice",
@@ -342,10 +346,43 @@ def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _required_preview_source_paths(report_date: str) -> set[str]:
+    return {
+        f"db/validated_advice/{report_date}.json",
+        f"db/action_tickets/{report_date}.json",
+        f"db/retrieval_packs/{report_date}.json",
+        f"db/action_debates/{report_date}.json",
+    }
+
+
+def _preview_body_failures(payload: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    committee = payload.get("committee_decision_bundle_preview")
+    if not isinstance(committee, dict) or not isinstance(committee.get("fund_decisions"), list):
+        failures.append("committee_decision_bundle_preview")
+    final = payload.get("final_advice_preview")
+    if not isinstance(final, dict) or not isinstance(final.get("fund_decisions"), list):
+        failures.append("final_advice_preview")
+    for section_name, list_names in REQUIRED_PREVIEW_SECTION_LISTS.items():
+        section = payload.get(section_name)
+        if not isinstance(section, dict) or any(not isinstance(section.get(name), list) for name in list_names):
+            failures.append(section_name)
+    if not isinstance(payload.get("comparison_to_official"), dict):
+        failures.append("comparison_to_official")
+    return failures
+
+
 def _validate_preview_contract(agent_home: Path, payload: dict[str, Any], report_date: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {
+            "valid": False,
+            "failures": ["preview_root_object"],
+            "source_hash_verified": False,
+            "source_hash_failures": ["<preview_root_object>"],
+        }
     summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
     failures: list[str] = []
-    if payload.get("schema_version") != "official_advice_compat_preview.v1":
+    if payload.get("schema_version") != PREVIEW_SCHEMA_VERSION:
         failures.append("schema_version")
     if payload.get("report_date") != report_date:
         failures.append("report_date")
@@ -359,14 +396,21 @@ def _validate_preview_contract(agent_home: Path, payload: dict[str, Any], report
         failures.append("official_output_unchanged")
     if list(summary.get("official_paths_written", []) or []):
         failures.append("official_paths_written")
+    failures.extend(_preview_body_failures(payload))
 
     hash_failures: list[str] = []
     checked_source_count = 0
-    for item in payload.get("source_artifacts", []) or []:
+    source_paths_seen: set[str] = set()
+    source_artifacts = payload.get("source_artifacts", [])
+    if not isinstance(source_artifacts, list):
+        source_artifacts = []
+    for item in source_artifacts:
         if not isinstance(item, dict) or item.get("kind") == "builder":
             continue
         checked_source_count += 1
         relative = str(item.get("path", "") or "")
+        if relative:
+            source_paths_seen.add(relative)
         expected = str(item.get("content_sha256", "") or "")
         if not relative or not expected:
             hash_failures.append(relative or "<missing_path>")
@@ -374,6 +418,8 @@ def _validate_preview_contract(agent_home: Path, payload: dict[str, Any], report
         source_path = agent_home / relative
         if not source_path.exists() or _hash_file(source_path) != expected:
             hash_failures.append(relative)
+    missing_required_sources = sorted(_required_preview_source_paths(report_date) - source_paths_seen)
+    hash_failures.extend(missing_required_sources)
     if checked_source_count == 0:
         hash_failures.append("<no_verifiable_sources>")
     if hash_failures:
@@ -415,6 +461,29 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
             "fallback_switch_active": False,
             "adapter_gate_ready": False,
             "error": str(exc),
+        }
+    if not isinstance(payload, dict):
+        contract = _validate_preview_contract(agent_home, payload, report_date)
+        return {
+            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
+            "exists": True,
+            "official_compatible_advice": False,
+            "legacy_official_compatible_advice_claim": False,
+            "official_shape_compatible": False,
+            "official_behavior_comparable": False,
+            "official_adapter_dry_run_passed": False,
+            "source_hash_verified": False,
+            "preview_contract_valid": False,
+            "preview_contract_failures": contract["failures"],
+            "source_hash_failures": contract["source_hash_failures"],
+            "committee_bundle_compatible": False,
+            "llm_advice_compatible": False,
+            "official_output_unchanged": False,
+            "fallback_switch_active": False,
+            "comparison_mismatched_count": 0,
+            "adapter_gate_ready": False,
+            "missing_required_fields": [],
+            "error": "preview root must be object",
         }
     summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
     comparison = payload.get("comparison_to_official", {}) if isinstance(payload, dict) and isinstance(payload.get("comparison_to_official"), dict) else {}

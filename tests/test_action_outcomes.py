@@ -242,6 +242,29 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertFalse(event["decision_context"]["learning_eligible"])
         self.assertEqual("blocked_add_with_existing_position_mixed_follow_through_not_scored_for_learning", event["diagnostic_label"])
 
+    def test_existing_position_blocked_reduce_hold_is_not_mislabeled_as_add(self) -> None:
+        ticket_path = self.agent.root / "db" / "action_tickets" / f"{BASE_DATE}.json"
+        payload = json.loads(ticket_path.read_text(encoding="utf-8"))
+        payload["tickets"] = [self.ticket("HOLD", "hold", 0.0)]
+        payload["tickets"][0]["legacy_mapping"]["model_action"] = "reduce"
+        ticket_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.agent.write_json(
+            "raw/quotes/2026-03-11.json",
+            {
+                "report_date": "2026-03-11",
+                "generated_at": "2026-03-11T16:00:00+08:00",
+                "funds": [self.quote("HOLD", 2.1, "2026-03-11")],
+            },
+        )
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        event = artifact.to_dict()["events"][0]
+
+        self.assertEqual("neutral", event["outcome_label"])
+        self.assertEqual("blocked_reduce_kept_existing_position", event["decision_context"]["exposure_context"])
+        self.assertFalse(event["decision_context"]["learning_eligible"])
+        self.assertEqual("blocked_reduce_kept_existing_position_mixed_follow_through_not_scored_for_learning", event["diagnostic_label"])
+
     def test_uses_next_available_quote_after_calendar_target(self) -> None:
         (self.agent.root / "raw" / "quotes" / "2026-03-11.json").unlink()
         self.agent.write_json("raw/quotes/2026-03-12.json", {
