@@ -75,7 +75,8 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
         self.assertEqual("official_advice_compat_preview.v1", payload["schema_version"])
         self.assertEqual("shadow_only", payload["write_scope"])
         self.assertTrue(payload["non_executable"])
-        self.assertTrue(payload["summary"]["official_compatible_advice"])
+        self.assertTrue(payload["summary"]["official_shape_compatible"])
+        self.assertFalse(payload["summary"]["official_compatible_advice"])
         self.assertFalse(payload["summary"]["fallback_switch_active"])
         self.assertFalse(payload["summary"]["promotion_ready"])
         self.assertEqual([], payload["summary"]["official_paths_written"])
@@ -83,6 +84,11 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
         self.assertEqual(15, len(payload["committee_decision_bundle_preview"]["fund_decisions"]))
         self.assertEqual(15, len(payload["final_advice_preview"]["fund_decisions"]))
         self.assertEqual(15, payload["summary"]["validated_section_preview_count"])
+        self.assertEqual(
+            "hold_only",
+            payload["committee_decision_bundle_preview"]["decision_mode"],
+        )
+        self.assertFalse(payload["committee_decision_bundle_preview"]["execution_eligible"])
         section_items = (
             payload["validated_action_sections_preview"]["tactical_actions"]
             + payload["validated_action_sections_preview"]["dca_actions"]
@@ -144,7 +150,8 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
             f"db/refactor_shadow_runs/{REPORT_DATE}__official_advice_compat_preview/official_advice_compat_preview.json",
             payload["path"],
         )
-        self.assertTrue(payload["summary"]["official_compatible_advice"])
+        self.assertTrue(payload["summary"]["official_shape_compatible"])
+        self.assertFalse(payload["summary"]["official_compatible_advice"])
 
 
 if __name__ == "__main__":

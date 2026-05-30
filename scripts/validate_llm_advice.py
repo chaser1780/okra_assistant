@@ -277,6 +277,7 @@ def build_validated_payload(
     strategy: dict | None = None,
     advice: FinalAdvice | None = None,
     llm_raw: dict | None = None,
+    committee_bundle: dict | None = None,
     previous_actions: dict[str, dict] | None = None,
 ) -> ValidatedAdvice:
     agent_home = resolve_agent_home(agent_home)
@@ -284,7 +285,7 @@ def build_validated_payload(
     strategy = strategy or load_strategy(agent_home)
     advice = advice or load_json(llm_advice_path(agent_home, report_date))
     llm_raw = llm_raw or (load_json(llm_raw_path(agent_home, report_date)) if llm_raw_path(agent_home, report_date).exists() else {})
-    committee_bundle = load_json(committee_decision_bundle_path(agent_home, report_date)) if committee_decision_bundle_path(agent_home, report_date).exists() else {}
+    committee_bundle = committee_bundle if committee_bundle is not None else (load_json(committee_decision_bundle_path(agent_home, report_date)) if committee_decision_bundle_path(agent_home, report_date).exists() else {})
     constraint_map = build_trade_constraints(agent_home, portfolio, report_date)
     previous_actions = previous_actions if previous_actions is not None else previous_validated_by_code(agent_home, report_date)
     decision_mode = str(committee_bundle.get("decision_mode", "") or "canonical")

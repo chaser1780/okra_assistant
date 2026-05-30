@@ -88,6 +88,7 @@ class OutcomeEvent:
     diagnostic_label: str
     confidence: float
     cashflow_checks: dict[str, Any]
+    decision_context: dict[str, Any] = field(default_factory=dict)
     learning_implications: list[dict[str, Any]] = field(default_factory=list)
     source_refs: list[dict[str, Any]] = field(default_factory=list)
     audit: dict[str, Any] = field(default_factory=dict)
@@ -119,6 +120,7 @@ class OutcomeEvent:
         if not 0.0 <= self.confidence <= 1.0:
             raise OutcomeEventValidationError("confidence must be between 0 and 1")
         self.cashflow_checks = _dict(self.cashflow_checks, "cashflow_checks")
+        self.decision_context = _dict(self.decision_context, "decision_context")
         self.learning_implications = [dict(item) for item in _list(self.learning_implications, "learning_implications")]
         self.source_refs = [dict(item) for item in _list(self.source_refs, "source_refs")]
         self.audit = _dict(self.audit, "audit")
@@ -151,6 +153,9 @@ class OutcomeEventArtifact:
     source_artifacts: list[dict[str, Any]]
     events: list[OutcomeEvent]
     summary: dict[str, Any]
+    target_date: str = ""
+    evaluation_date_used: str = ""
+    date_match_type: str = ""
 
     def __post_init__(self) -> None:
         self.schema_version = _require(self.schema_version, "schema_version")
@@ -159,6 +164,9 @@ class OutcomeEventArtifact:
         self.artifact_id = _require(self.artifact_id, "artifact_id")
         self.base_date = _date(self.base_date, "base_date")
         self.evaluation_date = _date(self.evaluation_date, "evaluation_date")
+        self.target_date = _date(self.target_date or self.evaluation_date, "target_date")
+        self.evaluation_date_used = _date(self.evaluation_date_used or self.evaluation_date, "evaluation_date_used")
+        self.date_match_type = str(self.date_match_type or "")
         self.horizon = _require(self.horizon, "horizon")
         self.generated_at = _require(self.generated_at, "generated_at")
         self.write_scope = _require_enum(self.write_scope, WRITE_SCOPES, "write_scope")
@@ -173,7 +181,10 @@ class OutcomeEventArtifact:
             "schema_version": self.schema_version,
             "artifact_id": self.artifact_id,
             "base_date": self.base_date,
+            "target_date": self.target_date,
             "evaluation_date": self.evaluation_date,
+            "evaluation_date_used": self.evaluation_date_used,
+            "date_match_type": self.date_match_type,
             "horizon": self.horizon,
             "generated_at": self.generated_at,
             "write_scope": self.write_scope,
@@ -189,7 +200,10 @@ class OutcomeEventArtifact:
             schema_version=str(payload.get("schema_version", "") or ""),
             artifact_id=str(payload.get("artifact_id", "") or ""),
             base_date=str(payload.get("base_date", "") or ""),
+            target_date=str(payload.get("target_date", "") or ""),
             evaluation_date=str(payload.get("evaluation_date", "") or ""),
+            evaluation_date_used=str(payload.get("evaluation_date_used", "") or ""),
+            date_match_type=str(payload.get("date_match_type", "") or ""),
             horizon=str(payload.get("horizon", "") or ""),
             generated_at=str(payload.get("generated_at", "") or ""),
             write_scope=str(payload.get("write_scope", "") or ""),

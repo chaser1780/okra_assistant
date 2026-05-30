@@ -141,6 +141,12 @@ def when_to_apply(scope: str, action_verb: str, ticket: dict[str, Any], outcome:
 def event_type_for_outcome(outcome: dict[str, Any]) -> str:
     if str(outcome.get("scoring_status", "") or "") != "scored":
         return ""
+    decision_context = outcome.get("decision_context", {}) if isinstance(outcome.get("decision_context"), dict) else {}
+    exposure_context = str(decision_context.get("exposure_context", "") or "")
+    if decision_context.get("learning_eligible") is not True:
+        return ""
+    if str(outcome.get("action_verb", "") or "") == "hold" and exposure_context not in {"hold_existing_position", "blocked_add_or_cash_hold"}:
+        return ""
     label = str(outcome.get("outcome_label", "") or "")
     if label in SUPPORTIVE_OUTCOME_LABELS:
         return "support"

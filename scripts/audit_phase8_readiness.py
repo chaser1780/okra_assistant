@@ -344,6 +344,12 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
             "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
             "exists": False,
             "official_compatible_advice": False,
+            "official_shape_compatible": False,
+            "official_behavior_comparable": False,
+            "official_adapter_dry_run_passed": False,
+            "source_hash_verified": False,
+            "fallback_switch_active": False,
+            "adapter_gate_ready": False,
         }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -352,17 +358,42 @@ def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]
             "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
             "exists": True,
             "official_compatible_advice": False,
+            "official_shape_compatible": False,
+            "official_behavior_comparable": False,
+            "official_adapter_dry_run_passed": False,
+            "source_hash_verified": False,
+            "fallback_switch_active": False,
+            "adapter_gate_ready": False,
             "error": str(exc),
         }
     summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
+    comparison = payload.get("comparison_to_official", {}) if isinstance(payload, dict) and isinstance(payload.get("comparison_to_official"), dict) else {}
+    fallback_switch_active = bool(summary.get("fallback_switch_active"))
+    adapter_gate_ready = all(
+        [
+            bool(summary.get("official_shape_compatible")),
+            bool(summary.get("official_behavior_comparable")),
+            bool(summary.get("official_adapter_dry_run_passed")),
+            bool(summary.get("source_hash_verified")),
+            int(comparison.get("mismatched_count", 1) or 0) == 0,
+            fallback_switch_active,
+        ]
+    )
     return {
         "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
         "exists": True,
-        "official_compatible_advice": bool(summary.get("official_compatible_advice")),
+        "official_compatible_advice": adapter_gate_ready,
+        "legacy_official_compatible_advice_claim": bool(summary.get("official_compatible_advice")),
+        "official_shape_compatible": bool(summary.get("official_shape_compatible")),
+        "official_behavior_comparable": bool(summary.get("official_behavior_comparable")),
+        "official_adapter_dry_run_passed": bool(summary.get("official_adapter_dry_run_passed")),
+        "source_hash_verified": bool(summary.get("source_hash_verified")),
         "committee_bundle_compatible": bool(summary.get("committee_bundle_compatible")),
         "llm_advice_compatible": bool(summary.get("llm_advice_compatible")),
         "official_output_unchanged": bool(summary.get("official_output_unchanged")),
-        "fallback_switch_active": bool(summary.get("fallback_switch_active")),
+        "fallback_switch_active": fallback_switch_active,
+        "comparison_mismatched_count": int(comparison.get("mismatched_count", 0) or 0),
+        "adapter_gate_ready": adapter_gate_ready,
         "missing_required_fields": list(summary.get("missing_required_fields", []) or []),
     }
 
@@ -383,8 +414,12 @@ def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved
     return [
         {
             "gate_id": "new_chain_official_compatible_advice",
-            "status": "ready" if compat_preview["official_compatible_advice"] else ("partial" if shadow_chain_ready else "missing"),
-            "detail": "Official-compatible shadow preview exists; fallback switch is still separate." if compat_preview["official_compatible_advice"] else "Shadow chain exists, but no official-compatible adapter preview is available.",
+            "status": "ready" if compat_preview["adapter_gate_ready"] else ("partial" if shadow_chain_ready or compat_preview["exists"] else "missing"),
+            "detail": (
+                "Adapter preview passed shape, behavior comparison, validator dry-run, source-hash, and fallback-switch gates."
+                if compat_preview["adapter_gate_ready"]
+                else "Shadow adapter preview is not official-compatible until shape, behavior comparison, validator dry-run, source hashes, and fallback switch all pass."
+            ),
             "evidence": {
                 "action_ticket_count": action_ticket_count,
                 "retrieval_pack_count": pack_count,

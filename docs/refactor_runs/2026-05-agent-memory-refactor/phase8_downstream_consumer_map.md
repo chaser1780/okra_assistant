@@ -184,7 +184,10 @@ python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05
 For the current golden date, the preview reports:
 
 ```text
-official_compatible_advice=true
+official_shape_compatible=true
+official_behavior_comparable=true
+official_adapter_dry_run_passed=true
+official_compatible_advice=false
 committee_bundle_compatible=true
 llm_advice_compatible=true
 fallback_switch_active=false

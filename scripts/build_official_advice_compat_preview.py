@@ -8,6 +8,8 @@ from typing import Any
 
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
 from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
+from build_action_ticket_shadow import load_portfolio_state_for_report
+from validate_llm_advice import build_validated_payload
 
 
 SCHEMA_VERSION = "official_advice_compat_preview.v1"
@@ -438,7 +440,7 @@ def market_view_preview(validated: dict[str, Any], report_date: str, decision_co
     base = dict(validated.get("market_view", {}) or {})
     base.setdefault("regime", "mixed")
     base["summary"] = (
-        "Shadow action-ticket chain produced an official-compatible advice preview "
+        "Shadow action-ticket chain produced an adapter-shape advice preview "
         f"for {report_date}; decisions={decision_count}. This preview is non-executable."
     )
     drivers = list(base.get("key_drivers", []) or [])
@@ -487,6 +489,72 @@ def compare_to_official(validated: dict[str, Any], final_decisions: list[dict[st
         "mismatched_count": len(mismatches),
         "mismatches": mismatches[:20],
     }
+
+
+def validated_advice_is_comparable(candidate: dict[str, Any], official: dict[str, Any]) -> bool:
+    if not candidate or not official:
+        return False
+    candidate_sections = {
+        section: [
+            {
+                "fund_code": item.get("fund_code"),
+                "validated_action": item.get("validated_action"),
+                "validated_amount": round(safe_float(item.get("validated_amount")), 2),
+            }
+            for item in candidate.get(section, []) or []
+            if isinstance(item, dict)
+        ]
+        for section in ACTION_SECTIONS
+    }
+    official_sections = {
+        section: [
+            {
+                "fund_code": item.get("fund_code"),
+                "validated_action": item.get("validated_action"),
+                "validated_amount": round(safe_float(item.get("validated_amount")), 2),
+            }
+            for item in official.get(section, []) or []
+            if isinstance(item, dict)
+        ]
+        for section in ACTION_SECTIONS
+    }
+    return candidate_sections == official_sections
+
+
+def dry_run_official_validator(agent_home: Path, report_date: str, committee_bundle: dict[str, Any], final_advice: dict[str, Any], official: dict[str, Any]) -> dict[str, Any]:
+    try:
+        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+        candidate = build_validated_payload(
+            agent_home,
+            report_date,
+            portfolio=portfolio,
+            advice=final_advice,
+            llm_raw={"committee_decision_bundle": committee_bundle},
+            committee_bundle=committee_bundle,
+            previous_actions={},
+        )
+    except Exception as exc:  # pragma: no cover - exact validator failures are surfaced in payload.
+        return {
+            "passed": False,
+            "error": str(exc),
+            "comparable_to_official": False,
+        }
+    return {
+        "passed": True,
+        "error": "",
+        "comparable_to_official": validated_advice_is_comparable(candidate, official),
+    }
+
+
+def source_hashes_present(payload: dict[str, Any]) -> bool:
+    for item in payload.get("source_artifacts", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") == "builder":
+            continue
+        if not str(item.get("content_sha256", "") or ""):
+            return False
+    return True
 
 
 def missing_required_fields(items: list[dict[str, Any]], required: set[str], item_name: str) -> list[str]:
@@ -552,14 +620,16 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         final_decisions.append(final_decision)
         validated_action_previews.append(build_validated_action_preview(ticket, final_decision))
 
-    root_execution_eligible = any(item.get("execution_eligible") for item in committee_decisions)
+    official_bundle = validated.get("committee_decision_bundle", {}) if isinstance(validated.get("committee_decision_bundle"), dict) else {}
+    root_decision_mode = str(official_bundle.get("decision_mode", "") or validated.get("decision_mode", "") or "adapter_shape_preview")
+    root_execution_eligible = bool(official_bundle.get("execution_eligible", validated.get("execution_eligible", False)))
     committee_bundle_preview = {
         "schema_version": 1,
         "report_date": report_date,
         "generated_at": generated_at,
-        "decision_mode": "shadow_preview",
+        "decision_mode": root_decision_mode,
         "decision_source": "action_debate_shadow_compat_preview",
-        "degradation_mode": "none" if debate_artifact.get("summary", {}).get("status") == "ok" else "shadow_degraded",
+        "degradation_mode": str(official_bundle.get("degradation_mode", "") or ("none" if debate_artifact.get("summary", {}).get("status") == "ok" else "shadow_degraded")),
         "execution_eligible": root_execution_eligible,
         "committee_confidence": "preview",
         "manager_order": ["action_ticket_shadow", "layered_retrieval_pack", "action_debate_shadow"],
@@ -580,7 +650,7 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         ],
         "failed_agent_names": [],
         "degraded_agent_names": [],
-        "notes": ["Generated from shadow artifacts under a non-executable review boundary."],
+        "notes": ["Generated from shadow artifacts under a non-executable adapter_shape_preview boundary."],
     }
     final_advice_preview = {
         "market_view": committee_bundle_preview["market_view"],
@@ -592,21 +662,33 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
     missing_fields.extend(missing_required_fields(final_decisions, REQUIRED_FINAL_DECISION_FIELDS, "final_decision"))
     missing_fields.extend(missing_required_fields(validated_action_previews, REQUIRED_VALIDATED_ACTION_FIELDS, "validated_action_preview"))
     comparison = compare_to_official(validated, final_decisions)
+    source_hash_ok = source_hashes_present({"source_artifacts": source_artifacts(agent_home, [ticket_file, retrieval_file, debate_file, validated_file])})
+    shape_compatible = not missing_fields
+    behavior_comparable = comparison.get("status") == "compared" and int(comparison.get("mismatched_count", 0) or 0) == 0
+    validator_dry_run = dry_run_official_validator(agent_home, report_date, committee_bundle_preview, final_advice_preview, validated)
+    adapter_dry_run_passed = bool(validator_dry_run.get("passed") and validator_dry_run.get("comparable_to_official"))
+    fallback_switch_active = False
+    official_compatible = shape_compatible and behavior_comparable and adapter_dry_run_passed and source_hash_ok and fallback_switch_active
     summary = {
         "status": "ok" if not missing_fields else "degraded",
         "ticket_count": len(tickets),
         "committee_decision_count": len(committee_decisions),
         "final_advice_decision_count": len(final_decisions),
         "validated_section_preview_count": sum(len(items) for items in section_preview.values()),
-        "official_compatible_advice": not missing_fields,
-        "committee_bundle_compatible": not missing_fields,
-        "llm_advice_compatible": not missing_fields,
+        "official_shape_compatible": shape_compatible,
+        "official_behavior_comparable": behavior_comparable,
+        "official_adapter_dry_run_passed": adapter_dry_run_passed,
+        "source_hash_verified": source_hash_ok,
+        "official_compatible_advice": official_compatible,
+        "committee_bundle_compatible": shape_compatible,
+        "llm_advice_compatible": shape_compatible,
         "validated_sections_preview_only": True,
-        "fallback_switch_active": False,
+        "fallback_switch_active": fallback_switch_active,
         "promotion_ready": False,
         "official_output_unchanged": True,
         "official_paths_written": [],
         "missing_required_fields": missing_fields,
+        "validator_dry_run": validator_dry_run,
     }
     return {
         "schema_version": SCHEMA_VERSION,

@@ -766,3 +766,47 @@ No implementation entries have been added yet.
   - `npm run tauri:check`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check` (CRLF warnings only; no whitespace errors)
+
+## 2026-05-30 Review Fix: Outcome Semantics And Phase 8 Gate Tightening
+
+- Fixed the Phase 4/5 learning boundary for `hold` outcomes:
+  - `scripts/evaluate_action_ticket_outcomes.py` now writes
+    `decision_context.exposure_context` for scored events;
+  - `hold_existing_position` treats NAV down as `hurt` and NAV up as
+    `helped`;
+  - `blocked_add_or_cash_hold` keeps the cash/opportunity-cost semantics:
+    NAV down is `avoided_loss`, NAV up is `missed_opportunity`;
+  - unclear hold contexts are marked learning-ineligible.
+- `scripts/update_adaptive_policies.py` now ignores scored outcomes whose
+  `decision_context.learning_eligible` is not true, preventing ambiguous
+  historical artifacts from entering adaptive-policy support/contradiction.
+- Tightened T+N outcome date handling:
+  - outcome artifacts now record `target_date`, `evaluation_date_used`, and
+    `date_match_type`;
+  - if the calendar target has no quote file, the evaluator uses the first
+    available trading-day quote after the target instead of immediately
+    producing fake pending events.
+- Tightened Phase 8 compatibility naming and readiness gates:
+  - `official_shape_compatible` is separated from
+    `official_compatible_advice`;
+  - readiness now also requires behavior comparison, validator dry-run,
+    source-hash verification, and an active fallback switch;
+  - the current preview remains `official_compatible_advice=false` because no
+    fallback switch is active and this is still only an adapter-shape preview;
+  - the committee-bundle preview preserves the official root
+    `decision_mode`/`execution_eligible` instead of inventing
+    `shadow_preview` root semantics.
+- Official-path mutation remains untouched:
+  - no edits to `scripts/run_daily_pipeline.py`;
+  - no edits to `scripts/generate_llm_advice.py`;
+  - no edits to official `db/validated_advice`, decision ledger, execution
+    sync, portfolio state, or long-memory mutation paths.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\outcome_event_models.py scripts\evaluate_action_ticket_outcomes.py scripts\update_adaptive_policies.py scripts\build_official_advice_compat_preview.py scripts\audit_phase8_readiness.py scripts\validate_llm_advice.py tests\test_action_outcomes.py tests\test_adaptive_policies.py tests\test_official_advice_compat_preview.py tests\test_phase8_readiness.py`
+  - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_adaptive_policies tests.test_official_advice_compat_preview tests.test_phase8_readiness`
+  - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice tests.test_refactor_review_markdown tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_web_api_action_tickets tests.test_strategy_skills tests.test_long_memory tests.test_validation_and_trade`
+  - `python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --generated-at 2026-05-30T10:30:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-30T10:35:00+08:00`
+  - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-30T10:40:00+08:00`
+  - `python scripts\check_repo_text_hygiene.py`
+  - `git diff --check` (CRLF warnings only; no whitespace errors)

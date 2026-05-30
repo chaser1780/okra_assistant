@@ -84,13 +84,18 @@ class Phase8ReadinessAuditTests(unittest.TestCase):
                 "write_scope": "shadow_only",
                 "non_executable": True,
                 "summary": {
-                    "official_compatible_advice": True,
+                    "official_shape_compatible": True,
+                    "official_behavior_comparable": True,
+                    "official_adapter_dry_run_passed": True,
+                    "source_hash_verified": True,
+                    "official_compatible_advice": False,
                     "committee_bundle_compatible": True,
                     "llm_advice_compatible": True,
                     "official_output_unchanged": True,
                     "fallback_switch_active": False,
                     "missing_required_fields": [],
                 },
+                "comparison_to_official": {"mismatched_count": 0},
             },
         )
 
@@ -102,11 +107,13 @@ class Phase8ReadinessAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(audit["promotion_ready"])
-        self.assertNotIn("new_chain_official_compatible_advice", audit["blocking_gates"])
+        self.assertIn("new_chain_official_compatible_advice", audit["blocking_gates"])
         self.assertIn("fallback_switch", audit["blocking_gates"])
         compat_gate = next(item for item in audit["required_evidence"] if item["gate_id"] == "new_chain_official_compatible_advice")
-        self.assertEqual("ready", compat_gate["status"])
-        self.assertTrue(compat_gate["evidence"]["compat_preview"]["official_compatible_advice"])
+        self.assertEqual("partial", compat_gate["status"])
+        self.assertTrue(compat_gate["evidence"]["compat_preview"]["official_shape_compatible"])
+        self.assertFalse(compat_gate["evidence"]["compat_preview"]["official_compatible_advice"])
+        self.assertFalse(compat_gate["evidence"]["compat_preview"]["adapter_gate_ready"])
 
     def test_markdown_renders_candidate_and_boundaries(self) -> None:
         audit = build_phase8_audit(self.agent.root, REPORT_DATE, generated_at="2026-05-28T10:00:00+08:00")

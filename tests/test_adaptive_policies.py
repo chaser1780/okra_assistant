@@ -94,6 +94,7 @@ class AdaptivePolicyTests(unittest.TestCase):
             "diagnostic_label": f"{action}_{label}",
             "confidence": 0.6 if status == "scored" else 0.0,
             "cashflow_checks": {"cashflow_between_nav_dates": False, "units_trusted": True, "position_authoritative": True},
+            "decision_context": {"exposure_context": "increase_exposure", "learning_eligible": True},
             "learning_implications": [],
             "source_refs": [],
             "audit": {"builder": "test"},
@@ -237,6 +238,16 @@ class AdaptivePolicyTests(unittest.TestCase):
         self.assertEqual(0, appended)
         self.assertEqual([], store.policies)
         self.assertEqual(0, store.summary["valid_event_count"])
+
+    def test_unclear_hold_context_does_not_create_policy_event(self) -> None:
+        outcome = self.outcome("F001", "avoided_loss", action="hold")
+        outcome["decision_context"] = {"exposure_context": "unclear_hold_context", "learning_eligible": False}
+        self.write_inputs([outcome], [self.ticket("F001", "hold")])
+
+        _event_path, _store_path, appended, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+
+        self.assertEqual(0, appended)
+        self.assertEqual([], store.policies)
 
     def test_policy_cap_per_scope_is_enforced(self) -> None:
         for index in range(25):

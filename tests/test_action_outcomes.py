@@ -193,12 +193,79 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual(2.0, by_code["ADD"]["benchmark_return_pct"])
         self.assertEqual(3.0, by_code["ADD"]["excess_return_pct"])
         self.assertEqual("scored", by_code["HOLD"]["scoring_status"])
-        self.assertEqual("avoided_loss", by_code["HOLD"]["outcome_label"])
+        self.assertEqual("hurt", by_code["HOLD"]["outcome_label"])
+        self.assertEqual("hold_existing_position", by_code["HOLD"]["decision_context"]["exposure_context"])
+        self.assertTrue(by_code["HOLD"]["decision_context"]["learning_eligible"])
         self.assertEqual("scored", by_code["RED"]["scoring_status"])
         self.assertEqual("avoided_loss", by_code["RED"]["outcome_label"])
+        self.assertEqual("reduce_exposure", by_code["RED"]["decision_context"]["exposure_context"])
         self.assertEqual("blocked", by_code["UNTRUST"]["scoring_status"])
         self.assertEqual("untrusted_units_source:derived_from_official_nav", by_code["UNTRUST"]["blocked_reason"])
         self.assertEqual("ticket:2026-03-10:ADD:add:001", by_code["ADD"]["ticket_id"])
+
+    def test_cash_hold_context_keeps_avoided_loss_semantics(self) -> None:
+        ticket_path = self.agent.root / "db" / "action_tickets" / f"{BASE_DATE}.json"
+        payload = json.loads(ticket_path.read_text(encoding="utf-8"))
+        payload["tickets"] = [self.ticket("CASH", "hold", 0.0)]
+        payload["tickets"][0]["legacy_mapping"]["model_action"] = "add"
+        ticket_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        quote = self.quote("CASH", 2.0, BASE_DATE)
+        self.agent.write_json(f"raw/quotes/{BASE_DATE}.json", {"report_date": BASE_DATE, "funds": [quote]})
+        self.agent.write_json("raw/quotes/2026-03-11.json", {"report_date": "2026-03-11", "funds": [self.quote("CASH", 1.9, "2026-03-11")]})
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        event = artifact.to_dict()["events"][0]
+
+        self.assertEqual("avoided_loss", event["outcome_label"])
+        self.assertEqual("blocked_add_or_cash_hold", event["decision_context"]["exposure_context"])
+
+    def test_uses_next_available_quote_after_calendar_target(self) -> None:
+        (self.agent.root / "raw" / "quotes" / "2026-03-11.json").unlink()
+        self.agent.write_json("raw/quotes/2026-03-12.json", {
+            "report_date": "2026-03-12",
+            "generated_at": "2026-03-12T16:00:00+08:00",
+            "funds": [
+                self.quote("ADD", 2.2, "2026-03-12"),
+                self.quote("HOLD", 2.1, "2026-03-12"),
+                self.quote("RED", 1.8, "2026-03-12"),
+                self.quote("UNTRUST", 1.8, "2026-03-12"),
+            ],
+        })
+        self.agent.write_json("config/trading_calendar.json", {"holidays": ["2026-03-11"], "makeup_trading_days": []})
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        payload = artifact.to_dict()
+
+        self.assertEqual("2026-03-11", payload["target_date"])
+        self.assertEqual("2026-03-12", payload["evaluation_date"])
+        self.assertEqual("2026-03-12", payload["evaluation_date_used"])
+        self.assertEqual("next_available_official_nav", payload["date_match_type"])
+        self.assertEqual(3, payload["summary"]["scored_count"])
+
+    def test_uses_next_available_quote_when_fund_missing_on_target_quote_file(self) -> None:
+        target_payload = json.loads((self.agent.root / "raw" / "quotes" / "2026-03-11.json").read_text(encoding="utf-8"))
+        target_payload["funds"] = [item for item in target_payload["funds"] if item["code"] != "HOLD"]
+        self.agent.write_json("raw/quotes/2026-03-11.json", target_payload)
+        self.agent.write_json("raw/quotes/2026-03-12.json", {
+            "report_date": "2026-03-12",
+            "generated_at": "2026-03-12T16:00:00+08:00",
+            "funds": [self.quote("HOLD", 2.1, "2026-03-12")],
+        })
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        payload = artifact.to_dict()
+        hold_event = next(item for item in payload["events"] if item["fund_code"] == "HOLD")
+        quote_sources = {
+            item["path"]
+            for item in payload["source_artifacts"]
+            if item.get("kind") == "official_nav"
+        }
+
+        self.assertEqual("scored", hold_event["scoring_status"])
+        self.assertEqual("2026-03-12", hold_event["evaluation_date"])
+        self.assertEqual("2026-03-12", hold_event["official_nav_end"]["evaluation_date_used"])
+        self.assertEqual("next_available_official_nav", hold_event["official_nav_end"]["evaluation_file_match_type"])
+        self.assertIn("raw/quotes/2026-03-12.json", quote_sources)
 
     def test_pending_when_evaluation_quote_file_missing(self) -> None:
         (self.agent.root / "raw" / "quotes" / "2026-03-11.json").unlink()
