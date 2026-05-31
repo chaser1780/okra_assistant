@@ -8,7 +8,8 @@ from typing import Any
 
 from action_ticket_models import ActionTicket, ActionTicketArtifact, EvidenceRef, GuardrailResult, SoftPolicyAdjustment
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
-from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
+from common import dump_json, load_json, load_strategy, resolve_agent_home, resolve_date, score_path, timestamp_now, validated_advice_path
+from build_layered_seed import build_native_action_seeds
 
 
 ACTION_SECTIONS = ("tactical_actions", "dca_actions", "hold_actions")
@@ -75,14 +76,37 @@ def load_json_if_exists(path: Path) -> dict[str, Any]:
     return load_json(path)
 
 
-def source_artifacts(agent_home: Path, report_date: str, validated_path: Path, portfolio_path: Path) -> list[dict[str, Any]]:
-    artifacts = [
-        {
-            "kind": "validated_advice",
-            "path": relative_posix(validated_path, agent_home),
-            "content_sha256": content_sha256(validated_path),
-        }
-    ]
+def source_artifacts(
+    agent_home: Path,
+    report_date: str,
+    validated_path: Path | None,
+    portfolio_path: Path,
+    *,
+    source_mode: str = "validated",
+) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    if source_mode == "validated" and validated_path is not None:
+        artifacts.append(
+            {
+                "kind": "validated_advice",
+                "path": relative_posix(validated_path, agent_home),
+                "content_sha256": content_sha256(validated_path),
+            }
+        )
+    elif source_mode == "native":
+        for kind, path in (
+            ("native_action_seed", agent_home / "db" / "action_seed" / f"{report_date}.json"),
+            ("daily_score", score_path(agent_home, report_date)),
+            ("llm_context", agent_home / "db" / "llm_context" / f"{report_date}.json"),
+        ):
+            if path.exists():
+                artifacts.append(
+                    {
+                        "kind": kind,
+                        "path": relative_posix(path, agent_home),
+                        "content_sha256": content_sha256(path),
+                    }
+                )
     if portfolio_path.exists():
         artifacts.append(
             {
@@ -169,6 +193,9 @@ def requested_amount_for(action: dict[str, Any], committee: dict[str, Any]) -> f
 
 
 def infer_status(action: dict[str, Any], committee: dict[str, Any]) -> str:
+    explicit = str(action.get("ticket_status", "") or "").strip()
+    if explicit:
+        return explicit
     action_verb = normalize_action(action.get("validated_action"))
     model_action = normalize_action(action.get("model_action"))
     constraint_hits = {str(item) for item in (action.get("constraint_hits", []) or [])}
@@ -242,16 +269,19 @@ def build_guardrails(validated: dict[str, Any], action: dict[str, Any], committe
 
 def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], position: dict[str, Any], portfolio_source_path: str, *, kind: str) -> list[EvidenceRef]:
     refs: list[EvidenceRef] = []
+    seed_kind = str(action.get("_seed_source_kind", "validated_advice") or "validated_advice")
+    seed_path = str(action.get("_seed_source_path", f"db/validated_advice/{report_date}.json") or f"db/validated_advice/{report_date}.json")
+    seed_label = "Native action seed" if seed_kind == "native_action_seed" else "Legacy validated action"
     if kind == "support":
         refs.append(
             EvidenceRef(
                 ref_id=f"validated:{report_date}:{source_record_id(action)}",
-                source_kind="validated_advice",
-                source_path=f"db/validated_advice/{report_date}.json",
+                source_kind=seed_kind,
+                source_path=seed_path,
                 source_record_id=source_record_id(action),
                 as_of_date=report_date,
                 available_from=generated_at,
-                summary=f"Legacy validated action {normalize_action(action.get('validated_action'))} amount {safe_float(action.get('validated_amount')):.2f}.",
+                summary=f"{seed_label} {normalize_action(action.get('validated_action'))} amount {safe_float(action.get('validated_amount')):.2f}.",
             )
         )
         if position:
@@ -271,8 +301,8 @@ def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], p
             refs.append(
                 EvidenceRef(
                     ref_id=f"risk:{report_date}:{action.get('fund_code')}:{index}",
-                    source_kind="validated_advice",
-                    source_path=f"db/validated_advice/{report_date}.json",
+                    source_kind=seed_kind,
+                    source_path=seed_path,
                     source_record_id=source_record_id(action),
                     as_of_date=report_date,
                     available_from=generated_at,
@@ -283,8 +313,8 @@ def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], p
             refs.append(
                 EvidenceRef(
                     ref_id=f"constraint:{report_date}:{action.get('fund_code')}:{hit}",
-                    source_kind="validated_advice",
-                    source_path=f"db/validated_advice/{report_date}.json",
+                    source_kind=seed_kind,
+                    source_path=seed_path,
                     source_record_id=source_record_id(action),
                     as_of_date=report_date,
                     available_from=generated_at,
@@ -297,6 +327,16 @@ def evidence_refs(report_date: str, generated_at: str, action: dict[str, Any], p
 def soft_adjustments(action: dict[str, Any]) -> list[SoftPolicyAdjustment]:
     adjustments: list[SoftPolicyAdjustment] = []
     for hit in action.get("policy_rule_hits", []) or []:
+        if str(hit).startswith("legacy_constraint:"):
+            adjustments.append(
+                SoftPolicyAdjustment(
+                    policy_id=str(hit),
+                    effect_type="note",
+                    effect_value=str(hit),
+                    reason="legacy constraint carried in policy_rule_hits by adapter replay",
+                )
+            )
+            continue
         reason = "carried from legacy policy_rule_hits"
         if hit == "core_dca_only":
             reason = "legacy DCA-only context retained as a soft note; it is not a hard Phase 1 ticket constraint"
@@ -414,16 +454,46 @@ def ticket_from_action(
     )
 
 
-def build_action_ticket_artifact(agent_home: Path, report_date: str, *, generated_at: str | None = None, all_funds: bool = True) -> ActionTicketArtifact:
+def build_action_ticket_artifact(
+    agent_home: Path,
+    report_date: str,
+    *,
+    generated_at: str | None = None,
+    all_funds: bool = True,
+    source_mode: str = "validated",
+) -> ActionTicketArtifact:
+    if source_mode not in {"validated", "native"}:
+        raise ValueError(f"unsupported action ticket source_mode: {source_mode}")
     validated_path = validated_advice_path(agent_home, report_date)
-    if not validated_path.exists():
+    if source_mode == "validated" and not validated_path.exists():
         raise FileNotFoundError(f"validated advice not found: {validated_path}")
     portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
-    validated = load_json(validated_path)
-    generated_at = generated_at or str(validated.get("generated_at", "") or timestamp_now())
-    root_sources = source_artifacts(agent_home, report_date, validated_path, portfolio_path)
-    actions, by_code = collect_legacy_actions(validated)
-    committee_by_code = committee_decision_by_code(validated)
+    if source_mode == "native":
+        seed_path, seed_payload = build_native_action_seeds(
+            agent_home,
+            report_date,
+            portfolio=portfolio,
+            portfolio_source_path=portfolio_path,
+            strategy=load_strategy(agent_home),
+            generated_at=generated_at,
+        )
+        validated: dict[str, Any] = {
+            "generated_at": seed_payload.get("generated_at", ""),
+            "decision_mode": "canonical",
+            "execution_eligible": True,
+            "committee_decision_bundle": {"fund_decisions": []},
+        }
+        actions = list(seed_payload.get("actions", []) or [])
+        by_code = {str(item.get("fund_code", "")): item for item in actions if isinstance(item, dict) and item.get("fund_code")}
+        committee_by_code: dict[str, dict[str, Any]] = {}
+        generated_at = generated_at or str(seed_payload.get("generated_at", "") or timestamp_now())
+    else:
+        seed_path = validated_path
+        validated = load_json(validated_path)
+        generated_at = generated_at or str(validated.get("generated_at", "") or timestamp_now())
+        actions, by_code = collect_legacy_actions(validated)
+        committee_by_code = committee_decision_by_code(validated)
+    root_sources = source_artifacts(agent_home, report_date, seed_path, portfolio_path, source_mode=source_mode)
     positions = fund_lookup(portfolio)
     if all_funds:
         for fund in portfolio_funds(portfolio):
@@ -478,6 +548,7 @@ def build_action_ticket_artifact(agent_home: Path, report_date: str, *, generate
             "silent_hold_rate": round(len(silent_holds) / len(hold_tickets), 4) if hold_tickets else 0.0,
             "non_executable_violation_count": 0,
             "official_advice_unchanged": True,
+            "source_mode": source_mode,
         },
         tickets=tickets,
     )
@@ -491,8 +562,15 @@ def write_action_ticket_artifact(agent_home: Path, artifact: ActionTicketArtifac
     return path
 
 
-def run_builder(agent_home: Path, report_date: str, *, generated_at: str | None = None, all_funds: bool = True) -> tuple[Path, ActionTicketArtifact]:
-    artifact = build_action_ticket_artifact(agent_home, report_date, generated_at=generated_at, all_funds=all_funds)
+def run_builder(
+    agent_home: Path,
+    report_date: str,
+    *,
+    generated_at: str | None = None,
+    all_funds: bool = True,
+    source_mode: str = "validated",
+) -> tuple[Path, ActionTicketArtifact]:
+    artifact = build_action_ticket_artifact(agent_home, report_date, generated_at=generated_at, all_funds=all_funds, source_mode=source_mode)
     path = write_action_ticket_artifact(agent_home, artifact)
     return path, artifact
 
@@ -503,6 +581,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD.")
     parser.add_argument("--generated-at", default="", help="Optional fixed generated_at timestamp for deterministic tests.")
     parser.add_argument("--no-all-funds", action="store_true", help="Only emit tickets for legacy validated actions.")
+    parser.add_argument("--source-mode", choices=["validated", "native"], default="validated", help="Seed tickets from legacy validated advice or native portfolio/context facts.")
     return parser
 
 
@@ -510,7 +589,7 @@ def main() -> None:
     args = build_parser().parse_args()
     agent_home = resolve_agent_home(args.agent_home)
     report_date = resolve_date(args.date)
-    path, artifact = run_builder(agent_home, report_date, generated_at=args.generated_at or None, all_funds=not args.no_all_funds)
+    path, artifact = run_builder(agent_home, report_date, generated_at=args.generated_at or None, all_funds=not args.no_all_funds, source_mode=args.source_mode)
     print(f"wrote {len(artifact.tickets)} action tickets: {relative_posix(path, agent_home)}")
 
 

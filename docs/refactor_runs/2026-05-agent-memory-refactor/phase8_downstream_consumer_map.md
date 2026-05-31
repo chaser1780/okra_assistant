@@ -1,62 +1,82 @@
 # Phase 8 Downstream Consumer Map
 
-Status: pre-promotion audit. No official-path replacement has started.
+Status: promoted-only rollout. The legacy multi-agent, committee synthesis,
+final-advice, validator, and runtime adapter chain has been removed from the
+production path.
 
-This document satisfies Phase 8 step 1 and records the current downstream
-consumer map before any legacy daily-analysis responsibility is moved.
+This document records the current downstream consumer map after official-path
+promotion. It supersedes earlier default-off adapter notes in the execution log.
 
-Update after Phase 8 step 3 preview:
+## Production Contract
 
-- `scripts/build_official_advice_compat_preview.py` now builds a
-  non-executable official-advice compatibility preview from action tickets,
-  retrieval packs, and action debates.
-- The preview writes only to
-  `db/refactor_shadow_runs/<date>__official_advice_compat_preview/official_advice_compat_preview.json`.
-- It produces committee-bundle-like, final-advice-like, and
-  validated-section-like preview shapes for review.
-- It does not write `db/committee_decision_bundle`, `db/llm_advice`,
-  `db/validated_advice`, decision ledger, execution sync, portfolio state, or
-  long memory.
-- No fallback switch or official-path promotion is active yet.
+The project-level production contract is stored in:
 
-## Boundary Decision
+```text
+config/production.toml
+```
 
-Phase 8 is not ready for official-path mutation yet.
+The contract intentionally belongs to the project, not to a machine-local
+environment variable. This keeps the promoted path portable when the project is
+moved to another computer, packaged as an app, or run in CI.
 
-Current state:
+Current production advice path:
 
-- Shadow artifacts exist for action tickets, retrieval packs, action debates,
-  outcome events, adaptive policies, strategy skills, Markdown review, and a
-  read-only Workbench review page.
-- The official daily chain still owns `validated_advice`, decision ledger,
-  execution sync, portfolio state, official reports, RAG source ingestion, and
-  Workbench snapshot DTOs.
-- No explicit promotion decision has been made for writing new-chain output into
-  the official path.
+```text
+scripts/run_daily_pipeline.py
+  -> scripts/run_promoted_advice_chain.py
+       -> scripts/build_layered_seed.py
+       -> scripts/build_action_ticket_shadow.py
+       -> scripts/build_layered_retrieval_pack.py
+       -> scripts/action_debate_graph.py
+       -> scripts/build_official_advice_compat_preview.py
+       -> scripts/promoted_advice_guardrails.py
+       -> scripts/decision_ledger.py
+```
 
-Therefore the next safe Phase 8 step is a read-only readiness audit and
-compatibility map, not a pipeline replacement.
+The promoted chain writes the official-compatible outputs:
 
-After the compatibility preview exists, the next safe step remains fallback
-switch design and explicit rollback documentation before any official-path
-mutation.
+```text
+db/committee_advice/<date>.json
+db/committee_decision_bundle/<date>.json
+db/llm_raw/<date>.json
+db/llm_advice/<date>.json
+db/validated_advice/<date>.json
+db/decisions/<date>.json
+db/decision_latest/<fund_code>.json
+db/decision_ledger/<fund_code>.jsonl
+db/phase8/promoted_runs/<date>.json
+```
+
+Deleted legacy entrypoints:
+
+```text
+scripts/run_multiagent_research.py
+scripts/committee_synthesis.py
+scripts/generate_llm_advice.py
+scripts/validate_llm_advice.py
+scripts/shadow_advice_adapter.py
+```
+
+No project completion gate depends on `OKRA_*` environment variables. Those
+environment variable names may appear in old historical notes only.
 
 ## Official Consumer Areas
 
-| Area | Official path | Key producers | Key consumers | Risk |
+| Area | Official path | Current producer | Key consumers | Risk |
 |---|---|---|---|---|
-| validated advice | `db/validated_advice/<date>.json` | `scripts/validate_llm_advice.py` | decision ledger, review, RAG, execution sync, Workbench state, shadow review | high |
-| daily workspace | `db/daily_workspace/<date>/*` | `scripts/today_orchestrator.py` | Today page, System page, task state, runtime status | medium |
-| decision ledger | `db/decisions`, `db/decision_ledger`, `db/decision_latest` | `scripts/decision_ledger.py`, `scripts/update_decision_outcomes.py` | daily reports, replay experiments, long-memory review inputs | high |
-| review pages | `db/review_results`, `db/execution_reviews`, `reports/daily` | `scripts/review_advice.py`, report builders | Review page, learning summaries | medium |
-| execution sync | `db/execution_sync/*`, `db/execution_status/<date>.json` | `scripts/execution_sync.py`, execution API endpoints | Execution page, actual trade review, portfolio settlement | critical |
-| RAG and Copilot | `db/rag/*` plus source collectors | `scripts/rag_sources.py` | `app/rag_answering.py`, `app/rag_service.py`, Copilot panel | medium |
+| validated advice | `db/validated_advice/<date>.json` | `scripts/run_promoted_advice_chain.py` via `promoted_advice_guardrails.py` | decision ledger, review, RAG, execution sync, Workbench state, shadow review | high |
+| daily workspace | `db/daily_workspace/<date>/*` | `scripts/today_orchestrator.py` and daily pipeline | Today page, System page, task state, runtime status | medium |
+| decision ledger | `db/decisions`, `db/decision_ledger`, `db/decision_latest` | `scripts/decision_ledger.py` called by promoted chain | daily reports, replay experiments, long-memory review inputs | high |
+| review pages | `db/review_results`, `db/execution_reviews`, `reports/daily` | review/report builders reading promoted validated advice | Review page, learning summaries | medium |
+| execution sync | `db/execution_sync/*`, `db/execution_status/<date>.json` | execution API endpoints only | Execution page, actual trade review, portfolio settlement | critical |
+| RAG and Copilot | `db/rag/*` plus source collectors | RAG ingestion/eval scripts; still optional and gated | `app/rag_answering.py`, `app/rag_service.py`, Copilot panel | medium |
 | Workbench API | `/api/snapshot`, `/api/today`, `/api/research`, `/api/shadow-review` | `app/web_api.py`, `app/web_api_services.py`, `app/shadow_review_service.py` | frontend routes and schemas | medium |
 
 ## Compatibility Fields
 
-Any future official adapter must preserve validated-advice-compatible action
-sections until all downstream consumers are migrated:
+The promoted chain preserves the old validated-advice shape for downstream
+consumers while replacing the old implementation. These action sections remain
+official:
 
 ```text
 tactical_actions
@@ -105,9 +125,9 @@ committee_decision_bundle
 
 ## Mutation Boundaries
 
-These paths must not accept `db/action_tickets`, `db/retrieval_packs`, or
-`db/action_debates` while artifacts remain `shadow_only` and
-`non_executable=true`:
+Shadow and learning artifacts remain non-executable review artifacts unless a
+future phase explicitly promotes them. These mutation paths must reject
+`shadow_only`, `learning_only`, `display_only`, or `non_executable` payloads:
 
 | Path | Owner |
 |---|---|
@@ -115,82 +135,34 @@ These paths must not accept `db/action_tickets`, `db/retrieval_packs`, or
 | `/api/execution-sync/conversion` | `app/web_api_services.py::ExecutionController.execution_conversion` |
 | `/api/execution-sync/reconcile/apply` | `app/web_api_services.py::ExecutionController.execution_reconcile_apply` |
 | `/api/execution-sync/confirmation/update` | `app/web_api_services.py::ExecutionController.execution_confirmation_update` |
-| `scripts/decision_ledger.py::build_and_write_decisions` | official validated-advice ledger writer |
+| `scripts/decision_ledger.py::build_and_write_decisions` | official promoted ledger writer |
 | `scripts/update_decision_outcomes.py` | official decision outcome updater |
 | `/api/long-memory/action` | official long-memory action endpoint |
 
-## First Replacement Candidate
+## Verification Commands
 
-The first candidate for a future promoted change should be:
-
-```text
-scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle
-```
-
-More precisely, replace the committee-bundle-to-final-advice adapter behind a
-fallback switch, while keeping `scripts/validate_llm_advice.py` as the official
-guardrail, optimizer, `validated_advice`, and ledger writer.
-
-Reason:
-
-- This layer already separates canonical action formation from final narrative.
-- It is upstream of official validation, so hard constraints remain enforced by
-  the current validator.
-- Existing Workbench, review, RAG, execution sync, reports, and ledger consumers
-  can continue to consume official validated advice.
-
-Do not replace these first:
-
-- `db/validated_advice/<date>.json` direct producer contract;
-- `scripts/portfolio_optimizer.py`;
-- execution sync mutation paths;
-- long-memory promotion from shadow artifacts.
-
-## Required Gates Before Promotion
-
-The readiness audit currently marks promotion as blocked until all of these are
-true:
-
-- fallback switch exists and is documented;
-- old/new comparison is available for more than a single golden date;
-- outcome examples cover enough real dates to expose obvious regressions;
-- hard constraints remain mapped and tested;
-- execution sync, NAV/PnL, Copilot, RAG, and Workbench regression baselines pass;
-- rollback command and files are documented;
-- user explicitly accepts official-path promotion evidence.
-
-## Audit Command
-
-Use this command for a deterministic pre-promotion status:
-
-```powershell
-python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22
-```
-
-Markdown output is available with:
+Readiness audit:
 
 ```powershell
 python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --format markdown
 ```
 
-## Compatibility Preview Command
-
-Use this command to regenerate the current preview evidence:
+Multi-date promoted official observation:
 
 ```powershell
-python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --format json
+python -B -X utf8 scripts\run_promoted_stability_observation.py --date 2026-05-11 --date 2026-05-14 --date 2026-05-18 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --label phase8_promoted_official_2026_05_11_14_18_20_22 --format markdown
 ```
 
-For the current golden date, the preview reports:
+Completion audit:
 
-```text
-official_shape_compatible=true
-official_behavior_comparable=true
-official_adapter_dry_run_passed=true
-official_compatible_advice=false
-committee_bundle_compatible=true
-llm_advice_compatible=true
-fallback_switch_active=false
-promotion_ready=false
-official_paths_written=[]
+```powershell
+python -B -X utf8 scripts\audit_phase8_completion.py --date 2026-05-22 --require-main --format markdown
 ```
+
+The completion audit is considered ready only when:
+
+- every required promoted observation date is valid;
+- legacy scripts are deleted;
+- `run_daily_pipeline.py` uses the promoted chain as the only advice step;
+- `config/production.toml` approves the promoted project-level production path;
+- the branch is merged into `main` when `--require-main` is used.

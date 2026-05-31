@@ -7,7 +7,7 @@ complete, and technically sound enough to guide the agent/memory refactor.
 
 ## User Direction
 
-- Review all files under `F:\okra_assistant\docs`.
+- Review all files under the project `docs/` directory.
 - Judge whether they are detailed and comprehensive enough as engineering
   optimization guidance.
 - Clarify how each implementation step depends on other steps.
@@ -49,4 +49,3 @@ action ticket
 
 The next documentation work should be Phase 0 hardening, not another broad
 architecture redesign.
-

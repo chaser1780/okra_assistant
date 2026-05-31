@@ -50,6 +50,7 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
         for relative in (
             f"db/validated_advice/{REPORT_DATE}.json",
             "db/portfolio_state/current.json",
+            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
             f"db/llm_context/{REPORT_DATE}.json",
             f"db/evidence_index/{REPORT_DATE}.json",
             "db/long_memory/exports/all_memory.json",
@@ -76,7 +77,7 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
         self.assertEqual("shadow_only", payload["write_scope"])
         self.assertTrue(payload["non_executable"])
         self.assertTrue(payload["summary"]["official_shape_compatible"])
-        self.assertFalse(payload["summary"]["official_compatible_advice"])
+        self.assertTrue(payload["summary"]["official_compatible_advice"])
         self.assertFalse(payload["summary"]["fallback_switch_active"])
         self.assertFalse(payload["summary"]["promotion_ready"])
         self.assertEqual([], payload["summary"]["official_paths_written"])
@@ -151,7 +152,7 @@ class OfficialAdviceCompatPreviewTests(unittest.TestCase):
             payload["path"],
         )
         self.assertTrue(payload["summary"]["official_shape_compatible"])
-        self.assertFalse(payload["summary"]["official_compatible_advice"])
+        self.assertTrue(payload["summary"]["official_compatible_advice"])
 
 
 if __name__ == "__main__":

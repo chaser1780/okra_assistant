@@ -97,7 +97,10 @@ class ActionTicketBuilderTests(unittest.TestCase):
     def copy_real_slice_inputs(self) -> None:
         self.agent.write_json(f"db/validated_advice/{REPORT_DATE}.json", _load_repo_json(f"db/validated_advice/{REPORT_DATE}.json"))
         self.agent.write_json("db/portfolio_state/current.json", _load_repo_json("db/portfolio_state/current.json"))
-        self.agent.write_json(f"db/portfolio_state/snapshots/{REPORT_DATE}.json", _load_repo_json("db/portfolio_state/current.json"))
+        self.agent.write_json(
+            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
+            _load_repo_json(f"db/portfolio_state/snapshots/{REPORT_DATE}.json"),
+        )
 
     def test_builds_all_fund_tickets_for_2026_05_22_shadow_only(self) -> None:
         self.copy_real_slice_inputs()
@@ -107,7 +110,7 @@ class ActionTicketBuilderTests(unittest.TestCase):
         by_code = {item["fund_code"]: item for item in tickets}
         portfolio_codes = {
             item["fund_code"]
-            for item in _load_repo_json("db/portfolio_state/current.json")["funds"]
+            for item in _load_repo_json(f"db/portfolio_state/snapshots/{REPORT_DATE}.json")["funds"]
         }
 
         self.assertEqual(15, payload["summary"]["ticket_count"])

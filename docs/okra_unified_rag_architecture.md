@@ -534,7 +534,7 @@ cache_enabled = true
 [embedding_provider.OpenAI]
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
-api_key_file = "F:\\okra_assistant\\config\\openai_api_key.txt"
+api_key_file = "config/openai_api_key.txt"
 ```
 
 ### 7.2 Vector Store 选型

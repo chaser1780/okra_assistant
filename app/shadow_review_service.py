@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from artifact_boundary import BoundaryViolation, assert_non_executable
 from common import timestamp_now
 
 
@@ -20,6 +21,8 @@ OPTIONAL_ARTIFACTS = {
     "adaptivePolicies": "db/strategy_memory/policies.json",
     "strategySkills": "db/strategy_skills/registry.json",
 }
+SHADOW_ARTIFACT_KINDS = {"actionTickets", "retrievalPacks", "actionDebates"}
+LEARNING_ARTIFACT_KINDS = {"adaptivePolicies", "strategySkills", "outcomeEvents"}
 
 
 @dataclass(slots=True)
@@ -165,11 +168,28 @@ def read_json_artifact(home: Path, relative: str, kind: str) -> ArtifactRead:
         return ArtifactRead(kind, path, relative, {}, "failed", "invalid_json", f"{kind} artifact root is not an object.")
     if not payload:
         return ArtifactRead(kind, path, relative, {}, "degraded", "empty", f"{kind} artifact is empty.")
+    boundary_message = validate_artifact_boundary(kind, payload)
+    if boundary_message:
+        return ArtifactRead(kind, path, relative, payload, "failed", "boundary_violation", boundary_message)
     summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
     summary_status = str(summary.get("status", "") or "")
     if summary_status in {"degraded", "failed", "missing_inputs"}:
         return ArtifactRead(kind, path, relative, payload, "degraded", summary_status, f"{kind} artifact summary status is {summary_status}.")
     return ArtifactRead(kind, path, relative, payload, "ready", "loaded", f"{kind} artifact loaded.")
+
+
+def validate_artifact_boundary(kind: str, payload: dict[str, Any]) -> str:
+    base_kind = kind.split(":", 1)[0]
+    if base_kind not in SHADOW_ARTIFACT_KINDS and base_kind not in LEARNING_ARTIFACT_KINDS:
+        return ""
+    expected_scope = "shadow_only" if base_kind in SHADOW_ARTIFACT_KINDS else "learning_only"
+    if payload.get("write_scope") != expected_scope:
+        return f"{kind} boundary violation: write_scope must be {expected_scope}."
+    try:
+        assert_non_executable(payload)
+    except BoundaryViolation as exc:
+        return f"{kind} boundary violation: {exc}"
+    return ""
 
 
 def missing_artifact_rows(
@@ -188,6 +208,10 @@ def missing_artifact_rows(
         if item.kind == "legacyAdvice" and reason == "not_generated":
             reason = "missing_source"
         rows.append({"kind": item.kind, "path": item.relative_path, "reason": reason, "message": item.message})
+    for item in outcomes.values():
+        if item.state == "ready":
+            continue
+        rows.append({"kind": item.kind, "path": item.relative_path, "reason": item.reason, "message": item.message})
     if not outcomes:
         rows.append(
             {
@@ -235,23 +259,46 @@ def official_actions(validated: dict[str, Any]) -> list[dict[str, Any]]:
     return actions
 
 
-def official_by_code(validated: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def review_key_for_legacy(action: dict[str, Any]) -> str:
+    suggestion_id = str(action.get("suggestion_id", "") or "").strip()
+    if suggestion_id:
+        return f"suggestion:{suggestion_id}"
+    code = str(action.get("fund_code", "") or "").strip()
+    action_label_text = action_label(action, "legacy")
+    bucket = str(action.get("_bucket", "") or action.get("_source_bucket", "") or "").strip()
+    index = str(action.get("_source_index", "") if action.get("_source_index") is not None else "")
+    return f"{code}:{action_label_text}:{bucket}:{index}"
+
+
+def review_key_for_ticket(ticket: dict[str, Any]) -> str:
+    mapping = ticket.get("legacy_mapping", {}) if isinstance(ticket.get("legacy_mapping"), dict) else {}
+    suggestion_id = str(mapping.get("suggestion_id", "") or "").strip()
+    if suggestion_id:
+        return f"suggestion:{suggestion_id}"
+    code = str(ticket.get("fund_code", "") or "").strip()
+    action_label_text = action_label(ticket, "shadow")
+    bucket = str(mapping.get("source_bucket", "") or ticket.get("portfolio_bucket", "") or "").strip()
+    index = str(mapping.get("source_index", "") if mapping.get("source_index") is not None else "")
+    return f"{code}:{action_label_text}:{bucket}:{index}"
+
+
+def official_by_review_key(validated: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for action in official_actions(validated):
-        code = str(action.get("fund_code", "") or "").strip()
-        if code:
-            result.setdefault(code, action)
+        key = review_key_for_legacy(action)
+        if key:
+            result.setdefault(key, action)
     return result
 
 
-def tickets_by_code(action_tickets: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def tickets_by_review_key(action_tickets: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for ticket in action_tickets.get("tickets", []) or []:
         if not isinstance(ticket, dict):
             continue
-        code = str(ticket.get("fund_code", "") or "").strip()
-        if code:
-            result.setdefault(code, ticket)
+        key = review_key_for_ticket(ticket)
+        if key:
+            result.setdefault(key, ticket)
     return result
 
 
@@ -278,6 +325,8 @@ def debates_by_ticket_id(action_debates: dict[str, Any]) -> dict[str, dict[str, 
 def index_outcomes_by_ticket(outcome_artifacts: dict[str, ArtifactRead]) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {}
     for horizon, artifact in outcome_artifacts.items():
+        if not artifact.usable:
+            continue
         for event in artifact.payload.get("events", []) or []:
             if not isinstance(event, dict) or not event.get("ticket_id"):
                 continue
@@ -308,29 +357,86 @@ def build_review_items(
     action_debates: dict[str, Any],
     outcomes_by_ticket: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    official_map = official_by_code(validated)
-    ticket_map = tickets_by_code(action_tickets)
+    official_map = official_by_review_key(validated)
+    ticket_map = tickets_by_review_key(action_tickets)
+    official_map, ticket_map = align_single_action_fallbacks(official_map, ticket_map)
     pack_map = packs_by_ticket_id(retrieval_packs)
     debate_map = debates_by_ticket_id(action_debates)
-    codes = sorted(set(official_map) | set(ticket_map))
+    keys = sorted(set(official_map) | set(ticket_map))
     items: list[dict[str, Any]] = []
-    for code in codes:
-        legacy = official_map.get(code)
-        ticket = ticket_map.get(code)
+    for key in keys:
+        legacy = official_map.get(key)
+        ticket = ticket_map.get(key)
+        code = str((ticket or {}).get("fund_code") or (legacy or {}).get("fund_code") or key)
         ticket_id = str((ticket or {}).get("ticket_id", "") or "")
-        pack = pack_map.get(ticket_id, {})
-        debate = debate_map.get(ticket_id, {})
+        pack = pack_map.get(ticket_id)
+        debate = debate_map.get(ticket_id)
         outcomes = outcomes_by_ticket.get(ticket_id, [])
         items.append(build_item(code, legacy, ticket, pack, debate, outcomes))
     return items
+
+
+def fallback_action_key(record: dict[str, Any] | None, kind: str) -> str:
+    if not record:
+        return ""
+    return f"{str(record.get('fund_code', '') or '')}:{action_label(record, kind)}"
+
+
+def align_single_action_fallbacks(
+    official_map: dict[str, dict[str, Any]],
+    ticket_map: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    official_by_fund_action: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    ticket_by_fund_action: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for key, action in official_map.items():
+        official_by_fund_action.setdefault(fallback_action_key(action, "legacy"), []).append((key, action))
+    for key, ticket in ticket_map.items():
+        ticket_by_fund_action.setdefault(fallback_action_key(ticket, "shadow"), []).append((key, ticket))
+
+    aligned_official = dict(official_map)
+    aligned_ticket = dict(ticket_map)
+    for fallback_key, official_items in official_by_fund_action.items():
+        ticket_items = ticket_by_fund_action.get(fallback_key, [])
+        if len(official_items) != 1 or len(ticket_items) != 1:
+            continue
+        official_key, official_action = official_items[0]
+        ticket_key, ticket = ticket_items[0]
+        if official_key == ticket_key:
+            continue
+        merged_key = f"matched:{fallback_key}"
+        aligned_official.pop(official_key, None)
+        aligned_ticket.pop(ticket_key, None)
+        aligned_official[merged_key] = official_action
+        aligned_ticket[merged_key] = ticket
+
+    official_by_fund: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    ticket_by_fund: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for key, action in aligned_official.items():
+        official_by_fund.setdefault(str(action.get("fund_code", "") or ""), []).append((key, action))
+    for key, ticket in aligned_ticket.items():
+        ticket_by_fund.setdefault(str(ticket.get("fund_code", "") or ""), []).append((key, ticket))
+    for fund_code, official_items in official_by_fund.items():
+        ticket_items = ticket_by_fund.get(fund_code, [])
+        if len(official_items) != 1 or len(ticket_items) != 1:
+            continue
+        official_key, official_action = official_items[0]
+        ticket_key, ticket = ticket_items[0]
+        if official_key == ticket_key:
+            continue
+        merged_key = f"matched:{fund_code}:single_action"
+        aligned_official.pop(official_key, None)
+        aligned_ticket.pop(ticket_key, None)
+        aligned_official[merged_key] = official_action
+        aligned_ticket[merged_key] = ticket
+    return aligned_official, aligned_ticket
 
 
 def build_item(
     fund_code: str,
     legacy: dict[str, Any] | None,
     ticket: dict[str, Any] | None,
-    pack: dict[str, Any],
-    debate: dict[str, Any],
+    pack: dict[str, Any] | None,
+    debate: dict[str, Any] | None,
     outcomes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     legacy_action = action_label(legacy, "legacy")
@@ -355,7 +461,7 @@ def build_item(
         "nonExecutable": True,
         "displayOnly": True,
         "legacy": legacy_block(legacy) if legacy else None,
-        "shadow": shadow_block(ticket, pack, debate) if ticket else None,
+        "shadow": shadow_block(ticket, pack or {}, debate or {}) if ticket else None,
         "diff": {
             "actionChanged": action_changed,
             "confidenceDelta": round(confidence_delta, 4) if confidence_delta is not None else None,
@@ -373,8 +479,8 @@ def build_item(
         "skillRefs": list((ticket or {}).get("skill_refs", []) or []),
         "skillOutputs": list((ticket or {}).get("skill_outputs", []) or []),
         "outcomeEvents": outcomes,
-        "retrieval": retrieval_block(pack),
-        "debate": debate_block(debate),
+        "retrieval": retrieval_block(pack) if pack else None,
+        "debate": debate_block(debate) if debate else None,
     }
 
 
@@ -522,8 +628,8 @@ def diff_notes(
     legacy_action: str,
     shadow_action: str,
     guardrails: dict[str, Any],
-    pack: dict[str, Any],
-    debate: dict[str, Any],
+    pack: dict[str, Any] | None,
+    debate: dict[str, Any] | None,
     outcomes: list[dict[str, Any]],
 ) -> list[str]:
     notes = []
@@ -531,9 +637,9 @@ def diff_notes(
         notes.append(f"Action differs: official {legacy_action}, shadow {shadow_action}.")
     if guardrails.get("block"):
         notes.append(f"Hard guardrail blocks: {guardrails.get('block')}.")
-    if pack.get("missing_data"):
+    if pack and pack.get("missing_data"):
         notes.append(f"Retrieval missing data: {len(pack.get('missing_data', []) or [])}.")
-    debate_view = debate_block(debate)
+    debate_view = debate_block(debate) if debate else {}
     if debate_view.get("verdict"):
         notes.append(f"Debate verdict: {debate_view['verdict']}.")
     if outcomes:

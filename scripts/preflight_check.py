@@ -16,6 +16,7 @@ from common import (
     legacy_portfolio_path,
     portfolio_state_current_path,
     preflight_result_path,
+    project_relative_path,
     resolve_agent_home,
     timestamp_now,
 )
@@ -157,7 +158,7 @@ def check_provider_config(agent_home: Path, result: dict) -> None:
 
 def probe_llm_model(agent_home: Path, config: dict) -> dict:
     provider = config["model_providers"][config["model_provider"]]
-    api_key = resolve_api_key(config)
+    api_key = resolve_api_key(config, agent_home)
     payload = {
         "model": config["model"],
         "stream": True,
@@ -291,7 +292,7 @@ def check_llm(agent_home: Path, result: dict, probe_network: bool) -> None:
         _add_check(result, "llm:model", "ok", f"当前模型 = {model}")
 
     try:
-        api_key = resolve_api_key(config)
+        api_key = resolve_api_key(config, agent_home)
         redacted = f"{api_key[:4]}***{api_key[-4:]}" if len(api_key) >= 8 else "***"
         _add_check(result, "llm:api_key", "ok", f"已解析 API key：{redacted}")
     except Exception as exc:
@@ -343,7 +344,7 @@ def perform_preflight(agent_home: Path, scope: str, *, probe_llm: bool = True) -
     elif result["warnings"]:
         result["status"] = "warning"
     path = dump_json(preflight_result_path(agent_home), result)
-    result["output_path"] = str(path)
+    result["output_path"] = project_relative_path(agent_home, path)
     return result
 
 

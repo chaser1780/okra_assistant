@@ -144,6 +144,12 @@ function ShadowReviewCard({ item }: { item: ShadowReviewItem }) {
         <InfoBlock className="col-span-4" title="Debate" value={debateText(item.debate)} />
       </div>
 
+      <div className="mt-3 grid grid-cols-12 gap-3">
+        <InfoBlock className="col-span-4" title="Soft Policies" value={policyText(item.softPolicies)} />
+        <InfoBlock className="col-span-4" title="Skills" value={skillText(item.skillRefs, item.skillOutputs)} />
+        <InfoBlock className="col-span-4" title="Outcomes" value={outcomeText(item.outcomeEvents)} />
+      </div>
+
       {notes.length ? (
         <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-400">
           {notes.slice(0, 4).map((note) => (
@@ -193,12 +199,34 @@ function guardrailText(value?: Record<string, unknown>) {
   return `block=${value.block ?? 0}; adjust=${value.adjust ?? 0}; pass=${value.pass ?? 0}`;
 }
 
-function retrievalText(value?: Record<string, unknown>) {
+function retrievalText(value?: Record<string, unknown> | null) {
   if (!value) return "not_run";
   return `trace=${value.traceCompletenessRate ?? "N/A"}; missing=${value.missingDataCount ?? 0}; rag=${value.ragTraceCount ?? 0}`;
 }
 
-function debateText(value?: Record<string, unknown>) {
+function debateText(value?: Record<string, unknown> | null) {
   if (!value) return "not_run";
   return `verdict=${value.verdict || "N/A"}; writesTicketFile=${String(value.writesTicketFile ?? false)}`;
+}
+
+function policyText(value?: Array<Record<string, unknown>>) {
+  if (!value?.length) return "none";
+  const first = value[0];
+  return `${value.length}; ${text(first.policy_id ?? first.policyId ?? first.effect_type, "policy note")}`;
+}
+
+function skillText(refs?: Array<Record<string, unknown>>, outputs?: Array<Record<string, unknown>>) {
+  const refCount = refs?.length ?? 0;
+  const outputCount = outputs?.length ?? 0;
+  if (!refCount && !outputCount) return "none";
+  const first = refs?.[0] ?? outputs?.[0] ?? {};
+  return `refs=${refCount}; outputs=${outputCount}; ${text(first.skill_id ?? first.skillId ?? first.output_type, "skill trace")}`;
+}
+
+function outcomeText(value?: Array<Record<string, unknown>>) {
+  if (!value?.length) return "none";
+  const scored = value.filter((item) => item.scoring_status === "scored").length;
+  const pending = value.filter((item) => item.scoring_status === "pending").length;
+  const first = value[0];
+  return `${value.length}; scored=${scored}; pending=${pending}; ${text(first.outcome_label, "outcome")}`;
 }

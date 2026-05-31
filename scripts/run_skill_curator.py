@@ -135,8 +135,6 @@ def skill_sections(policy: dict[str, Any]) -> dict[str, str]:
 
 
 def curate_skill_from_policy(policy: dict[str, Any], generated_at: str) -> CuratedSkill | None:
-    if str(policy.get("status", "") or "") == "archived":
-        return None
     source_policy_ids = [str(policy.get("policy_id", "") or "")]
     source_outcome_ids = [str(item) for item in list(policy.get("source_outcome_ids", []) or [])]
     if not source_policy_ids[0] or not source_outcome_ids:
@@ -165,7 +163,10 @@ def curate_skill_from_policy(policy: dict[str, Any], generated_at: str) -> Curat
         auto_activation_allowed=False,
         sections=skill_sections(policy),
     )
-    event_type = "candidate_created" if status == "candidate" else "draft_created"
+    if status == "archived":
+        event_type = "archived"
+    else:
+        event_type = "candidate_created" if status == "candidate" else "draft_created"
     return CuratedSkill(
         skill=skill,
         support_count=support_count,

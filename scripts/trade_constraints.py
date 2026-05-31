@@ -165,7 +165,10 @@ def build_trade_constraints(agent_home: Path, portfolio: dict, report_date: str)
                 continue
             if str(trade.get("trade_date", "") or "") > report_date:
                 continue
-            if str(trade.get("status", "") or "").lower() in {"settled", "canceled", "failed"}:
+            status = str(trade.get("status", "") or "").lower()
+            if not status:
+                continue
+            if status in {"settled", "canceled", "failed"}:
                 continue
             delayed_sell_proceeds += float(trade.get("amount", 0.0) or 0.0)
         constraints[fund["fund_code"]] = {

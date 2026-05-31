@@ -144,7 +144,7 @@ db/legacy/trade_journal/
 ## Repository Layout
 
 ```text
-F:\okra_assistant
+.\
 +-- app/                  Local API, desktop backend, state aggregation
 +-- frontend/             React + TypeScript + Tauri workbench
 +-- scripts/              Today-analysis, long-memory, execution sync, reports
@@ -163,25 +163,25 @@ F:\okra_assistant
 Start the desktop workbench:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "F:\okra_assistant\run_desktop_app.ps1"
+powershell -ExecutionPolicy Bypass -File ".\run_desktop_app.ps1"
 ```
 
 Start the API directly:
 
 ```powershell
-python -B -X utf8 "F:\okra_assistant\app\web_api.py" --home "F:\okra_assistant"
+python -B -X utf8 ".\app\web_api.py" --home "."
 ```
 
 Run today analysis:
 
 ```powershell
-python "F:\okra_assistant\scripts\run_today_analysis.py" --date 2026-05-08
+python ".\scripts\run_today_analysis.py" --date 2026-05-08
 ```
 
 Build the Phase 8 official-advice compatibility preview from shadow artifacts:
 
 ```powershell
-python -B -X utf8 "F:\okra_assistant\scripts\build_official_advice_compat_preview.py" --date 2026-05-22 --format json
+python -B -X utf8 ".\scripts\build_official_advice_compat_preview.py" --date 2026-05-22 --format json
 ```
 
 This writes only under `db/refactor_shadow_runs/` and does not replace
@@ -191,31 +191,31 @@ state, or long memory.
 Run long-memory analysis manually:
 
 ```powershell
-python "F:\okra_assistant\scripts\run_long_memory_analysis.py" --date 2026-05-08
+python ".\scripts\run_long_memory_analysis.py" --date 2026-05-08
 ```
 
 Run realtime refresh:
 
 ```powershell
-python "F:\okra_assistant\scripts\run_realtime_monitor.py"
+python ".\scripts\run_realtime_monitor.py"
 ```
 
 Record an actual trade:
 
 ```powershell
-python "F:\okra_assistant\scripts\record_actual_trade.py" --help
+python ".\scripts\record_actual_trade.py" --help
 ```
 
 Parse Alipay position screenshots:
 
 ```powershell
-python "F:\okra_assistant\scripts\parse_alipay_position_screenshot.py" --help
+python ".\scripts\parse_alipay_position_screenshot.py" --help
 ```
 
 Refresh pending confirmations:
 
 ```powershell
-python "F:\okra_assistant\scripts\update_pending_confirmations.py"
+python ".\scripts\update_pending_confirmations.py"
 ```
 
 ## Desktop Pages
@@ -268,35 +268,33 @@ Operational APIs:
 Build the frontend:
 
 ```powershell
-cd "F:\okra_assistant\frontend"
+cd ".\frontend"
 npm run build
 ```
 
 Check the Tauri project:
 
 ```powershell
-cd "F:\okra_assistant\frontend"
+cd ".\frontend"
 npm run tauri:check
 ```
 
 Build the Tauri executable without bundling:
 
 ```powershell
-cd "F:\okra_assistant\frontend"
+cd ".\frontend"
 npm run tauri -- build --no-bundle
 ```
 
 Run targeted backend tests:
 
 ```powershell
-cd "F:\okra_assistant"
 python -B -X utf8 -m unittest tests.test_execution_sync tests.test_long_memory tests.test_multiagent_and_review tests.test_web_api_long_memory
 ```
 
 Preview retention cleanup without changing files:
 
 ```powershell
-cd "F:\okra_assistant"
 python -B -X utf8 scripts\cleanup_retention.py --dry-run --assert-protected --report
 ```
 

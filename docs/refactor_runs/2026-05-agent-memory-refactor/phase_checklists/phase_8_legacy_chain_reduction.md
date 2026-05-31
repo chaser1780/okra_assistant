@@ -1,126 +1,159 @@
 # Phase 8 Checklist: Legacy Chain Replacement And Downline
 
-Status: intentionally last. Do not start until shadow evidence supports
-promotion.
+Status: promoted-only implementation.
 
 ## Goal
 
-Replace redundant legacy daily-analysis responsibilities one at a time, keep
-fallback and compatibility outputs, monitor, and only then downline old layers.
+Make the action-ticket, layered retrieval, debate, and promoted guardrail chain
+the default official daily-analysis path. Remove the old multi-agent,
+committee, final-advice, validator, and runtime adapter layers after evidence
+shows the promoted chain is official-compatible and stable.
 
-## Allowed Write Set
+## Final Write Set
 
-Only after explicit promotion:
+Production code:
+
+- `scripts/run_daily_pipeline.py`
+- `scripts/run_promoted_advice_chain.py`
+- `scripts/promoted_advice_guardrails.py`
+- `scripts/build_layered_seed.py`
+- `scripts/build_action_ticket_shadow.py`
+- `scripts/build_layered_retrieval_pack.py`
+- `scripts/action_debate_graph.py`
+- `scripts/build_official_advice_compat_preview.py`
+- `scripts/decision_ledger.py`
+- `config/production.toml`
+
+Audit and observation:
+
+- `scripts/audit_phase8_readiness.py`
+- `scripts/audit_phase8_completion.py`
+- `scripts/run_promoted_stability_observation.py`
+- `scripts/build_shadow_regression_baseline.py`
+- `scripts/build_outcome_evidence_baseline.py`
+
+Deleted legacy code:
 
 - `scripts/run_multiagent_research.py`
 - `scripts/committee_synthesis.py`
 - `scripts/generate_llm_advice.py`
 - `scripts/validate_llm_advice.py`
-- `scripts/portfolio_optimizer.py`
-- review/reporting scripts
-- Workbench consumers of official advice
-- compatibility adapters
+- `scripts/shadow_advice_adapter.py`
 
-## Forbidden Write Set
+Project state must not rely on machine-local environment variables or
+hard-coded local paths. Promotion state belongs in project files and code
+defaults so it survives migration and app packaging.
 
-Until promotion:
+## Completion Evidence
 
-- do not delete compatibility outputs
-- do not remove fallback paths
-- do not weaken official validator behavior
-- do not mutate execution sync through new shadow artifacts
+Phase 8 is complete only when all of these are true:
 
-## Inputs
+- `run_daily_pipeline.py` invokes `run_promoted_advice_chain.py` as the only
+  official advice-generation step.
+- The old multi-agent, committee, final-advice, validator, and runtime adapter
+  scripts are absent.
+- `config/production.toml` declares `action_debate_promoted` as the project
+  default chain and sets `okra_env_required=false`.
+- Promoted official outputs exist and validate for the required multi-date
+  observation set.
+- Mutation endpoints reject `shadow_only`, `learning_only`, `display_only`, and
+  `non_executable` payload markers.
+- Backend, frontend, hygiene, readiness, and completion checks pass.
+- The branch has been merged to `main`.
 
-- old/new shadow comparison history
-- user review feedback
-- action-ticket outcome quality
-- policy/skill stability
-- downstream consumer map
-- rollback checkpoint
+## Required Observation Dates
 
-## Required Evidence Before Starting
+Current promoted stability observation set:
 
-- New chain can generate official-compatible advice.
-- Workbench can compare old and new outputs.
-- Outcome evaluation has enough examples to expose obvious regressions.
-- Hard constraints are mapped and tested.
-- Existing execution sync, official NAV/PnL, Copilot, RAG, and Workbench flows
-  have regression baselines.
-- Rollback path is documented.
+```text
+2026-05-11
+2026-05-14
+2026-05-18
+2026-05-20
+2026-05-21
+2026-05-22
+```
 
-## Implementation Steps
+Each date must have valid promoted artifacts:
 
-1. Build downstream consumer map for `validated_advice`, daily workspace,
-   decision ledger, review pages, and execution sync.
-2. Decide which legacy layer is replaced first.
-3. Add compatibility adapter if old consumers still expect old field names.
-4. Add fallback switch before changing the official path.
-5. Move one official responsibility at a time.
-6. Run old/new comparison after each responsibility transfer.
-7. Monitor fallback usage.
-8. Keep fallback switch until a stable release checkpoint exists.
-9. Delete or archive legacy code only after tests, real-date review, and
-   fallback monitoring pass.
+```text
+db/phase8/promoted_runs/<date>.json
+db/llm_raw/<date>.json
+db/validated_advice/<date>.json
+db/action_seed/<date>.json
+db/decisions/<date>.json
+```
 
-## Candidate Reduction Targets
+The promoted run must report:
 
-- committee prose-only synthesis that no longer owns action formation
-- duplicated evidence packing replaced by layered retrieval pack
-- validator-only explanations replaced by ticket guardrail mapping
-- optimizer logic only after action-ticket portfolio selection is equivalent
-- review pages only after API DTOs are stable
+```text
+mode=action_debate_promoted
+summary.promoted_run_passed=true
+summary.advice_mode=action_debate_promoted
+summary.decision_source=action_debate_promoted
+native_independent_of_legacy_validated_seed=true
+```
 
 ## Required Tests
 
-- official advice compatibility
-- validator/optimizer hard constraints
-- pipeline logic
-- multi-agent and review
-- execution sync
-- official revaluation/realtime
-- RAG consumers if retrieval changes
-- long memory
-- frontend build and Tauri check
-
-Suggested commands:
+Backend focused tests:
 
 ```powershell
-python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_multiagent_and_review tests.test_validation_and_trade
-python -B -X utf8 -m unittest tests.test_execution_sync tests.test_revaluation_and_realtime tests.test_long_memory
-python -B -X utf8 -m unittest discover -s tests -p "test_rag_*.py"
+python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_phase8_readiness tests.test_phase8_completion_audit tests.test_promoted_advice_chain tests.test_validation_and_trade
+```
+
+Broader backend suite:
+
+```powershell
+python -B -X utf8 -m unittest discover -s tests
+```
+
+Frontend checks:
+
+```powershell
 cd frontend
 npm run build
 npm run tauri:check
 ```
 
-## Manual Verification
+Hygiene:
 
-- Compare official outputs before and after replacement for several dates.
-- Confirm execution sync still links suggestions correctly.
-- Confirm Workbench pages still render current and historical dates.
-- Confirm rollback switch restores old path.
-- Confirm fallback usage is logged.
+```powershell
+python -B -X utf8 scripts\check_repo_text_hygiene.py
+git diff --check
+```
+
+## Audit Commands
+
+Readiness:
+
+```powershell
+python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --format json
+```
+
+Multi-date promoted stability:
+
+```powershell
+python -B -X utf8 scripts\run_promoted_stability_observation.py --date 2026-05-11 --date 2026-05-14 --date 2026-05-18 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --label phase8_promoted_official_2026_05_11_14_18_20_22 --format json
+```
+
+Completion:
+
+```powershell
+python -B -X utf8 scripts\audit_phase8_completion.py --date 2026-05-22 --require-main --format json
+```
 
 ## Rollback Notes
 
-Every reduction PR must state:
+The old chain has been removed. Rollback is a git operation, not a runtime
+environment switch:
 
-- old entrypoint
-- new entrypoint
-- compatibility adapter
-- feature flag or rollback command
-- files to restore if the new path fails
+1. Revert the commit that deletes the legacy scripts and sets
+   `run_promoted_advice_chain.py` as default.
+2. Restore `config/production.toml` to the previous non-promoted contract.
+3. Re-run completion/readiness audits and focused tests before using restored
+   outputs.
 
-Do not remove the last fallback path in the same branch that first promotes a
-new official path.
-
-## Promotion Gate
-
-Legacy code can be deleted only after:
-
-- new path is official for a stable period;
-- fallback has not been used for real failures;
-- replacement path has stable real-date comparison evidence;
-- downstream consumers no longer depend on legacy fields;
-- user accepts the migration evidence.
+Do not introduce machine-local rollback switches as a substitute for project
+state. Temporary operator environment variables are allowed only for ad hoc
+experiments and must not be completion criteria.

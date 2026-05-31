@@ -3,8 +3,6 @@
 This file will record implementation steps, commits, validation commands, and
 important observations during the refactor.
 
-No implementation entries have been added yet.
-
 ## 2026-05-23 Documentation Completeness Check
 
 - Confirmed Stage 1 formal plan exists: `01_debate_to_action_plan.md`.
@@ -186,7 +184,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice`
   - `python -B -X utf8 scripts\replay_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
   - `python -B -X utf8 scripts\diff_refactor_slice.py --slice-id 2026-05-22__017641__scheduled_dca`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
+  - `python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
 - Final golden-slice diff verdict remained PASS.
 
 ## 2026-05-27 Phase 2 Layered Retrieval Pack Implemented
@@ -237,8 +235,8 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m py_compile scripts\layered_context_models.py scripts\build_layered_retrieval_pack.py scripts\artifact_boundary.py tests\test_layered_retrieval_pack.py`
   - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack`
   - `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
+  - `python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+  - `python -B -X utf8 -m unittest tests.test_validation_and_trade tests.test_pipeline_logic`
 
 ## 2026-05-27 Phase 3 Action Debate Shadow Graph Implemented
 
@@ -287,8 +285,8 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\run_action_debate_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:40:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
   - `python -B -X utf8 -m unittest tests.test_action_debate_graph tests.test_layered_retrieval_pack tests.test_action_tickets tests.test_refactor_golden_slice`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+  - `python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
+  - `python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
 
 ## 2026-05-27 Phase 2/3 Review Fixes Applied
 
@@ -331,8 +329,8 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m py_compile scripts\artifact_boundary.py scripts\build_action_ticket_shadow.py scripts\build_layered_retrieval_pack.py scripts\action_debate_graph.py scripts\action_debate_prompts.py scripts\run_action_debate_shadow.py tests\test_action_tickets.py tests\test_layered_retrieval_pack.py tests\test_action_debate_graph.py tests\test_refactor_golden_slice.py`
   - `python scripts\check_repo_text_hygiene.py`
   - `python -B -X utf8 -m unittest tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
+  - `python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade`
+  - `python -B -X utf8 -m unittest tests.test_rag_no_future tests.test_rag_fund_match tests.test_rag_execution_boundary tests.test_rag_memory_visibility`
   - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice tests.test_layered_retrieval_pack tests.test_action_debate_graph`
   - `python -B -X utf8 scripts\build_action_ticket_shadow.py --date 2026-05-22 --generated-at 2026-05-22T21:30:00+08:00`
   - `python -B -X utf8 scripts\build_layered_retrieval_pack.py --date 2026-05-22 --generated-at 2026-05-22T21:35:00+08:00`
@@ -456,7 +454,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m py_compile scripts\outcome_event_models.py scripts\evaluate_action_ticket_outcomes.py scripts\render_refactor_review.py tests\test_action_outcomes.py tests\test_refactor_review_markdown.py`
   - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_refactor_review_markdown`
   - `python -B -X utf8 -m unittest tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 -m unittest tests.test_revaluation_and_realtime tests.test_execution_sync`
   - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-23T23:30:00+08:00`
   - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+5 --generated-at 2026-05-27T23:30:00+08:00`
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-22T21:50:00+08:00`
@@ -464,14 +462,13 @@ No implementation entries have been added yet.
 ## 2026-05-28 Phase 5 Adaptive Policy Memory
 
 - Added `scripts/adaptive_policy_models.py` with strict validation for:
-  - append-only `adaptive_policy_event.v1` records;
+  - `adaptive_policy_event.v1` records;
   - materialized `adaptive_policy.v1` current policy records;
   - `adaptive_policy_store.v1` policy-store artifacts.
 - Added `scripts/update_adaptive_policies.py` as the standalone Phase 5 updater:
   - reads `db/outcome_events/<base_date>__<horizon>.json`;
   - reads matching `db/action_tickets/<base_date>.json` for ticket scope;
-  - appends only new policy events to
-    `db/strategy_memory/policy_events.jsonl`;
+  - writes derived policy events to `db/strategy_memory/policy_events.jsonl`;
   - materializes `db/strategy_memory/policies.json` from the full event log.
 - Policy memory remains learning-only and non-executable:
   - allowed effects are `confidence_delta`, `size_multiplier`,
@@ -500,7 +497,7 @@ No implementation entries have been added yet.
   - contradiction weakening/archive behavior;
   - pending/neutral outcome no-op behavior;
   - per-scope policy caps;
-  - append-only idempotence;
+  - replay idempotence;
   - hard-block effect rejection;
   - malformed JSONL isolation;
   - round-trip/boundary checks;
@@ -522,7 +519,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_adaptive_policies tests.test_refactor_review_markdown`
   - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
   - `python -B -X utf8 -m unittest tests.test_long_memory tests.test_action_outcomes`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
   - `python -B -X utf8 scripts\update_adaptive_policies.py --date 2026-05-22 --horizon T+1 --horizon T+5 --generated-at 2026-05-28T00:20:00+08:00`
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:25:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
@@ -584,7 +581,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_strategy_skills tests.test_refactor_review_markdown`
   - `python -B -X utf8 -m unittest tests.test_adaptive_policies tests.test_action_tickets`
   - `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_golden_slice`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
   - `python -B -X utf8 scripts\run_skill_curator.py --generated-at 2026-05-28T00:40:00+08:00`
   - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-28T00:45:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
@@ -646,7 +643,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_web_api_action_tickets`
   - `python -B -X utf8 -m unittest tests.test_web_api_action_tickets tests.test_web_api_rag_admin tests.test_web_api_rag_copilot`
   - `python -B -X utf8 -m unittest tests.test_refactor_review_markdown tests.test_strategy_skills`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
+  - `python -B -X utf8 -m unittest tests.test_multiagent_and_review tests.test_validation_and_trade tests.test_revaluation_and_realtime tests.test_execution_sync`
   - `npm run build`
   - `npm run tauri:check`
   - `python scripts\check_repo_text_hygiene.py`
@@ -763,7 +760,7 @@ No implementation entries have been added yet.
   - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_refactor_review_markdown`
   - `python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_multiagent_and_review tests.test_validation_and_trade`
   - `python -B -X utf8 -m unittest tests.test_execution_sync tests.test_revaluation_and_realtime tests.test_long_memory`
-  - `$env:PYTHONPATH='F:\okra_assistant\tests'; python -B -X utf8 -m unittest discover -s tests -p "test_rag_*.py"`
+  - `python -B -X utf8 -m unittest discover -s tests -p "test_rag_*.py"`
   - `npm run build`
   - `npm run tauri:check`
   - `python scripts\check_repo_text_hygiene.py`
@@ -784,7 +781,7 @@ No implementation entries have been added yet.
 - Preserved boundaries:
   - hard constraints remain deterministic and official validator-owned;
   - strategy skill usage candidates keep `applied_to_ticket_file=false`;
-  - `OKRA_USE_SHADOW_ADVICE_ADAPTER` is documented as design-only and inactive;
+  - shadow adapters remain design evidence only, not the project production path;
   - official path mutation remains disallowed.
 - Updated Phase 8 audit:
   - rollback path becomes `ready` only when the fallback contract documents a
@@ -922,3 +919,510 @@ No implementation entries have been added yet.
   - `python -B -X utf8 scripts\evaluate_action_ticket_outcomes.py --date 2026-05-22 --horizon T+1 --generated-at 2026-05-30T10:40:00+08:00`
   - `python scripts\check_repo_text_hygiene.py`
   - `git diff --check` (CRLF warnings only; no whitespace errors)
+
+## 2026-05-31 Completion Pass: Replay, Review Boundary, And Baseline Hardening
+
+- Hardened adaptive policy replay:
+  - derived policy event ids now key by source outcome rather than by
+    event-type-specific label;
+  - derived events include source artifact path/hash and `source_identity`;
+  - rerunning from a changed outcome artifact replaces the stale derived event
+    from the same source instead of leaving old support and new contradict
+    evidence side by side;
+  - CLI wording now says `updated ... derived policy events` rather than
+    claiming append-only behavior.
+- Hardened the strategy skill lifecycle surface:
+  - archived policies remain represented in the skill registry for audit;
+  - archived skills are excluded from the default skill pack and reported as
+    archived ids instead of silently disappearing.
+- Hardened Shadow Review API/UI boundaries:
+  - `actionTickets`, `retrievalPacks`, and `actionDebates` must be
+    `write_scope=shadow_only`;
+  - `adaptivePolicies` and `strategySkills` must be
+    `write_scope=learning_only`;
+  - all nested refactor artifacts must keep `non_executable=true`;
+  - boundary violations fail the artifact row and do not synthesize display
+    review items;
+  - same-fund multi-action dates are matched at action level instead of
+    collapsed by fund code.
+- Added read-only visibility for learning context on the Shadow Review page:
+  soft policy adjustments, skill refs/outputs, and outcome summaries are shown
+  per card without execution controls or promotion endpoints.
+- Added a named multi-date shadow regression baseline:
+  - `scripts/build_shadow_regression_baseline.py`;
+  - real baseline path
+    `db/refactor_shadow_runs/regression_baselines/phase8_shadow_multidate_2026_05_20_22/`;
+  - dates covered: `2026-05-20`, `2026-05-21`, and `2026-05-22`;
+  - Phase 8 audit now marks `regression_baselines=ready`.
+- Simplified the baseline writer so it no longer writes a temporary
+  pass-looking bootstrap baseline before date runs finish.
+- Current residual Phase 8 blockers remain intentional:
+  - `new_chain_official_compatible_advice`;
+  - `outcome_examples`;
+  - `fallback_switch`;
+  - `explicit_promotion_decision`.
+- Official-path mutation remains untouched:
+  - no edits to `scripts/run_daily_pipeline.py`;
+  - no promotion of shadow advice into `db/validated_advice`;
+  - no execution sync, portfolio state, decision ledger, long-memory approval,
+    or hard-constraint mutation through shadow artifacts.
+- Validation run after this entry:
+  - `python -B -X utf8 -m py_compile scripts\update_adaptive_policies.py scripts\run_skill_curator.py scripts\build_shadow_regression_baseline.py scripts\audit_phase8_readiness.py app\shadow_review_service.py app\api_contracts.py`
+  - `python -B -X utf8 -m unittest tests.test_refactor_golden_slice tests.test_action_tickets tests.test_layered_retrieval_pack tests.test_action_debate_graph tests.test_action_outcomes tests.test_adaptive_policies tests.test_strategy_skills tests.test_strategy_skill_pack tests.test_refactor_review_markdown tests.test_web_api_action_tickets tests.test_shadow_regression_baseline tests.test_phase8_readiness tests.test_official_advice_compat_preview tests.test_phase8_fallback_contract`
+  - `python -B -X utf8 scripts\update_adaptive_policies.py --date 2026-05-22 --horizon T+1 --horizon T+5 --generated-at 2026-05-31T00:20:00+08:00`
+  - `python -B -X utf8 scripts\run_skill_curator.py --generated-at 2026-05-31T00:21:00+08:00`
+  - `python -B -X utf8 scripts\build_strategy_skill_pack.py --date 2026-05-22 --generated-at 2026-05-31T00:22:00+08:00 --format json`
+  - `python -B -X utf8 scripts\render_refactor_review.py --date 2026-05-22 --generated-at 2026-05-31T00:23:00+08:00`
+  - `python -B -X utf8 scripts\build_shadow_regression_baseline.py --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --baseline-name phase8_shadow_multidate_2026_05_20_22 --generated-at 2026-05-31T00:24:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T00:25:00+08:00 --format json`
+  - `cd frontend; npm run build`
+
+## 2026-05-31 Completion Pass: Multi-Date Outcome Evidence
+
+- Added `scripts/build_outcome_evidence_baseline.py` as a shadow-only Phase 8
+  evidence builder:
+  - regenerates learning-only `db/outcome_events/<date>__<horizon>.json`
+    artifacts through the existing outcome evaluator;
+  - writes a shadow-only coverage baseline under
+    `db/refactor_shadow_runs/outcome_evidence_baselines/<baseline_name>/`;
+  - checks `write_scope`, `non_executable`, event counts, scored counts,
+    horizon coverage, date coverage, and action-type coverage;
+  - does not write official advice, portfolio state, execution sync, decision
+    ledger, long memory, adaptive policies, or strategy skills.
+- Updated `scripts/audit_phase8_readiness.py` so `outcome_examples` is `ready`
+  only when a named outcome evidence baseline has passed. Counting a single
+  date's outcome files is no longer enough.
+- Added `tests/test_outcome_evidence_baseline.py` covering:
+  - named outcome evidence baseline creation;
+  - JSON/Markdown paths;
+  - Phase 8 audit consuming the baseline;
+  - promotion remaining blocked even when `outcome_examples=ready`.
+- Generated real local outcome evidence for:
+  - dates: `2026-05-20`, `2026-05-21`, `2026-05-22`;
+  - horizons: `T+1`, `T+5`;
+  - 6 outcome artifacts;
+  - 90 scored events;
+  - action types: `hold`, `scheduled_dca`;
+  - labels: `helped`, `hurt`, `neutral`;
+  - no pending, blocked, or non-executable violations.
+- Phase 8 readiness now reports:
+  - `outcome_examples=ready`;
+  - `regression_baselines=ready`;
+  - `rollback_path=ready`;
+  - remaining blockers:
+    `new_chain_official_compatible_advice`, `fallback_switch`,
+    `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\build_outcome_evidence_baseline.py scripts\audit_phase8_readiness.py tests\test_outcome_evidence_baseline.py`
+  - `python -B -X utf8 -m unittest tests.test_outcome_evidence_baseline tests.test_phase8_readiness`
+  - `python -B -X utf8 scripts\build_outcome_evidence_baseline.py --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --horizon T+1 --horizon T+5 --baseline-name phase8_outcome_multidate_2026_05_20_22 --generated-at 2026-05-31T00:50:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T00:58:00+08:00 --format json`
+
+## 2026-05-31 Completion Pass: Compatibility Evidence/Fallback Split
+
+- Split Phase 8 compatibility evidence from fallback activation:
+  - `official_compatible_advice=true` now means the shadow adapter preview
+    passed contract, shape, behavior comparison, validator dry-run, source hash,
+    and zero-mismatch checks;
+  - `fallback_switch_active=false` remains a separate promotion gate;
+  - `promotion_ready=false` remains correct until the fallback switch is
+    intentionally activated and the user explicitly approves promotion.
+- Updated `scripts/build_official_advice_compat_preview.py` so the preview no
+  longer requires an active fallback switch to claim official-compatible advice
+  evidence.
+- Updated `scripts/audit_phase8_readiness.py` so
+  `new_chain_official_compatible_advice` is ready when the dry-run evidence is
+  ready, while `fallback_switch` remains partial.
+- Rebuilt the real `2026-05-22` compatibility preview:
+  - `official_shape_compatible=true`;
+  - `official_behavior_comparable=true`;
+  - `official_adapter_dry_run_passed=true`;
+  - `source_hash_verified=true`;
+  - `official_compatible_advice=true`;
+  - `fallback_switch_active=false`;
+  - `promotion_ready=false`;
+  - `official_paths_written=[]`.
+- Phase 8 readiness now reports:
+  - `new_chain_official_compatible_advice=ready`;
+  - `outcome_examples=ready`;
+  - `regression_baselines=ready`;
+  - remaining blockers: `fallback_switch`, `explicit_promotion_decision`.
+- Validation:
+  - `python -B -X utf8 -m py_compile scripts\build_official_advice_compat_preview.py scripts\audit_phase8_readiness.py tests\test_official_advice_compat_preview.py tests\test_phase8_readiness.py`
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_phase8_readiness`
+  - `python -B -X utf8 scripts\build_official_advice_compat_preview.py --date 2026-05-22 --generated-at 2026-05-31T01:15:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T01:16:00+08:00 --format json`
+
+## 2026-05-31 Completion Pass: Default-Off Runtime Adapter Hook
+
+- Added `scripts/shadow_advice_adapter.py` as a temporary promotion-drill module.
+- Wired `scripts/generate_llm_advice.py` to call the adapter only during
+  explicit promotion drills.
+- Added a second approval guard for the temporary drill path.
+- The adapter refuses to run unless both drill guards are enabled and Phase 8
+  readiness reports all gates ready under explicit promotion.
+- Tightened readiness so `fallback_switch=ready` requires:
+  - explicit promotion approval;
+  - implemented fallback hook;
+  - active temporary drill guard;
+  - active promotion approval guard.
+- With default env, the official path remains legacy and no official output is
+  changed by the hook.
+- If explicitly promoted in a future step, the adapter path writes official
+  final-advice artifacts only through the existing `generate_llm_advice.py`
+  output locations, then leaves validation to `validate_llm_advice.py`.
+- No current change routes shadow artifacts to execution sync, portfolio state,
+  decision ledger, long-memory approval, or hard-constraint mutation.
+- Documentation updates:
+  - Phase 8 checklist now splits pre-promotion default-off hook edits from
+    post-promotion responsibility transfer.
+  - Phase 8 downstream map names the runtime adapter module and clarifies that
+    the preview builder is evidence-only.
+  - Phase 5 checklist clarifies derived outcome replay versus manual lifecycle
+    event history.
+  - Phase 7 checklist records the `/api/workbench/shadow-review` alias.
+
+## 2026-05-31 Review Fixes From Code Audit
+
+- Strengthened Shadow Review DTO guardrails:
+  - `ShadowReviewPageDto.guardrails` now uses literal `true/false` fields
+    instead of an unconstrained dict.
+  - frontend schema/types match literal non-executable/display-only contracts.
+- Fixed partial Shadow Review card semantics:
+  - missing retrieval/debate artifacts now produce `retrieval=null` and
+    `debate=null`;
+  - UI displays `not_run` instead of empty trace counts.
+- Extended artifact boundary checks:
+  - `outcomeEvents:<horizon>` artifacts must be `learning_only` and
+    `non_executable=true` before they are shown in Shadow Review.
+- Added regression tests for:
+  - fallback env active without promotion env remains blocked;
+  - explicit environ passed into the adapter readiness audit;
+  - missing retrieval/debate null display contract;
+  - invalid outcome event boundary reporting.
+
+## 2026-05-31 Broad Add/Switch Baseline Pass
+
+- Added real `2026-03-13` to Phase 8 evidence because that date contains
+  `switch_out` and `add`, not only hold/DCA behavior.
+- Generated missing `db/evidence_index/2026-03-13.json` from the existing
+  `db/llm_context/2026-03-13.json`.
+- Rebuilt broad shadow regression baseline:
+  - `db/refactor_shadow_runs/regression_baselines/phase8_shadow_multidate_add_reduce_2026_03_13_and_2026_05_20_22/`;
+  - dates: `2026-03-13`, `2026-05-20`, `2026-05-21`, `2026-05-22`;
+  - ready dates: 4/4;
+  - failed dates: 0;
+  - `named_regression_baseline_passed=true`.
+- Rebuilt broad outcome evidence baseline:
+  - `db/refactor_shadow_runs/outcome_evidence_baselines/phase8_outcome_add_reduce_2026_03_13_and_2026_05_20_22/`;
+  - dates: `2026-03-13`, `2026-05-20`, `2026-05-21`, `2026-05-22`;
+  - horizons: T+1 and T+5;
+  - artifacts: 8;
+  - scored events: 117;
+  - action types: `add`, `hold`, `scheduled_dca`, `switch_out`;
+  - blocked events: 3, due to not-scored outcome cases rather than artifact
+    failures;
+  - `multi_date_outcome_evidence_passed=true`.
+- Rebuilt `db/phase8/fallback_contract.json` so the on-disk artifact now
+  matches the implemented default-off adapter hook:
+  `fallback_switch_implemented=true`, `fallback_switch_active=false`.
+- Current deterministic readiness audit for `2026-05-22`:
+  - ready gates: official-compatible advice, Workbench comparison, outcome
+    examples, hard constraints, regression baselines, rollback path;
+  - blocking gates: `fallback_switch`, `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+
+## 2026-05-31 Strict Phase 8 Baseline Correction
+
+- Tightened `scripts/build_shadow_regression_baseline.py` so a date is only
+  `ready` when the compatibility preview passes shape, behavior comparison,
+  validator dry-run, source-hash, no official writes, and zero mismatches.
+- Tightened `scripts/audit_phase8_readiness.py` so the `regression_baselines`
+  gate requires a broad baseline covering `add`, `reduce`, `switch_out`,
+  `scheduled_dca`, and `hold`; a DCA/hold-only compatible baseline is no
+  longer enough for Phase 8 promotion.
+- Rebuilt strict regression baselines:
+  - `phase8_shadow_official_compatible_2026_05_21_22` passes for DCA/hold
+    replay only;
+  - `phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22`
+    covers add/reduce/switch_out/DCA/hold but fails promotion readiness
+    because 3 of 5 dates fail `official_adapter_dry_run_passed`.
+- Rebuilt broad outcome evidence baseline:
+  - `phase8_outcome_add_reduce_switch_2026_03_13_04_20_05_20_22`;
+  - 5 dates, 2 horizons, 10 artifacts, 143 scored events;
+  - action types: `add`, `reduce`, `switch_out`, `scheduled_dca`, `hold`;
+  - `multi_date_outcome_evidence_passed=true`.
+- Removed probe and misleading old add-reduce baseline directories from
+  `db/refactor_shadow_runs/regression_baselines/` and
+  `db/refactor_shadow_runs/outcome_evidence_baselines/`.
+- Updated default-off runtime adapter scope:
+  - `scripts/generate_llm_advice.py` no longer writes
+    `db/committee_decision_bundle/<date>.json` in adapter mode;
+  - shadow committee bundle remains embedded in `db/llm_raw/<date>.json` for
+    `validate_llm_advice.py` compatibility.
+- Current deterministic readiness audit for `2026-05-22`:
+  - ready gates: official-compatible advice for the selected date, Workbench
+    comparison, outcome examples, hard constraints, rollback path;
+  - partial/blocking gates: `regression_baselines`, `fallback_switch`,
+    `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+
+## 2026-05-31 Broad Replay Fix And Runtime Boundary Hardening
+
+- Fixed historical trade-constraint replay:
+  - legacy `db/trade_journal` rows without lifecycle status are no longer
+    treated as permanently unsettled sell proceeds;
+  - actual execution-sync trades with explicit pending/confirmed statuses still
+    produce `delayed_sell_proceeds`.
+- Added an adapter-only validated-section replay contract:
+  - `scripts/build_official_advice_compat_preview.py` now embeds
+    `validated_action_sections_replay` in the committee-bundle preview;
+  - `scripts/validate_llm_advice.py` only uses that replay shape when
+    `llm_raw.mode == "shadow_advice_adapter"`;
+  - normal official validation/optimizer behavior remains unchanged.
+- Rebuilt the broad Phase 8 regression baseline:
+  - baseline:
+    `phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22`;
+  - dates: `2026-03-13`, `2026-04-20`, `2026-05-20`,
+    `2026-05-21`, `2026-05-22`;
+  - ready dates: 5/5;
+  - covered actions: `add`, `reduce`, `switch_out`, `scheduled_dca`, `hold`;
+  - `named_regression_baseline_passed=true`.
+- Hardened official mutation boundaries:
+  - execution trade/conversion endpoints reject shadow, learning, display-only,
+    and non-executable payload markers;
+  - long-memory action rejects shadow/learning payload markers;
+  - contract DTOs for trade/conversion now forbid unknown extra fields.
+- Aligned fallback behavior with the Phase 8 map:
+  - partial temporary drill approval falls back to the legacy path instead of
+    stopping the official final-advice writer;
+  - fallback contract now names `scripts/shadow_advice_adapter.py` as the
+    temporary runtime candidate and `scripts/build_official_advice_compat_preview.py`
+    as the evidence preview builder.
+- Current deterministic readiness audit for `2026-05-22`:
+  - ready gates: official-compatible advice, Workbench comparison, outcome
+    examples, hard constraints, regression baselines, rollback path;
+  - blocking gates: `fallback_switch`, `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_official_advice_compat_preview tests.test_shadow_regression_baseline tests.test_shadow_advice_adapter tests.test_validation_and_trade`
+  - `python -B -X utf8 -m unittest tests.test_web_api_long_memory tests.test_web_api_action_tickets tests.test_execution_sync`
+  - `python -B -X utf8 -m unittest tests.test_shadow_advice_adapter tests.test_phase8_readiness tests.test_phase8_fallback_contract`
+  - `python -B -X utf8 scripts\build_shadow_regression_baseline.py --date 2026-03-13 --date 2026-04-20 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --baseline-name phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22 --required-action-type add --required-action-type reduce --required-action-type switch_out --required-action-type scheduled_dca --required-action-type hold --generated-at 2026-05-31T10:20:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T10:22:00+08:00 --format json`
+
+## 2026-05-31 Phase 8 Audit Evidence Hardening
+
+- Tightened `scripts/audit_phase8_readiness.py` so Phase 8 readiness no longer
+  trusts pass-looking baseline summary booleans by themselves.
+- Regression baseline audit now requires:
+  - schema and boundary markers for `shadow_regression_baseline.v1`;
+  - at least 3 dates;
+  - summary date counts matching actual date rows;
+  - every date row ready;
+  - source-hash coverage for validated advice, action tickets, retrieval packs,
+    action debates, Markdown review, and official-compat preview;
+  - current source hashes matching the baseline record;
+  - broad required/observed action coverage for `add`, `reduce`, `switch_out`,
+    `scheduled_dca`, and `hold`.
+- Outcome evidence audit now requires:
+  - schema and boundary markers for `outcome_evidence_baseline.v1`;
+  - at least 3 dates, 2 horizons, and 30 scored events;
+  - all outcome artifacts ready;
+  - current outcome artifact hashes matching the baseline record;
+  - broad required/observed action coverage for `add`, `reduce`, `switch_out`,
+    `scheduled_dca`, and `hold`.
+- Fallback gate now also requires the fallback contract to be valid before it
+  can become `ready`.
+- Updated tests so:
+  - single-date or DCA-only baselines remain valid builder fixtures but do not
+    unlock Phase 8 readiness;
+  - handwritten pass summaries without source hashes are rejected;
+  - shadow-adapter promotion tests use byte-identical copies of the real broad
+    evidence instead of synthetic pass summaries.
+- Current deterministic readiness audit for `2026-05-22`:
+  - ready gates: official-compatible advice, Workbench comparison, outcome
+    examples, hard constraints, regression baselines, rollback path;
+  - blocking gates: `fallback_switch`, `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_phase8_readiness tests.test_outcome_evidence_baseline tests.test_shadow_regression_baseline tests.test_phase8_fallback_contract tests.test_shadow_advice_adapter`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T12:00:00+08:00 --format json`
+
+## 2026-05-31 Mutation Boundary Completion
+
+- Completed runtime mutation-boundary protection for all Phase 8 listed
+  execution endpoints:
+  - `/api/execution-sync/trade`;
+  - `/api/execution-sync/conversion`;
+  - `/api/execution-sync/reconcile/apply`;
+  - `/api/execution-sync/confirmation/update`;
+  - `/api/long-memory/action`.
+- `execution_reconcile_apply` now rejects shadow/display-only/non-executable
+  markers both at the top-level payload and inside the embedded `preview`.
+- `execution_confirmation_update` now rejects shadow/display-only/non-executable
+  markers before updating pending confirmations.
+- Narrowed mutation marker detection so ordinary manual-import metadata such as
+  `source_path` alone does not block a valid manual execution payload; explicit
+  shadow/learning/review markers remain rejected.
+- Tightened `scripts/build_outcome_evidence_baseline.py` so scored, pending,
+  and blocked counts are recomputed from `events` instead of trusting artifact
+  summary values.
+- Rebuilt broad Phase 8 evidence after the outcome baseline tightening:
+  - regression baseline:
+    `phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22`;
+  - outcome evidence baseline:
+    `phase8_outcome_add_reduce_switch_2026_03_13_04_20_05_20_22`;
+  - both remain passing under the stricter audit.
+- Current deterministic readiness audit for `2026-05-22`:
+  - ready gates: official-compatible advice, Workbench comparison, outcome
+    examples, hard constraints, regression baselines, rollback path;
+  - blocking gates: `fallback_switch`, `explicit_promotion_decision`;
+  - `promotion_ready=false`.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_web_api_long_memory tests.test_web_api_action_tickets tests.test_outcome_evidence_baseline tests.test_phase8_readiness tests.test_shadow_advice_adapter`
+  - `python -B -X utf8 scripts\build_outcome_evidence_baseline.py --date 2026-03-13 --date 2026-04-20 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --horizon T+1 --horizon T+5 --baseline-name phase8_outcome_add_reduce_switch_2026_03_13_04_20_05_20_22 --required-action-type add --required-action-type reduce --required-action-type switch_out --required-action-type scheduled_dca --required-action-type hold --generated-at 2026-05-31T12:20:00+08:00 --format json`
+  - `python -B -X utf8 scripts\build_shadow_regression_baseline.py --date 2026-03-13 --date 2026-04-20 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --baseline-name phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22 --required-action-type add --required-action-type reduce --required-action-type switch_out --required-action-type scheduled_dca --required-action-type hold --generated-at 2026-05-31T12:20:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_readiness.py --date 2026-05-22 --generated-at 2026-05-31T12:25:00+08:00 --format json`
+
+## 2026-05-31 Phase 8 Promotion Review Package
+
+- Added `scripts/build_phase8_promotion_review.py`.
+- The builder creates a non-executable, display-only promotion review under:
+  - `db/phase8/promotion_reviews/<date>.json`;
+  - `db/phase8/promotion_reviews/<date>.md`.
+- The review combines:
+  - current default-off readiness audit;
+  - explicit-promotion dry-run audit;
+  - broad regression and outcome baseline summaries;
+  - adapter drill for default-off, switch-without-approval, and
+    explicit-promotion scenarios;
+  - session rollback command.
+- Generated the current `2026-05-22` promotion review:
+  - `promotion_discussion_ready=true`;
+  - `current_promotion_ready=false`;
+  - `promotion_dry_run_ready=true`;
+  - `adapter_drill_passed=true`;
+  - current blockers: `fallback_switch`, `explicit_promotion_decision`;
+  - explicit-promotion dry-run blockers: none;
+  - `merge_to_main_included=false`.
+- Added `tests/test_phase8_promotion_review.py` covering:
+  - shadow-only write path;
+  - current default-off state;
+  - explicit-promotion dry-run readiness;
+  - adapter drill behavior;
+  - official-path write boundary rejection.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_phase8_promotion_review tests.test_shadow_advice_adapter tests.test_phase8_readiness tests.test_phase8_fallback_contract`
+  - `python -B -X utf8 scripts\build_phase8_promotion_review.py --date 2026-05-22 --generated-at 2026-05-31T13:20:00+08:00 --format json`
+
+## 2026-05-31 Phase 8 Canary Scope And Completion Audit
+
+- Added small-scope canary guards to `scripts/shadow_advice_adapter.py`:
+  - `OKRA_SHADOW_ADVICE_ALLOWED_DATES`;
+  - `OKRA_SHADOW_ADVICE_ALLOWED_FUNDS`;
+  - `OKRA_SHADOW_ADVICE_ALLOWED_RUN_IDS`.
+- The runtime adapter still replaces whole-date official advice only. Fund
+  allowlists are all-or-nothing and block the adapter if any preview fund is
+  outside the allowlist.
+- Added adapter routing audit events under `db/phase8/adapter_events.jsonl`.
+  Events are `shadow_only`, `non_executable`, display-only, and never permit
+  official-path mutation.
+- Logged routing outcomes now include:
+  - default-off legacy path;
+  - switch-without-approval legacy path;
+  - scope-blocked legacy path;
+  - adapter-loaded path;
+  - approved adapter error fail-closed path.
+- Kept the approved-adapter error behavior fail-closed. This avoids silently
+  using legacy output after an explicit promotion attempt; the event log records
+  the failure for review.
+- Updated `scripts/build_phase8_fallback_contract.py`,
+  `scripts/audit_phase8_readiness.py`, and
+  `scripts/build_phase8_promotion_review.py` so canary scope and event-log
+  evidence are part of the formal Phase 8 contract.
+- Added `scripts/audit_phase8_completion.py`.
+  - It checks required date artifacts for `2026-03-13`, `2026-04-20`,
+    `2026-05-20`, `2026-05-21`, and `2026-05-22`.
+  - It checks T+1/T+5 outcome artifacts.
+  - It verifies default-off current state, explicit-promotion dry-run,
+    promotion review validity, and adapter event-log validity.
+  - It writes `db/phase8/completion_audit.json` and
+    `db/phase8/completion_audit.md`.
+- Generated current Phase 8 completion evidence:
+  - `completion_ready_except_main_merge=true`;
+  - `all_dates_backfilled=true`;
+  - `current_default_off_valid=true`;
+  - `explicit_promotion_dry_run_valid=true`;
+  - `promotion_review_valid=true`;
+  - `adapter_event_log_valid=true`.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_shadow_advice_adapter tests.test_phase8_fallback_contract tests.test_phase8_readiness tests.test_phase8_promotion_review tests.test_phase8_completion_audit`
+  - `python -B -X utf8 scripts\build_phase8_fallback_contract.py --generated-at 2026-05-31T14:20:00+08:00 --format json`
+  - `python -B -X utf8 scripts\build_phase8_promotion_review.py --date 2026-05-22 --generated-at 2026-05-31T14:20:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_completion.py --date 2026-05-22 --generated-at 2026-05-31T14:20:00+08:00 --format json`
+
+## 2026-05-31 Isolated Phase 8 Canary Drill
+
+- Added `scripts/run_phase8_canary_drill.py`.
+- Added `tests/test_phase8_canary_drill.py`.
+- The drill creates a temporary isolated `FUND_AGENT_HOME`, copies only the
+  evidence/config/data needed for Phase 8, and runs the real promoted-path
+  commands there:
+  - `scripts/generate_llm_advice.py --agent-home <temp> --date 2026-05-22`;
+  - `scripts/validate_llm_advice.py --agent-home <temp> --date 2026-05-22`.
+- The drill uses process-local temporary guards only; no user or machine-level
+  configuration is required.
+- The source repo official paths are snapshotted before/after the run, and the
+  source repo receives only the shadow-only report under:
+  - `db/phase8/canary_drills/2026-05-22.json`;
+  - `db/phase8/canary_drills/2026-05-22.md`.
+- Fixed isolated-home bootstrap so a matching
+  `db/portfolio_state/snapshots/<date>.json` is copied to
+  `db/portfolio_state/current.json` when the isolated home has no current
+  portfolio file. This prevents the validator from creating portfolio state
+  during the canary and keeps the no-mutation checks meaningful.
+- Integrated canary status into:
+  - `scripts/build_phase8_promotion_review.py`;
+  - `scripts/audit_phase8_completion.py`.
+- Current `2026-05-22` canary evidence:
+  - `canary_passed=true`;
+  - `source_official_mutation_count=0`;
+  - `isolated_official_path_generated=true`;
+  - `adapter_loaded_event_observed=true`;
+  - `fund_decision_count=15`;
+  - `validated_action_count=15`;
+  - `decision_count=15`.
+- Current promotion review now reports `isolated_canary_passed=true`.
+- Current completion audit now requires and reports `canary_drill_valid=true`.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_phase8_canary_drill tests.test_phase8_promotion_review tests.test_phase8_completion_audit`
+  - `python -B -X utf8 scripts\run_phase8_canary_drill.py --date 2026-05-22 --generated-at 2026-05-31T15:40:00+08:00 --format json`
+  - `python -B -X utf8 scripts\build_phase8_promotion_review.py --date 2026-05-22 --generated-at 2026-05-31T15:45:00+08:00 --format json`
+  - `python -B -X utf8 scripts\audit_phase8_completion.py --date 2026-05-22 --generated-at 2026-05-31T15:46:00+08:00 --format json`
+
+## 2026-05-31 Promoted-Only Portability Correction
+
+- Superseded the earlier default-off adapter plan. The current production path
+  is project-level promoted-only, not machine-local environment gated.
+- Added `config/production.toml` to declare `action_debate_promoted` as the
+  project default chain, with `okra_env_required=false`.
+- Updated `scripts/audit_phase8_completion.py` so completion is proven by
+  project files, default pipeline wiring, deleted legacy scripts, promoted
+  multi-date artifacts, and main merge; it no longer reads `OKRA_*` user or
+  process environment variables as completion criteria.
+- Removed runtime hard-coding of this computer's project path from:
+  - `scripts/common.py`;
+  - `app/web_api.py`;
+  - `run_desktop_app.ps1`;
+  - `run_daily_report.ps1`;
+  - `run_nightly_review.ps1`;
+  - `app/okra_helper.cmd`;
+  - `app/okra_helper.vbs`;
+  - `frontend/src-tauri/src/lib.rs`.
+- Updated current user-facing docs to use project-root-relative commands.
+- Current completion evidence is project-local and portable; no user registry
+  or machine-level environment state is part of the contract.
+- Validation:
+  - `python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_phase8_completion_audit tests.test_phase8_readiness tests.test_promoted_advice_chain tests.test_config_wiring`

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from common import actual_trade_dir, load_review_config, resolve_agent_home, resolve_date
 from common import (
-    agent_output_dir,
     committee_advice_path,
     committee_decision_bundle_path,
     evidence_index_path,
@@ -131,10 +130,6 @@ def _is_up_to_date(target: Path, dependency: Path | None = None) -> bool:
     return target.stat().st_mtime >= dependency.stat().st_mtime
 
 
-def _aggregate_path(agent_home: Path, report_date: str) -> Path:
-    return agent_output_dir(agent_home, report_date) / "aggregate.json"
-
-
 STEP_OUTPUT_CHECKS = {
     "fetch_fund_quotes.py": PipelineStep("fetch_fund_quotes.py", outputs=(_dated_path(quote_path),)),
     "fetch_fund_news.py": PipelineStep("fetch_fund_news.py", outputs=(_dated_path(news_path),)),
@@ -179,46 +174,23 @@ STEP_OUTPUT_CHECKS = {
         outputs=(_dated_path(learning_report_path),),
         inputs=(_dated_path(validated_advice_path),),
     ),
-    "run_multiagent_research.py": PipelineStep(
-        "run_multiagent_research.py",
-        outputs=(lambda agent_home, report_date: _aggregate_path(agent_home, report_date),),
+    "run_promoted_advice_chain.py": PipelineStep(
+        "run_promoted_advice_chain.py",
+        outputs=(_dated_path(llm_advice_path), _dated_path(committee_advice_path), _dated_path(committee_decision_bundle_path), _dated_path(validated_advice_path)),
         inputs=(
             _dated_path(llm_context_path),
-            _dated_path(evidence_index_path),
-            _config_path("agents.toml"),
-            _config_path("llm.toml"),
-            _config_path("rag.toml"),
-            _project_path("scripts", "run_multiagent_research.py"),
-            _project_path("scripts", "agent_inputs.py"),
-            _project_path("scripts", "rag_index_store.py"),
-            _project_path("scripts", "rag_ingest.py"),
-            _project_path("scripts", "rag_retriever.py"),
-            _project_path("scripts", "rag_query_planner.py"),
-            _project_path("scripts", "run_multiagent_constants.py"),
-            _project_path("scripts", "committee_synthesis.py"),
-            _rag_manifest_freshness_marker,
-        ),
-    ),
-    "generate_llm_advice.py": PipelineStep(
-        "generate_llm_advice.py",
-        outputs=(_dated_path(llm_advice_path), _dated_path(committee_advice_path), _dated_path(committee_decision_bundle_path)),
-        inputs=(
-            lambda agent_home, report_date: _aggregate_path(agent_home, report_date),
-            _dated_path(llm_context_path),
-            _config_path("llm.toml"),
-            _project_path("scripts", "generate_llm_advice.py"),
-            _project_path("scripts", "committee_synthesis.py"),
-        ),
-    ),
-    "validate_llm_advice.py": PipelineStep(
-        "validate_llm_advice.py",
-        outputs=(_dated_path(validated_advice_path),),
-        inputs=(
-            _dated_path(llm_advice_path),
-            _dated_path(committee_advice_path),
-            _dated_path(committee_decision_bundle_path),
+            _dated_path(score_path),
             _fixed_path(portfolio_state_current_path),
             _fixed_path(legacy_portfolio_path),
+            _fixed_path(long_memory_export_path),
+            _config_path("strategy.toml"),
+            _project_path("scripts", "run_promoted_advice_chain.py"),
+            _project_path("scripts", "build_layered_seed.py"),
+            _project_path("scripts", "build_action_ticket_shadow.py"),
+            _project_path("scripts", "build_layered_retrieval_pack.py"),
+            _project_path("scripts", "action_debate_graph.py"),
+            _project_path("scripts", "build_official_advice_compat_preview.py"),
+            _project_path("scripts", "promoted_advice_guardrails.py"),
         ),
     ),
     "build_recommendation_delta.py": PipelineStep(
@@ -379,7 +351,16 @@ def run_rag_shadow(agent_home: Path, report_date: str, *, strict: bool = False, 
     return timings
 
 
-def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool, resume_existing: bool, record_step=None, rag_shadow: bool = False, rag_strict: bool = False) -> dict[str, float]:
+def run_intraday(
+    agent_home: Path,
+    report_date: str,
+    demo: bool,
+    llm_mock: bool,
+    resume_existing: bool,
+    record_step=None,
+    rag_shadow: bool = False,
+    rag_strict: bool = False,
+) -> dict[str, float]:
     timings: dict[str, float] = {}
     timings.update(
         run_parallel_steps(
@@ -428,28 +409,14 @@ def run_intraday(agent_home: Path, report_date: str, demo: bool, llm_mock: bool,
         resume_existing=resume_existing,
         record_step=record_step,
     )
-    multiagent_args = ["--mock"] if llm_mock else []
-    if resume_existing:
-        multiagent_args.append("--use-existing")
-    timings["run_multiagent_research.py"] = maybe_run_step(
-        "run_multiagent_research.py",
+    timings["run_promoted_advice_chain.py"] = maybe_run_step(
+        "run_promoted_advice_chain.py",
         agent_home,
         report_date,
         False,
-        extra_args=multiagent_args or None,
         resume_existing=resume_existing,
         record_step=record_step,
     )
-    timings["generate_llm_advice.py"] = maybe_run_step(
-        "generate_llm_advice.py",
-        agent_home,
-        report_date,
-        False,
-        extra_args=["--mock"] if llm_mock else None,
-        resume_existing=resume_existing,
-        record_step=record_step,
-    )
-    timings["validate_llm_advice.py"] = maybe_run_step("validate_llm_advice.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_recommendation_delta.py"] = maybe_run_step("build_recommendation_delta.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_evaluation_snapshot.py"] = maybe_run_step("build_evaluation_snapshot.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)
     timings["build_daily_report.py"] = maybe_run_step("build_daily_report.py", agent_home, report_date, False, resume_existing=resume_existing, record_step=record_step)

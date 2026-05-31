@@ -551,7 +551,7 @@ def build_validated_payload(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate and optimize LLM advice under portfolio constraints.")
+    parser = argparse.ArgumentParser(description="Apply promoted advice guardrails and write the validated advice contract.")
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
     parser.add_argument("--date", help="Report date in YYYY-MM-DD format.")
     args = parser.parse_args()

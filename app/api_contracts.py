@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class MutationRequestModel(ContractModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ApiError(ContractModel):
@@ -117,25 +121,35 @@ class ShadowReviewItemDto(ContractModel):
     category: str = "missing"
     severity: str = "info"
     displayLabel: str = ""
-    nonExecutable: bool = True
-    displayOnly: bool = True
+    nonExecutable: Literal[True] = True
+    displayOnly: Literal[True] = True
     legacy: dict[str, Any] | None = None
     shadow: dict[str, Any] | None = None
     diff: dict[str, Any] = Field(default_factory=dict)
     display: dict[str, Any] = Field(default_factory=dict)
 
 
+class ShadowReviewGuardrailsDto(ContractModel):
+    nonExecutable: Literal[True] = True
+    executionDisabled: Literal[True] = True
+    affectsPortfolio: Literal[False] = False
+    affectsAdviceAccuracy: Literal[False] = False
+    affectsLongMemoryPromotion: Literal[False] = False
+    allowExecutionEvidence: Literal[False] = False
+    displayOnly: Literal[True] = True
+
+
 class ShadowReviewPageDto(ContractModel):
     selectedDate: str = ""
     status: str = "missing"
     generatedAt: str = ""
-    nonExecutable: bool = True
-    displayOnly: bool = True
+    nonExecutable: Literal[True] = True
+    displayOnly: Literal[True] = True
     summary: dict[str, Any] = Field(default_factory=dict)
     artifacts: ShadowReviewArtifactsDto = Field(default_factory=ShadowReviewArtifactsDto)
     items: list[ShadowReviewItemDto] = Field(default_factory=list)
     runtime: dict[str, Any] = Field(default_factory=dict)
-    guardrails: dict[str, Any] = Field(default_factory=dict)
+    guardrails: ShadowReviewGuardrailsDto = Field(default_factory=ShadowReviewGuardrailsDto)
 
 
 class SystemPageDto(ContractModel):
@@ -161,7 +175,7 @@ class FundDetailDto(ContractModel):
     system: dict[str, Any] = Field(default_factory=dict)
 
 
-class ExecutionTradeRequestDto(ContractModel):
+class ExecutionTradeRequestDto(MutationRequestModel):
     trade_id: str | None = None
     trade_date: str | None = None
     trade_time: str | None = None
@@ -182,7 +196,7 @@ class ExecutionTradeRequestDto(ContractModel):
     user_note: str | None = None
 
 
-class ExecutionConversionRequestDto(ContractModel):
+class ExecutionConversionRequestDto(MutationRequestModel):
     conversion_id: str | None = None
     trade_date: str | None = None
     trade_time: str | None = None

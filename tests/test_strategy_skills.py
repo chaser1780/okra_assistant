@@ -133,11 +133,11 @@ class StrategySkillTests(unittest.TestCase):
         registry = load_registry(self.agent.root)
         statuses = {entry.status for entry in registry.entries}
 
-        self.assertEqual(2, len(skill_paths))
-        self.assertEqual(2, len(event_paths))
-        self.assertEqual(2, appended)
-        self.assertEqual({"candidate", "draft"}, statuses)
-        self.assertEqual({"draft": 1, "candidate": 1}, registry.summary["status_counts"])
+        self.assertEqual(3, len(skill_paths))
+        self.assertEqual(3, len(event_paths))
+        self.assertEqual(3, appended)
+        self.assertEqual({"candidate", "draft", "archived"}, statuses)
+        self.assertEqual({"archived": 1, "draft": 1, "candidate": 1}, registry.summary["status_counts"])
 
     def test_active_promotion_requires_support_or_approval_and_auto_active_is_zero(self) -> None:
         self.write_policy_store([self.policy("policy:portfolio:growth_cluster:repeat_add:v1", "active", 6, 0)])
@@ -150,7 +150,7 @@ class StrategySkillTests(unittest.TestCase):
         self.assertEqual(0, registry.summary["auto_active_promotion_count"])
         self.assertFalse(registry.auto_activation_allowed)
 
-    def test_archived_skill_is_excluded_from_default_skill_pack(self) -> None:
+    def test_archived_skill_is_kept_in_registry_but_excluded_from_default_skill_pack(self) -> None:
         self.write_policy_store(
             [
                 self.policy("policy:portfolio:growth_cluster:repeat_add:v1", "candidate", 2, 0),
@@ -159,11 +159,14 @@ class StrategySkillTests(unittest.TestCase):
         )
         run_curator(self.agent.root, generated_at=GENERATED_AT)
 
+        registry = load_registry(self.agent.root)
         pack = build_default_skill_pack(self.agent.root)
 
+        self.assertEqual({"candidate", "archived"}, {entry.status for entry in registry.entries})
         self.assertEqual(0, pack["summary"]["active_skill_count"])
         self.assertEqual(1, pack["summary"]["candidate_skill_count"])
-        self.assertEqual([], pack["archived_skill_ids"])
+        self.assertEqual(1, pack["summary"]["archived_skill_count"])
+        self.assertEqual(["skill:portfolio_growth_cluster:repeat_reduce_review:v1"], pack["archived_skill_ids"])
         self.assertEqual("candidate", pack["candidate_skills"][0]["status"])
 
     def test_skill_output_cannot_hard_block_or_force_trade(self) -> None:

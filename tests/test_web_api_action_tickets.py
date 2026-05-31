@@ -81,6 +81,8 @@ class WebApiActionTicketShadowReviewTests(unittest.TestCase):
         self.assertTrue(item["nonExecutable"])
         self.assertTrue(item["displayOnly"])
         self.assertEqual("same", item["category"])
+        self.assertIsNone(item["retrieval"])
+        self.assertIsNone(item["debate"])
         self.assertIn("retrievalPacks", {row["kind"] for row in data["artifacts"]["missing"]})
         self.assertIn("actionDebates", {row["kind"] for row in data["artifacts"]["missing"]})
 
@@ -95,6 +97,46 @@ class WebApiActionTicketShadowReviewTests(unittest.TestCase):
         invalid_rows = [row for row in data["artifacts"]["missing"] if row["reason"] == "invalid_json"]
         self.assertTrue(invalid_rows)
         self.assertNotIn("Traceback", invalid_rows[0]["message"])
+
+    def test_shadow_boundary_violation_returns_failed_not_display_only_item(self) -> None:
+        self.write_legacy_advice()
+        self.write_action_tickets(action="hold")
+        payload = json.loads((self.agent.root / "db" / "action_tickets" / f"{REPORT_DATE}.json").read_text(encoding="utf-8"))
+        payload["non_executable"] = False
+        self.agent.write_json(f"db/action_tickets/{REPORT_DATE}.json", payload)
+
+        response = self._request_json(f"/api/shadow-review?date={REPORT_DATE}")
+
+        data = response["data"]
+        self.assertEqual("failed", data["status"])
+        self.assertEqual([], data["items"])
+        boundary_rows = [row for row in data["artifacts"]["missing"] if row["reason"] == "boundary_violation"]
+        self.assertTrue(boundary_rows)
+        self.assertIn("non_executable", boundary_rows[0]["message"])
+
+    def test_outcome_boundary_violation_is_reported_as_missing_artifact_row(self) -> None:
+        self.write_legacy_advice()
+        self.write_action_tickets(action="hold")
+        self.agent.write_json(
+            f"db/outcome_events/{REPORT_DATE}__T+1.json",
+            {
+                "schema_version": "outcome_event.v1",
+                "artifact_id": f"outcome_events:{REPORT_DATE}:T+1",
+                "base_date": REPORT_DATE,
+                "horizon": "T+1",
+                "write_scope": "shadow_only",
+                "non_executable": True,
+                "events": [],
+                "summary": {"event_count": 0},
+            },
+        )
+
+        response = self._request_json(f"/api/shadow-review?date={REPORT_DATE}")
+
+        rows = response["data"]["artifacts"]["missing"]
+        boundary_rows = [row for row in rows if row["kind"] == "outcomeEvents:T+1" and row["reason"] == "boundary_violation"]
+        self.assertTrue(boundary_rows)
+        self.assertIn("write_scope must be learning_only", boundary_rows[0]["message"])
 
     def test_ready_payload_contains_non_execution_markers(self) -> None:
         self.write_legacy_advice()
@@ -117,6 +159,90 @@ class WebApiActionTicketShadowReviewTests(unittest.TestCase):
         self.assertEqual("high", item["severity"])
         self.assertTrue(item["shadow"]["missingData"])
         self.assertFalse(item["debate"]["writesTicketFile"])
+
+    def test_shadow_review_keeps_multiple_actions_for_same_fund(self) -> None:
+        self.agent.write_json(
+            f"db/validated_advice/{REPORT_DATE}.json",
+            {
+                "report_date": REPORT_DATE,
+                "generated_at": "2026-05-22T09:00:00+08:00",
+                "tactical_actions": [
+                    {
+                        "suggestion_id": "official:F001:add",
+                        "fund_code": "F001",
+                        "fund_name": "Alpha Fund",
+                        "validated_action": "add",
+                        "confidence": 0.5,
+                        "thesis": "Official add.",
+                        "constraint_hits": [],
+                    }
+                ],
+                "dca_actions": [
+                    {
+                        "suggestion_id": "official:F001:scheduled_dca",
+                        "fund_code": "F001",
+                        "fund_name": "Alpha Fund",
+                        "validated_action": "scheduled_dca",
+                        "confidence": 0.6,
+                        "thesis": "Official DCA.",
+                        "constraint_hits": [],
+                    }
+                ],
+                "hold_actions": [],
+            },
+        )
+        self.agent.write_json(
+            f"db/action_tickets/{REPORT_DATE}.json",
+            {
+                "schema_version": "action_ticket.v1",
+                "artifact_id": f"action_tickets:{REPORT_DATE}",
+                "artifact_kind": "action_ticket_shadow",
+                "report_date": REPORT_DATE,
+                "generated_at": "2026-05-22T09:10:00+08:00",
+                "write_scope": "shadow_only",
+                "non_executable": True,
+                "summary": {"ticket_count": 2, "status": "ok"},
+                "tickets": [
+                    {
+                        "ticket_id": f"ticket:{REPORT_DATE}:F001:add:001",
+                        "fund_code": "F001",
+                        "fund_name": "Alpha Fund",
+                        "action_verb": "add",
+                        "ticket_status": "shadow_only",
+                        "execution_mode": "immediate",
+                        "validated_amount": 100,
+                        "confidence": 0.5,
+                        "thesis": "Shadow add.",
+                        "non_executable": True,
+                        "write_scope": "shadow_only",
+                        "hard_guardrail_results": [{"rule_id": "test", "result": "pass", "status_reason": "test"}],
+                        "legacy_mapping": {"suggestion_id": "official:F001:add", "source_bucket": "tactical_actions", "validated_action": "add"},
+                    },
+                    {
+                        "ticket_id": f"ticket:{REPORT_DATE}:F001:scheduled_dca:001",
+                        "fund_code": "F001",
+                        "fund_name": "Alpha Fund",
+                        "action_verb": "scheduled_dca",
+                        "ticket_status": "shadow_only",
+                        "execution_mode": "scheduled",
+                        "validated_amount": 25,
+                        "confidence": 0.6,
+                        "thesis": "Shadow DCA.",
+                        "non_executable": True,
+                        "write_scope": "shadow_only",
+                        "hard_guardrail_results": [{"rule_id": "test", "result": "pass", "status_reason": "test"}],
+                        "legacy_mapping": {"suggestion_id": "official:F001:scheduled_dca", "source_bucket": "dca_actions", "validated_action": "scheduled_dca"},
+                    },
+                ],
+            },
+        )
+
+        response = self._request_json(f"/api/shadow-review?date={REPORT_DATE}")
+
+        data = response["data"]
+        self.assertEqual(2, data["summary"]["comparableCount"])
+        self.assertEqual(2, len(data["items"]))
+        self.assertEqual(["add", "scheduled_dca"], sorted(item["legacy"]["action"] for item in data["items"]))
 
     def test_contract_alias_and_meta_are_stable(self) -> None:
         self.write_legacy_advice()

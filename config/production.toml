@@ -1,0 +1,27 @@
+[advice]
+default_chain = "action_debate_promoted"
+default_entrypoint = "scripts/run_promoted_advice_chain.py"
+official_path_mutation_allowed = true
+requires_legacy_validated_seed = false
+legacy_multiagent_chain_enabled = false
+legacy_committee_chain_enabled = false
+legacy_validator_chain_enabled = false
+
+[phase8]
+promoted_rollout_approved = true
+promoted_guardrails = "scripts/promoted_advice_guardrails.py"
+completion_audit = "scripts/audit_phase8_completion.py"
+stability_observation = "scripts/run_promoted_stability_observation.py"
+stability_observation_label = "phase8_promoted_official_2026_05_11_14_18_20_22"
+stable_observation_dates = [
+  "2026-05-11",
+  "2026-05-14",
+  "2026-05-18",
+  "2026-05-20",
+  "2026-05-21",
+  "2026-05-22",
+]
+
+[compatibility]
+okra_env_required = false
+environment_flags = "not_required_for_default_production_path"

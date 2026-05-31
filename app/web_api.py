@@ -51,7 +51,7 @@ from shadow_review_service import ShadowReviewService
 from workbench_state import WorkbenchStateService
 
 
-DEFAULT_HOME = Path(r"F:\okra_assistant")
+DEFAULT_HOME = ROOT_DIR
 ALLOWED_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",

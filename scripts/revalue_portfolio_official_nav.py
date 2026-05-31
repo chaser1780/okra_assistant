@@ -13,6 +13,7 @@ from common import (
     load_portfolio,
     parse_date_text,
     portfolio_daily_pnl_path,
+    project_relative_path,
     portfolio_valuation_path,
     quote_path,
     resolve_agent_home,
@@ -374,9 +375,9 @@ def main() -> None:
         source="official_nav_revaluation",
         event_date=report_date,
         event_type="official_nav_revaluation",
-        extra_meta={"valuation_snapshot_path": str(portfolio_valuation_path(agent_home, report_date))},
+        extra_meta={"valuation_snapshot_path": project_relative_path(agent_home, portfolio_valuation_path(agent_home, report_date))},
     )
-    valuation_payload["portfolio_state_snapshot_path"] = str(snapshot_path)
+    valuation_payload["portfolio_state_snapshot_path"] = project_relative_path(agent_home, snapshot_path)
     valuation_path = dump_json(portfolio_valuation_path(agent_home, report_date), valuation_payload)
     daily_pnl_path = dump_json(portfolio_daily_pnl_path(agent_home, report_date), daily_pnl_payload)
     portfolio_path = current_state_path

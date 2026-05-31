@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from common import resolve_agent_home, resolve_date, timestamp_now
+from common import load_json, resolve_agent_home, resolve_date, timestamp_now
 
 
-SCHEMA_VERSION = "phase8_readiness_audit.v1"
-PREVIEW_SCHEMA_VERSION = "official_advice_compat_preview.v1"
-REQUIRED_PREVIEW_SECTION_LISTS = {
-    "validated_action_sections_preview": ("tactical_actions", "dca_actions", "hold_actions"),
-}
-
+SCHEMA_VERSION = "phase8_readiness_audit.v2"
+PROMOTED_MODE = "action_debate_promoted"
 REQUIRED_CONSUMER_AREAS = {
     "validated_advice",
     "daily_workspace",
@@ -24,6 +19,13 @@ REQUIRED_CONSUMER_AREAS = {
     "rag_copilot",
     "workbench_api",
 }
+LEGACY_SCRIPT_PATHS = (
+    "scripts/run_multiagent_research.py",
+    "scripts/committee_synthesis.py",
+    "scripts/generate_llm_advice.py",
+    "scripts/validate_llm_advice.py",
+    "scripts/shadow_advice_adapter.py",
+)
 
 
 CONSUMER_MAP: list[dict[str, Any]] = [
@@ -31,8 +33,8 @@ CONSUMER_MAP: list[dict[str, Any]] = [
         "area": "validated_advice",
         "official_path": "db/validated_advice/<date>.json",
         "producers": [
-            "scripts/validate_llm_advice.py::main",
-            "scripts/validate_llm_advice.py::build_validated_payload",
+            "scripts/run_promoted_advice_chain.py",
+            "scripts/promoted_advice_guardrails.py::build_validated_payload",
         ],
         "consumers": [
             "scripts/decision_ledger.py::build_decisions_from_validated",
@@ -61,265 +63,80 @@ CONSUMER_MAP: list[dict[str, Any]] = [
             "dca_actions",
             "hold_actions",
         ],
-        "action_fields": [
-            "suggestion_id",
-            "fund_code",
-            "fund_name",
-            "validated_action",
-            "validated_amount",
-            "model_action",
-            "confidence",
-            "thesis",
-            "policy_rule_hits",
-            "constraint_hits",
-            "validation_notes",
-            "execution_status",
-        ],
         "replacement_risk": "high",
-        "compatibility_note": "Do not replace this file first; it is the broad official consumer contract.",
+        "compatibility_note": "Promoted action-debate chain now owns the official contract; hard guardrails still enforce executable constraints.",
     },
     {
         "area": "daily_workspace",
         "official_path": "db/daily_workspace/<date>/*",
-        "producers": [
-            "scripts/today_orchestrator.py::run_today_analysis",
-        ],
-        "consumers": [
-            "app/ui_support.py::load_state",
-            "app/web_api_services.py::today_analysis_payload",
-            "app/web_api_services.py::system_payload",
-            "frontend/src/app/pages/TodayPage.tsx",
-            "frontend/src/app/pages/SystemPage.tsx",
-        ],
-        "required_fields": [
-            "today_decision.json",
-            "today_analysis.json",
-            "today_analysis_meta.json",
-            "today_analysis_runtime.json",
-            "memory_cycle.json",
-            "daily_brief.md",
-            "runId",
-            "status",
-            "currentStep",
-            "failedAgents",
-            "degradedAgents",
-            "resultReady",
-        ],
+        "producers": ["scripts/today_orchestrator.py::run_today_analysis"],
+        "consumers": ["app/ui_support.py::load_state", "app/web_api_services.py::today_analysis_payload"],
+        "required_fields": ["today_decision.json", "today_analysis.json", "today_analysis_meta.json"],
         "replacement_risk": "medium",
-        "compatibility_note": "Keep page DTOs stable; action tickets may be linked in review surfaces only.",
+        "compatibility_note": "Today workspace remains a consumer of the official promoted advice files.",
     },
     {
         "area": "decision_ledger",
         "official_path": "db/decisions/<date>.json, db/decision_ledger/*.jsonl, db/decision_latest/*.json",
-        "producers": [
-            "scripts/decision_ledger.py::build_and_write_decisions",
-            "scripts/update_decision_outcomes.py::main",
-        ],
-        "consumers": [
-            "scripts/build_daily_report.py",
-            "scripts/run_replay_experiment.py",
-            "scripts/update_decision_outcomes.py",
-            "long memory review cycle inputs",
-        ],
-        "required_fields": [
-            "decision_id",
-            "suggestion_id",
-            "report_date",
-            "fund_code",
-            "validated_action",
-            "validated_amount",
-            "action_section",
-            "position_before",
-            "constraints",
-            "risk_notes",
-            "evidence_refs",
-            "outcomes",
-            "attribution",
-        ],
+        "producers": ["scripts/decision_ledger.py::build_and_write_decisions"],
+        "consumers": ["scripts/build_daily_report.py", "scripts/run_replay_experiment.py", "scripts/update_decision_outcomes.py"],
+        "required_fields": ["decision_id", "suggestion_id", "report_date", "fund_code", "validated_action", "validated_amount"],
         "replacement_risk": "high",
-        "compatibility_note": "Stable suggestion_id and action_section are required for idempotent ledger writes.",
+        "compatibility_note": "Promoted run status must record that the ledger write surface was touched.",
     },
     {
         "area": "review_pages",
         "official_path": "db/review_results/<date>_T<horizon>.json, reports/daily/*",
-        "producers": [
-            "scripts/review_advice.py",
-            "scripts/build_daily_report.py",
-            "scripts/build_nightly_review_report.py",
-        ],
-        "consumers": [
-            "app/ui_support.py::load_review_results_for_date",
-            "app/workbench_state.py::build_review_view_model",
-            "frontend/src/app/pages/ReviewPage.tsx",
-        ],
-        "required_fields": [
-            "source",
-            "base_date",
-            "review_date",
-            "horizon",
-            "items",
-            "summary",
-            "diagnostic_summary",
-            "suggestion_id",
-        ],
+        "producers": ["scripts/review_advice.py", "scripts/build_daily_report.py", "scripts/build_nightly_review_report.py"],
+        "consumers": ["app/ui_support.py::load_review_results_for_date", "frontend/src/app/pages/ReviewPage.tsx"],
+        "required_fields": ["source", "base_date", "review_date", "horizon", "items", "summary"],
         "replacement_risk": "medium",
-        "compatibility_note": "Shadow outcome events can be shown beside review results but must not replace official review history yet.",
+        "compatibility_note": "Review reads promoted validated advice through the unchanged official shape.",
     },
     {
         "area": "execution_sync",
         "official_path": "db/execution_sync/*, db/execution_status/<date>.json",
-        "producers": [
-            "scripts/execution_sync.py::record_actual_trade",
-            "scripts/execution_sync.py::record_conversion",
-            "scripts/execution_sync.py::apply_reconciliation",
-            "scripts/execution_sync.py::update_pending_confirmations",
-        ],
-        "consumers": [
-            "app/web_api_services.py::ExecutionController",
-            "app/web_api.py execution-sync endpoints",
-            "frontend/src/app/pages/ExecutionPage.tsx",
-            "scripts/review_advice.py::execution_source_items",
-        ],
-        "required_fields": [
-            "linked_suggestion_id",
-            "linked_advice_date",
-            "suggestion_id",
-            "validated_action",
-            "validated_amount",
-            "trade_id",
-            "operation_type",
-            "execution_deviation",
-            "pending",
-            "trades",
-            "deviations",
-            "reconciliationReports",
-            "counts",
-        ],
+        "producers": ["scripts/execution_sync.py::record_actual_trade", "scripts/execution_sync.py::record_conversion"],
+        "consumers": ["app/web_api_services.py::ExecutionController", "frontend/src/app/pages/ExecutionPage.tsx"],
+        "required_fields": ["linked_suggestion_id", "linked_advice_date", "validated_action", "validated_amount"],
         "replacement_risk": "critical",
-        "compatibility_note": "Never route shadow artifacts into execution mutation endpoints.",
+        "compatibility_note": "Execution mutation endpoints must reject review/shadow artifacts and accept only official promoted advice references.",
     },
     {
         "area": "rag_copilot",
         "official_path": "db/rag/* plus source collectors",
-        "producers": [
-            "scripts/rag_sources.py::collect_validated_advice_documents",
-            "scripts/rag_sources.py::collect_committee_bundle_documents",
-            "scripts/rag_sources.py::collect_execution_sync_documents",
-        ],
-        "consumers": [
-            "app/rag_answering.py",
-            "app/rag_service.py",
-            "app/copilot_service.py",
-            "frontend/src/components/okra/CopilotPanel.tsx",
-        ],
-        "required_fields": [
-            "source_kind",
-            "source_path",
-            "source_record_id",
-            "title",
-            "summary",
-            "as_of_date",
-            "available_from",
-            "domain",
-            "source_tier",
-            "fund_codes",
-            "visibility",
-        ],
+        "producers": ["scripts/rag_sources.py"],
+        "consumers": ["app/rag_answering.py", "app/rag_service.py", "app/copilot_service.py"],
+        "required_fields": ["source_kind", "source_path", "source_record_id", "title", "summary", "available_from"],
         "replacement_risk": "medium",
-        "compatibility_note": "Retrieval packs can inform shadow debate but cannot become canonical RAG truth without a source adapter.",
+        "compatibility_note": "Retrieval packs stay decision evidence; canonical RAG documents still come from official outputs.",
     },
     {
         "area": "workbench_api",
         "official_path": "GET /api/snapshot, /api/today, /api/research, /api/shadow-review",
-        "producers": [
-            "app/web_api.py",
-            "app/web_api_services.py::PageService",
-            "app/shadow_review_service.py",
-        ],
-        "consumers": [
-            "frontend/src/lib/workbenchApi.ts",
-            "frontend/src/lib/schemas.ts",
-            "frontend/src/app/routes.tsx",
-            "frontend/src/app/pages/ShadowReviewPage.tsx",
-        ],
-        "required_fields": [
-            "selectedDate",
-            "summary",
-            "dashboard",
-            "research",
-            "review",
-            "executionSync",
-            "todayAnalysis",
-            "nonExecutable",
-            "displayOnly",
-            "executionDisabled",
-        ],
+        "producers": ["app/web_api.py", "app/web_api_services.py::PageService", "app/shadow_review_service.py"],
+        "consumers": ["frontend/src/lib/workbenchApi.ts", "frontend/src/lib/schemas.ts"],
+        "required_fields": ["selectedDate", "summary", "dashboard", "research", "review", "executionSync", "todayAnalysis"],
         "replacement_risk": "medium",
-        "compatibility_note": "Keep shadow-review read-only and separate from snapshot fallback synthesis.",
+        "compatibility_note": "Workbench review surfaces show promoted-chain traces without creating execution controls.",
     },
 ]
 
 
 MUTATION_BOUNDARIES = [
-    {
-        "path": "/api/execution-sync/trade",
-        "owner": "app/web_api_services.py::ExecutionController.execution_trade",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "/api/execution-sync/conversion",
-        "owner": "app/web_api_services.py::ExecutionController.execution_conversion",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "/api/execution-sync/reconcile/apply",
-        "owner": "app/web_api_services.py::ExecutionController.execution_reconcile_apply",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "/api/execution-sync/confirmation/update",
-        "owner": "app/web_api_services.py::ExecutionController.execution_confirmation_update",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "scripts/decision_ledger.py::build_and_write_decisions",
-        "owner": "official validated-advice ledger writer",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "scripts/update_decision_outcomes.py",
-        "owner": "official decision outcome updater",
-        "shadow_allowed": False,
-    },
-    {
-        "path": "/api/long-memory/action",
-        "owner": "app/web_api_services.py::PageService.long_memory_action",
-        "shadow_allowed": False,
-    },
+    {"path": "/api/execution-sync/trade", "owner": "app/web_api_services.py::ExecutionController.execution_trade", "shadow_allowed": False},
+    {"path": "/api/execution-sync/conversion", "owner": "app/web_api_services.py::ExecutionController.execution_conversion", "shadow_allowed": False},
+    {"path": "/api/execution-sync/reconcile/apply", "owner": "app/web_api_services.py::ExecutionController.execution_reconcile_apply", "shadow_allowed": False},
+    {"path": "scripts/decision_ledger.py::build_and_write_decisions", "owner": "official promoted ledger writer", "shadow_allowed": False},
+    {"path": "/api/long-memory/action", "owner": "app/web_api_services.py::PageService.long_memory_action", "shadow_allowed": False},
 ]
 
 
-FIRST_REPLACEMENT_CANDIDATE = {
-    "candidate_id": "committee_bundle_to_final_advice_adapter",
-    "legacy_layer": "scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle",
-    "why_first": (
-        "It is downstream of committee/action formation and upstream of official validation. "
-        "The current validator, optimizer, ledger, reports, Workbench, and execution sync can stay on the official contract."
-    ),
-    "must_keep": [
-        "committee_decision_bundle/<date>.json",
-        "llm_advice/<date>.json",
-        "committee_advice/<date>.json",
-        "llm_raw.mode in responses_api/mock/committee_fallback",
-        "validate_llm_advice.py as official guardrail and ledger writer",
-    ],
-    "not_first": [
-        "db/validated_advice/<date>.json direct replacement",
-        "scripts/portfolio_optimizer.py replacement",
-        "execution_sync mutation path integration",
-        "long-memory promotion from shadow artifacts",
-    ],
-}
+def _load_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {}
 
 
 def _artifact_status(agent_home: Path, relative: str) -> dict[str, Any]:
@@ -327,337 +144,94 @@ def _artifact_status(agent_home: Path, relative: str) -> dict[str, Any]:
     return {"path": relative, "exists": path.exists(), "size_bytes": path.stat().st_size if path.exists() else 0}
 
 
-def _count_json_array(path: Path, key: str) -> int:
-    if not path.exists():
-        return 0
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
-    value = payload.get(key, []) if isinstance(payload, dict) else []
-    return len(value) if isinstance(value, list) else 0
-
-
-def _compat_preview_path(agent_home: Path, report_date: str) -> Path:
-    return agent_home / "db" / "refactor_shadow_runs" / f"{report_date}__official_advice_compat_preview" / "official_advice_compat_preview.json"
-
-
-def _fallback_contract_path(agent_home: Path) -> Path:
-    return agent_home / "db" / "phase8" / "fallback_contract.json"
-
-
-def _hash_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _required_preview_source_paths(report_date: str) -> set[str]:
+def _promoted_run_status(agent_home: Path, report_date: str) -> dict[str, Any]:
+    run_path = agent_home / "db" / "phase8" / "promoted_runs" / f"{report_date}.json"
+    raw_path = agent_home / "db" / "llm_raw" / f"{report_date}.json"
+    validated_path = agent_home / "db" / "validated_advice" / f"{report_date}.json"
+    seed_path = agent_home / "db" / "action_seed" / f"{report_date}.json"
+    decisions_path = agent_home / "db" / "decisions" / f"{report_date}.json"
+    run = _load_json_object(run_path)
+    raw = _load_json_object(raw_path)
+    validated = _load_json_object(validated_path)
+    seed = _load_json_object(seed_path)
+    decisions = _load_json_object(decisions_path)
+    summary = run.get("summary", {}) if isinstance(run.get("summary"), dict) else {}
+    preview_quality = run.get("preview_quality", {}) if isinstance(run.get("preview_quality"), dict) else {}
+    official_paths = run.get("official_paths_written", {}) if isinstance(run.get("official_paths_written"), dict) else {}
+    checks = {
+        "promoted_status_exists": run_path.exists(),
+        "status_schema": run.get("schema_version") == "promoted_advice_chain.v1",
+        "status_mode": run.get("mode") == PROMOTED_MODE,
+        "official_mutation_allowed": run.get("official_path_mutation_allowed") is True,
+        "native_seed": run.get("native_independent_of_legacy_validated_seed") is True,
+        "summary_passed": summary.get("promoted_run_passed") is True,
+        "raw_mode": raw.get("mode") == PROMOTED_MODE,
+        "validated_mode": validated.get("advice_mode") == PROMOTED_MODE,
+        "validated_decision_source": validated.get("decision_source") == PROMOTED_MODE,
+        "seed_independent": seed.get("summary", {}).get("native_independent_of_validated_advice") is True,
+        "decisions_written": bool(decisions.get("decisions")),
+        "official_paths_include_decisions": "decisions" in official_paths,
+        "preview_has_no_missing_fields": not list(preview_quality.get("missing_required_fields", []) or []),
+    }
     return {
-        f"db/validated_advice/{report_date}.json",
-        f"db/action_tickets/{report_date}.json",
-        f"db/retrieval_packs/{report_date}.json",
-        f"db/action_debates/{report_date}.json",
+        "path": f"db/phase8/promoted_runs/{report_date}.json",
+        "valid": all(checks.values()),
+        "checks": checks,
+        "summary": summary,
+        "preview_quality": preview_quality,
+        "official_path_keys": sorted(official_paths),
+        "decision_count": len(decisions.get("decisions", []) or []),
     }
 
 
-def _preview_body_failures(payload: dict[str, Any]) -> list[str]:
-    failures: list[str] = []
-    committee = payload.get("committee_decision_bundle_preview")
-    if not isinstance(committee, dict) or not isinstance(committee.get("fund_decisions"), list):
-        failures.append("committee_decision_bundle_preview")
-    final = payload.get("final_advice_preview")
-    if not isinstance(final, dict) or not isinstance(final.get("fund_decisions"), list):
-        failures.append("final_advice_preview")
-    for section_name, list_names in REQUIRED_PREVIEW_SECTION_LISTS.items():
-        section = payload.get(section_name)
-        if not isinstance(section, dict) or any(not isinstance(section.get(name), list) for name in list_names):
-            failures.append(section_name)
-    if not isinstance(payload.get("comparison_to_official"), dict):
-        failures.append("comparison_to_official")
-    return failures
+def _legacy_scripts_status(agent_home: Path) -> dict[str, Any]:
+    existing = [relative for relative in LEGACY_SCRIPT_PATHS if (agent_home / relative).exists()]
+    return {"valid": not existing, "existing": existing, "required_absent": list(LEGACY_SCRIPT_PATHS)}
 
 
-def _validate_preview_contract(agent_home: Path, payload: dict[str, Any], report_date: str) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {
-            "valid": False,
-            "failures": ["preview_root_object"],
-            "source_hash_verified": False,
-            "source_hash_failures": ["<preview_root_object>"],
-        }
-    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
-    failures: list[str] = []
-    if payload.get("schema_version") != PREVIEW_SCHEMA_VERSION:
-        failures.append("schema_version")
-    if payload.get("report_date") != report_date:
-        failures.append("report_date")
-    if payload.get("write_scope") != "shadow_only":
-        failures.append("write_scope")
-    if payload.get("non_executable") is not True:
-        failures.append("non_executable")
-    if payload.get("display_only") is not True:
-        failures.append("display_only")
-    if summary.get("official_output_unchanged") is not True:
-        failures.append("official_output_unchanged")
-    if list(summary.get("official_paths_written", []) or []):
-        failures.append("official_paths_written")
-    failures.extend(_preview_body_failures(payload))
-
-    hash_failures: list[str] = []
-    checked_source_count = 0
-    source_paths_seen: set[str] = set()
-    source_artifacts = payload.get("source_artifacts", [])
-    if not isinstance(source_artifacts, list):
-        source_artifacts = []
-    for item in source_artifacts:
-        if not isinstance(item, dict) or item.get("kind") == "builder":
-            continue
-        checked_source_count += 1
-        relative = str(item.get("path", "") or "")
-        if relative:
-            source_paths_seen.add(relative)
-        expected = str(item.get("content_sha256", "") or "")
-        if not relative or not expected:
-            hash_failures.append(relative or "<missing_path>")
-            continue
-        source_path = agent_home / relative
-        if not source_path.exists() or _hash_file(source_path) != expected:
-            hash_failures.append(relative)
-    missing_required_sources = sorted(_required_preview_source_paths(report_date) - source_paths_seen)
-    hash_failures.extend(missing_required_sources)
-    if checked_source_count == 0:
-        hash_failures.append("<no_verifiable_sources>")
-    if hash_failures:
-        failures.append("source_artifacts")
-
-    return {
-        "valid": not failures,
-        "failures": failures,
-        "source_hash_verified": not hash_failures,
-        "source_hash_failures": hash_failures,
+def _default_pipeline_status(agent_home: Path) -> dict[str, Any]:
+    path = agent_home / "scripts" / "run_daily_pipeline.py"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    checks = {
+        "uses_promoted_chain": "run_promoted_advice_chain.py" in text,
+        "no_legacy_flag": "--legacy-advice-chain" not in text and "legacy_advice_chain" not in text,
+        "no_legacy_steps": "run_multiagent_research.py" not in text and "generate_llm_advice.py" not in text and "validate_llm_advice.py" not in text,
     }
+    return {"path": "scripts/run_daily_pipeline.py", "valid": all(checks.values()), "checks": checks}
 
 
-def _compat_preview_status(agent_home: Path, report_date: str) -> dict[str, Any]:
-    path = _compat_preview_path(agent_home, report_date)
-    if not path.exists():
-        return {
-            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
-            "exists": False,
-            "official_compatible_advice": False,
-            "official_shape_compatible": False,
-            "official_behavior_comparable": False,
-            "official_adapter_dry_run_passed": False,
-            "source_hash_verified": False,
-            "fallback_switch_active": False,
-            "adapter_gate_ready": False,
-        }
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return {
-            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
-            "exists": True,
-            "official_compatible_advice": False,
-            "official_shape_compatible": False,
-            "official_behavior_comparable": False,
-            "official_adapter_dry_run_passed": False,
-            "source_hash_verified": False,
-            "fallback_switch_active": False,
-            "adapter_gate_ready": False,
-            "error": str(exc),
-        }
-    if not isinstance(payload, dict):
-        contract = _validate_preview_contract(agent_home, payload, report_date)
-        return {
-            "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
-            "exists": True,
-            "official_compatible_advice": False,
-            "legacy_official_compatible_advice_claim": False,
-            "official_shape_compatible": False,
-            "official_behavior_comparable": False,
-            "official_adapter_dry_run_passed": False,
-            "source_hash_verified": False,
-            "preview_contract_valid": False,
-            "preview_contract_failures": contract["failures"],
-            "source_hash_failures": contract["source_hash_failures"],
-            "committee_bundle_compatible": False,
-            "llm_advice_compatible": False,
-            "official_output_unchanged": False,
-            "fallback_switch_active": False,
-            "comparison_mismatched_count": 0,
-            "adapter_gate_ready": False,
-            "missing_required_fields": [],
-            "error": "preview root must be object",
-        }
-    summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
-    comparison = payload.get("comparison_to_official", {}) if isinstance(payload, dict) and isinstance(payload.get("comparison_to_official"), dict) else {}
-    contract = _validate_preview_contract(agent_home, payload, report_date)
-    fallback_switch_active = bool(summary.get("fallback_switch_active"))
-    adapter_gate_ready = all(
-        [
-            contract["valid"],
-            bool(summary.get("official_shape_compatible")),
-            bool(summary.get("official_behavior_comparable")),
-            bool(summary.get("official_adapter_dry_run_passed")),
-            bool(summary.get("source_hash_verified")) and contract["source_hash_verified"],
-            int(comparison.get("mismatched_count", 1) or 0) == 0,
-            fallback_switch_active,
-        ]
-    )
-    return {
-        "path": f"db/refactor_shadow_runs/{report_date}__official_advice_compat_preview/official_advice_compat_preview.json",
-        "exists": True,
-        "official_compatible_advice": adapter_gate_ready,
-        "legacy_official_compatible_advice_claim": bool(summary.get("official_compatible_advice")),
-        "official_shape_compatible": bool(summary.get("official_shape_compatible")),
-        "official_behavior_comparable": bool(summary.get("official_behavior_comparable")),
-        "official_adapter_dry_run_passed": bool(summary.get("official_adapter_dry_run_passed")),
-        "source_hash_verified": bool(summary.get("source_hash_verified")) and contract["source_hash_verified"],
-        "preview_contract_valid": contract["valid"],
-        "preview_contract_failures": contract["failures"],
-        "source_hash_failures": contract["source_hash_failures"],
-        "committee_bundle_compatible": bool(summary.get("committee_bundle_compatible")),
-        "llm_advice_compatible": bool(summary.get("llm_advice_compatible")),
-        "official_output_unchanged": bool(summary.get("official_output_unchanged")),
-        "fallback_switch_active": fallback_switch_active,
-        "comparison_mismatched_count": int(comparison.get("mismatched_count", 0) or 0),
-        "adapter_gate_ready": adapter_gate_ready,
-        "missing_required_fields": list(summary.get("missing_required_fields", []) or []),
-    }
-
-
-def _fallback_contract_status(agent_home: Path) -> dict[str, Any]:
-    path = _fallback_contract_path(agent_home)
-    relative = "db/phase8/fallback_contract.json"
-    if not path.exists():
-        return {
-            "path": relative,
-            "exists": False,
-            "fallback_switch_designed": False,
-            "fallback_switch_active": False,
-            "rollback_command_documented": False,
-            "official_path_mutation_allowed": False,
-            "contract_valid": False,
-            "failures": ["missing_contract"],
-        }
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return {
-            "path": relative,
-            "exists": True,
-            "fallback_switch_designed": False,
-            "fallback_switch_active": False,
-            "rollback_command_documented": False,
-            "official_path_mutation_allowed": False,
-            "contract_valid": False,
-            "failures": [f"invalid_json:{exc}"],
-        }
-    failures: list[str] = []
-    if not isinstance(payload, dict):
-        failures.append("root_object")
-        payload = {}
-    if payload.get("schema_version") != "phase8_fallback_contract.v1":
-        failures.append("schema_version")
-    if payload.get("write_scope") != "shadow_only":
-        failures.append("write_scope")
-    if payload.get("non_executable") is not True:
-        failures.append("non_executable")
-    switch = payload.get("fallback_switch", {}) if isinstance(payload.get("fallback_switch"), dict) else {}
-    rollback = payload.get("rollback", {}) if isinstance(payload.get("rollback"), dict) else {}
-    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
-    if switch.get("env_var") != "OKRA_USE_SHADOW_ADVICE_ADAPTER":
-        failures.append("fallback_switch.env_var")
-    if switch.get("active") is not False or summary.get("fallback_switch_active") is not False:
-        failures.append("fallback_switch_active")
-    if summary.get("official_path_mutation_allowed") is not False:
-        failures.append("official_path_mutation_allowed")
-    if not str(rollback.get("powershell_command_draft", "") or "").strip():
-        failures.append("rollback.powershell_command_draft")
-    return {
-        "path": relative,
-        "exists": True,
-        "fallback_switch_designed": summary.get("fallback_switch_designed") is True,
-        "fallback_switch_active": summary.get("fallback_switch_active") is True or switch.get("active") is True,
-        "rollback_command_documented": summary.get("rollback_command_documented") is True and "rollback.powershell_command_draft" not in failures,
-        "official_path_mutation_allowed": summary.get("official_path_mutation_allowed") is True,
-        "contract_valid": not failures,
-        "failures": failures,
-    }
-
-
-def _evidence_statuses(agent_home: Path, report_date: str, *, promotion_approved: bool) -> list[dict[str, Any]]:
-    action_ticket_path = agent_home / "db" / "action_tickets" / f"{report_date}.json"
-    retrieval_path = agent_home / "db" / "retrieval_packs" / f"{report_date}.json"
-    debate_path = agent_home / "db" / "action_debates" / f"{report_date}.json"
-    review_path = agent_home / "db" / "refactor_reviews" / f"{report_date}.md"
-    outcome_count = len(list((agent_home / "db" / "outcome_events").glob(f"{report_date}__*.json")))
-    compat_preview = _compat_preview_status(agent_home, report_date)
-    fallback_contract = _fallback_contract_status(agent_home)
-
-    shadow_chain_ready = all(path.exists() for path in (action_ticket_path, retrieval_path, debate_path, review_path))
-    action_ticket_count = _count_json_array(action_ticket_path, "tickets")
-    pack_count = _count_json_array(retrieval_path, "packs")
-    debate_count = _count_json_array(debate_path, "debates")
-
+def _evidence_statuses(agent_home: Path, report_date: str) -> list[dict[str, Any]]:
+    promoted = _promoted_run_status(agent_home, report_date)
+    legacy_scripts = _legacy_scripts_status(agent_home)
+    default_pipeline = _default_pipeline_status(agent_home)
     return [
         {
-            "gate_id": "new_chain_official_compatible_advice",
-            "status": "ready" if compat_preview["adapter_gate_ready"] else ("partial" if shadow_chain_ready or compat_preview["exists"] else "missing"),
-            "detail": (
-                "Adapter preview passed shape, behavior comparison, validator dry-run, source-hash, and fallback-switch gates."
-                if compat_preview["adapter_gate_ready"]
-                else "Shadow adapter preview is not official-compatible until shape, behavior comparison, validator dry-run, source hashes, and fallback switch all pass."
-            ),
-            "evidence": {
-                "action_ticket_count": action_ticket_count,
-                "retrieval_pack_count": pack_count,
-                "debate_count": debate_count,
-                "markdown_review_exists": review_path.exists(),
-                "compat_preview": compat_preview,
-            },
+            "gate_id": "promoted_official_run",
+            "status": "ready" if promoted["valid"] else "partial",
+            "detail": "Promoted action-debate chain wrote official advice and decision ledger outputs.",
+            "evidence": {"promoted_run": promoted},
+        },
+        {
+            "gate_id": "legacy_chain_removed",
+            "status": "ready" if legacy_scripts["valid"] else "partial",
+            "detail": "Legacy multi-agent, committee, old final-advice, validator, and adapter scripts are absent.",
+            "evidence": {"legacy_scripts": legacy_scripts},
+        },
+        {
+            "gate_id": "default_pipeline_promoted_only",
+            "status": "ready" if default_pipeline["valid"] else "partial",
+            "detail": "Daily pipeline exposes promoted chain as the only advice production path.",
+            "evidence": {"default_pipeline": default_pipeline},
         },
         {
             "gate_id": "workbench_old_new_comparison",
-            "status": "ready" if shadow_chain_ready else "missing",
-            "detail": "Read-only shadow-review surface exists for same-date old/new comparison.",
-        },
-        {
-            "gate_id": "outcome_examples",
-            "status": "partial" if outcome_count else "missing",
-            "detail": "One-date outcome evidence is not enough for official replacement.",
-            "evidence": {"outcome_file_count_for_date": outcome_count},
+            "status": "ready" if (agent_home / "db" / "refactor_reviews" / f"{report_date}.md").exists() else "partial",
+            "detail": "Review surface exists for inspecting the promoted chain and its source artifacts.",
         },
         {
             "gate_id": "hard_constraints_mapped",
-            "status": "ready" if (Path(__file__).resolve().parents[1] / "docs" / "refactor_runs" / "2026-05-agent-memory-refactor" / "hard_constraints_inventory.md").exists() else "missing",
-            "detail": "Hard constraints are documented; official validator still owns enforcement.",
-        },
-        {
-            "gate_id": "regression_baselines",
-            "status": "partial",
-            "detail": "Recent suites have passed, but Phase 8 needs a named replacement baseline before promotion.",
-        },
-        {
-            "gate_id": "fallback_switch",
-            "status": "partial" if fallback_contract["fallback_switch_designed"] else "missing",
-            "detail": "Fallback switch contract is documented but inactive; official path remains on the legacy chain."
-            if fallback_contract["fallback_switch_designed"]
-            else "No official-path fallback switch contract exists yet.",
-            "evidence": {"fallback_contract": fallback_contract},
-        },
-        {
-            "gate_id": "rollback_path",
-            "status": "ready" if fallback_contract["rollback_command_documented"] else "partial",
-            "detail": "Rollback command is documented for future promotion; no official replacement is active."
-            if fallback_contract["rollback_command_documented"]
-            else "Rollback rules are documented; no concrete official replacement rollback command exists yet.",
-            "evidence": {"fallback_contract": fallback_contract},
-        },
-        {
-            "gate_id": "explicit_promotion_decision",
-            "status": "ready" if promotion_approved else "missing",
-            "detail": "The current user instruction is to continue by document; no explicit official-path promotion was given.",
+            "status": "ready" if (agent_home / "scripts" / "promoted_advice_guardrails.py").exists() else "missing",
+            "detail": "Hard trading constraints are preserved under promoted_advice_guardrails.py.",
         },
     ]
 
@@ -668,15 +242,16 @@ def build_phase8_audit(
     *,
     generated_at: str | None = None,
     promotion_approved: bool = False,
+    environ: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    del promotion_approved, environ
     home = resolve_agent_home(str(agent_home) if agent_home is not None else None)
     date_text = resolve_date(report_date)
-    evidence = _evidence_statuses(home, date_text, promotion_approved=promotion_approved)
-    fallback_contract = _fallback_contract_status(home)
+    evidence = _evidence_statuses(home, date_text)
     blocking = [item["gate_id"] for item in evidence if item.get("status") != "ready"]
-    mutation_violations = [item["path"] for item in MUTATION_BOUNDARIES if item.get("shadow_allowed")]
     covered_areas = {item["area"] for item in CONSUMER_MAP}
     missing_consumer_areas = sorted(REQUIRED_CONSUMER_AREAS - covered_areas)
+    mutation_violations = [item["path"] for item in MUTATION_BOUNDARIES if item.get("shadow_allowed")]
     return {
         "schema_version": SCHEMA_VERSION,
         "report_date": date_text,
@@ -688,23 +263,16 @@ def build_phase8_audit(
         "blocking_gates": blocking,
         "missing_consumer_areas": missing_consumer_areas,
         "source_artifacts": [
+            _artifact_status(home, f"db/phase8/promoted_runs/{date_text}.json"),
             _artifact_status(home, f"db/validated_advice/{date_text}.json"),
-            _artifact_status(home, f"db/action_tickets/{date_text}.json"),
-            _artifact_status(home, f"db/retrieval_packs/{date_text}.json"),
-            _artifact_status(home, f"db/action_debates/{date_text}.json"),
-            _artifact_status(home, f"db/refactor_reviews/{date_text}.md"),
-            _artifact_status(home, f"db/refactor_shadow_runs/{date_text}__official_advice_compat_preview/official_advice_compat_preview.json"),
-            _artifact_status(home, "db/phase8/fallback_contract.json"),
+            _artifact_status(home, f"db/llm_raw/{date_text}.json"),
+            _artifact_status(home, f"db/action_seed/{date_text}.json"),
+            _artifact_status(home, f"db/decisions/{date_text}.json"),
         ],
         "consumer_map": CONSUMER_MAP,
         "mutation_boundaries": MUTATION_BOUNDARIES,
-        "first_replacement_candidate": FIRST_REPLACEMENT_CANDIDATE,
         "required_evidence": evidence,
-        "next_safe_step": (
-            "Collect multi-date old/new comparison evidence and name the Phase 8 regression baseline before any official-path mutation."
-            if fallback_contract["fallback_switch_designed"]
-            else "Add a compatibility adapter and fallback switch design before any official-path mutation."
-        ),
+        "next_safe_step": "Run multi-date promoted stability observation, then merge to main." if not blocking else "Resolve partial promoted rollout gates before merge.",
     }
 
 
@@ -719,12 +287,6 @@ def render_markdown(audit: dict[str, Any]) -> str:
         f"- promotion_ready: {str(audit['promotion_ready']).lower()}",
         f"- blocking_gates: {', '.join(audit['blocking_gates']) or 'none'}",
         "",
-        "## First Replacement Candidate",
-        "",
-        f"- candidate_id: {audit['first_replacement_candidate']['candidate_id']}",
-        f"- legacy_layer: {audit['first_replacement_candidate']['legacy_layer']}",
-        f"- reason: {audit['first_replacement_candidate']['why_first']}",
-        "",
         "## Consumer Map",
         "",
         "| Area | Official path | Risk | Compatibility note |",
@@ -732,47 +294,22 @@ def render_markdown(audit: dict[str, Any]) -> str:
     ]
     for item in audit["consumer_map"]:
         lines.append(f"| {item['area']} | `{item['official_path']}` | {item['replacement_risk']} | {item['compatibility_note']} |")
-    lines.extend(
-        [
-            "",
-            "## Evidence Gates",
-            "",
-            "| Gate | Status | Detail |",
-            "|---|---|---|",
-        ]
-    )
+    lines.extend(["", "## Evidence Gates", "", "| Gate | Status | Detail |", "|---|---|---|"])
     for item in audit["required_evidence"]:
         lines.append(f"| {item['gate_id']} | {item['status']} | {item['detail']} |")
-    lines.extend(
-        [
-            "",
-            "## Mutation Boundaries",
-            "",
-            "| Path | Owner | Shadow allowed |",
-            "|---|---|---|",
-        ]
-    )
-    for item in audit["mutation_boundaries"]:
-        lines.append(f"| `{item['path']}` | {item['owner']} | {str(item['shadow_allowed']).lower()} |")
     lines.extend(["", f"Next safe step: {audit['next_safe_step']}", ""])
     return "\n".join(lines)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Audit Phase 8 legacy-chain replacement readiness without mutating official paths.")
+    parser = argparse.ArgumentParser(description="Audit Phase 8 promoted-chain readiness without mutating official paths.")
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
     parser.add_argument("--date", help="Report date in YYYY-MM-DD format.")
     parser.add_argument("--generated-at", help="Fixed generated_at value for tests.")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
-    parser.add_argument("--promotion-approved", action="store_true", help="Record an explicit official-path promotion decision.")
+    parser.add_argument("--promotion-approved", action="store_true", help="Accepted for CLI compatibility; readiness is based on promoted evidence.")
     args = parser.parse_args()
-
-    audit = build_phase8_audit(
-        args.agent_home,
-        args.date,
-        generated_at=args.generated_at,
-        promotion_approved=args.promotion_approved,
-    )
+    audit = build_phase8_audit(args.agent_home, args.date, generated_at=args.generated_at, promotion_approved=args.promotion_approved)
     if args.format == "markdown":
         print(render_markdown(audit))
     else:

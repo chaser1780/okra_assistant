@@ -21,6 +21,7 @@ FORBIDDEN_OFFICIAL_PREFIXES = (
 SHADOW_ALLOWED_PREFIXES = (
     "db/refactor_shadow_runs/",
     "db/action_tickets/",
+    "db/action_seed/",
     "db/action_debates/",
     "db/retrieval_packs/",
     "db/refactor_reviews/",

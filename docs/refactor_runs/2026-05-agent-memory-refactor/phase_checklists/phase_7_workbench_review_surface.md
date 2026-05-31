@@ -1,6 +1,8 @@
 # Phase 7 Checklist: Workbench Review Surface
 
-Status: API contract drafted; implementation waits for stable shadow artifacts.
+Status: implemented as a partial read-only Workbench surface. Remaining gates
+are promotion-level only: broader outcome examples, official-compatible advice
+evidence, inactive fallback switch, and explicit promotion.
 
 ## Goal
 
@@ -48,6 +50,8 @@ reviewed early.
 ## Outputs
 
 - `GET /api/shadow-review?date=YYYY-MM-DD`
+- compatibility alias:
+  `GET /api/workbench/shadow-review?date=YYYY-MM-DD`
 - optional `GET /api/shadow-review/<review_id>?date=YYYY-MM-DD`
 - frontend schema and empty states
 - read-only comparison UI
@@ -72,6 +76,9 @@ reviewed early.
 - invalid date returns 400
 - invalid JSON produces degraded/failed status without stack trace
 - ready payload includes non-executable markers
+- boundary-invalid shadow artifacts are rejected as failed/degraded rather than
+  silently displayed as non-executable
+- same-fund multi-action dates keep action-level review rows
 - DTO preserves existing page contracts
 - frontend schema parses missing, partial, degraded, ready states
 - no UI path calls execution-sync or long-memory action endpoints
@@ -91,6 +98,8 @@ npm run tauri:check
 - Load a date with no shadow artifacts and confirm a clean empty state.
 - Read generated Markdown review before opening UI.
 - Load a date with artifacts and confirm old/new comparison is readable.
+- Confirm soft policy, skill, and outcome summaries are visible in each review
+  card when the artifacts contain them.
 - Confirm all shadow labels clearly say non-executable/display-only.
 - Confirm `/api/snapshot` still returns legacy raw payload.
 

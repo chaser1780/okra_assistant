@@ -29,6 +29,17 @@ MOJIBAKE_TOKENS = [
 ]
 
 FORBIDDEN_TOKENS = [
+    "F:\\",
+    "C:\\",
+    "$env:USERPROFILE",
+    "$env:APPDATA",
+    "$env:LOCALAPPDATA",
+    "HKCU\\",
+    "setx ",
+    "OKRA_USE_SHADOW_ADVICE_ADAPTER",
+    "OKRA_SHADOW_ADVICE_PROMOTION_APPROVED",
+    ".codex",
+    "fund_agent_data",
     "db/review_memory/",
     "db/trade_journal/",
     "record_trade.py",

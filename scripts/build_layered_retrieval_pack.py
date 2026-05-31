@@ -121,10 +121,10 @@ def evidence_lookup(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(item.get("evidence_id")): item for item in context.get("evidence_items", []) or [] if isinstance(item, dict) and item.get("evidence_id")}
 
 
-def action_ticket_artifact(agent_home: Path, report_date: str, generated_at: str | None = None) -> dict[str, Any]:
+def action_ticket_artifact(agent_home: Path, report_date: str, generated_at: str | None = None, source_mode: str = "validated") -> dict[str, Any]:
     path = action_ticket_path(agent_home, report_date)
     if not path.exists():
-        run_action_ticket_builder(agent_home, report_date, generated_at=generated_at)
+        run_action_ticket_builder(agent_home, report_date, generated_at=generated_at, source_mode=source_mode)
     return load_json(path)
 
 
@@ -229,27 +229,42 @@ def ticket_fact(ticket: dict[str, Any], report_date: str) -> LayeredContextItem:
     )
 
 
+def ticket_seed_source(ticket: dict[str, Any], report_date: str) -> tuple[str, str]:
+    refs = ticket.get("supporting_evidence_refs", []) or []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        source_kind = str(ref.get("source_kind", "") or "")
+        source_path = str(ref.get("source_path", "") or "")
+        if source_kind and source_path:
+            return source_kind, source_path
+    return "validated_advice", f"db/validated_advice/{report_date}.json"
+
+
 def validated_decision_fact(ticket: dict[str, Any], validated: dict[str, Any], report_date: str) -> LayeredContextItem:
+    source_kind, source_path = ticket_seed_source(ticket, report_date)
+    trust_level = "native_seed_output" if source_kind == "native_action_seed" else "validated_output"
+    mode = "native_action_seed" if source_kind == "native_action_seed" else str(validated.get("decision_mode", "") or "")
     return make_item(
         item_id=f"fact:validated:{report_date}:{ticket.get('fund_code')}:{ticket.get('action_verb')}",
         layer="canonical_fact",
-        source_kind="validated_advice",
-        source_path=f"db/validated_advice/{report_date}.json",
+        source_kind=source_kind,
+        source_path=source_path,
         source_record_id=str((ticket.get("legacy_mapping", {}) or {}).get("suggestion_id", "") or ticket.get("ticket_id", "")),
         as_of_date_value=report_date,
-        available_from=str(validated.get("generated_at", "") or ticket.get("generated_at", "")),
+        available_from=str(ticket.get("generated_at", "") or validated.get("generated_at", "") or f"{report_date}T23:59:59+08:00"),
         status="present",
-        summary=f"Validated advice mode={validated.get('decision_mode', '')}; execution_eligible={validated.get('execution_eligible')}.",
+        summary=f"Decision seed mode={mode}; execution_eligible={validated.get('execution_eligible', True)}.",
         domain="decision",
         fund_code=str(ticket.get("fund_code", "") or ""),
         value={
-            "decision_mode": validated.get("decision_mode", ""),
-            "execution_eligible": validated.get("execution_eligible"),
+            "decision_mode": mode,
+            "execution_eligible": validated.get("execution_eligible", True),
             "cash_hub_available": validated.get("cash_hub_available"),
             "immediately_available_cash": validated.get("immediately_available_cash"),
             "delayed_sell_proceeds": validated.get("delayed_sell_proceeds"),
         },
-        metadata={"trust_level": "validated_output"},
+        metadata={"trust_level": trust_level},
     )
 
 
@@ -387,12 +402,13 @@ def long_text_evidence_from_context(ticket: dict[str, Any], context: dict[str, A
 
 def decision_history_from_ticket(ticket: dict[str, Any], report_date: str) -> list[LayeredContextItem]:
     mapping = ticket.get("legacy_mapping", {}) or {}
+    source_kind, source_path = ticket_seed_source(ticket, report_date)
     return [
         make_item(
             item_id=f"decision:{report_date}:{ticket.get('fund_code')}:{ticket.get('action_verb')}",
             layer="decision_event",
-            source_kind="validated_advice",
-            source_path=f"db/validated_advice/{report_date}.json",
+            source_kind=source_kind,
+            source_path=source_path,
             source_record_id=str(mapping.get("suggestion_id", "") or ticket.get("ticket_id", "")),
             as_of_date_value=report_date,
             available_from=str(ticket.get("generated_at", "") or f"{report_date}T23:59:59+08:00"),
@@ -641,8 +657,8 @@ def summarize_packs(packs: list[RetrievalPack]) -> dict[str, Any]:
     }
 
 
-def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generated_at: str | None = None, use_rag: bool = False) -> RetrievalPackArtifact:
-    action_artifact = action_ticket_artifact(agent_home, report_date, generated_at=generated_at)
+def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generated_at: str | None = None, use_rag: bool = False, source_mode: str = "validated") -> RetrievalPackArtifact:
+    action_artifact = action_ticket_artifact(agent_home, report_date, generated_at=generated_at, source_mode=source_mode)
     action_path = action_ticket_path(agent_home, report_date)
     validated_path = validated_advice_path(agent_home, report_date)
     portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
@@ -695,8 +711,8 @@ def write_retrieval_pack_artifact(agent_home: Path, artifact: RetrievalPackArtif
     return path
 
 
-def run_builder(agent_home: Path, report_date: str, *, generated_at: str | None = None, use_rag: bool = False) -> tuple[Path, RetrievalPackArtifact]:
-    artifact = build_retrieval_pack_artifact(agent_home, report_date, generated_at=generated_at, use_rag=use_rag)
+def run_builder(agent_home: Path, report_date: str, *, generated_at: str | None = None, use_rag: bool = False, source_mode: str = "validated") -> tuple[Path, RetrievalPackArtifact]:
+    artifact = build_retrieval_pack_artifact(agent_home, report_date, generated_at=generated_at, use_rag=use_rag, source_mode=source_mode)
     path = write_retrieval_pack_artifact(agent_home, artifact)
     return path, artifact
 
@@ -707,6 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD.")
     parser.add_argument("--generated-at", default="", help="Optional fixed generated_at timestamp for deterministic tests.")
     parser.add_argument("--use-rag", action="store_true", help="Call current RAG retriever for non-canonical evidence.")
+    parser.add_argument("--source-mode", choices=["validated", "native"], default="validated", help="Build missing action tickets from legacy validated advice or native seeds.")
     return parser
 
 
@@ -714,7 +731,7 @@ def main() -> None:
     args = build_parser().parse_args()
     agent_home = resolve_agent_home(args.agent_home)
     report_date = resolve_date(args.date)
-    path, artifact = run_builder(agent_home, report_date, generated_at=args.generated_at or None, use_rag=args.use_rag)
+    path, artifact = run_builder(agent_home, report_date, generated_at=args.generated_at or None, use_rag=args.use_rag, source_mode=args.source_mode)
     print(f"wrote {len(artifact.packs)} retrieval packs: {relative_posix(path, agent_home)}")
 
 

@@ -50,6 +50,7 @@ class ActionDebateGraphTests(unittest.TestCase):
         for relative in (
             f"db/validated_advice/{REPORT_DATE}.json",
             "db/portfolio_state/current.json",
+            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
             f"db/llm_context/{REPORT_DATE}.json",
             f"db/evidence_index/{REPORT_DATE}.json",
             "db/long_memory/exports/all_memory.json",

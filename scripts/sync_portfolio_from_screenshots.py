@@ -22,6 +22,7 @@ from common import (
     load_watchlist,
     portfolio_import_dir,
     portfolio_definition_path,
+    project_relative_path,
     resolve_agent_home,
     resolve_date,
     timestamp_now,
@@ -155,7 +156,7 @@ def data_url_for_image(path: Path, *, max_side: int = 1600) -> str:
 def call_screenshot_vision(agent_home: Path, image_paths: list[Path], provider: str) -> dict:
     config = load_llm_config(agent_home)
     provider_cfg = config["model_providers"][config["model_provider"]]
-    api_key = resolve_api_key(config)
+    api_key = resolve_api_key(config, agent_home)
     endpoint = responses_endpoint(provider_cfg)
     content = [
         {
@@ -705,8 +706,8 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
         "added_fund_codes": added_codes,
         "dropped_missing_count": len(dropped_codes),
         "dropped_missing_fund_codes": dropped_codes,
-        "current_path": str(current_path),
-        "snapshot_path": str(snapshot_path),
+        "current_path": project_relative_path(agent_home, current_path),
+        "snapshot_path": project_relative_path(agent_home, snapshot_path),
         "unmatched_detected_count": len(preview.get("unmatched_detected", []) or []),
     }
     dump_json(applied_output_path(agent_home, sync_date), summary)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -93,6 +94,10 @@ def load_json_if_exists(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def content_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def load_ticket_index(agent_home: Path, base_date: str) -> dict[str, dict[str, Any]]:
     path = agent_home / "db" / "action_tickets" / f"{base_date}.json"
     payload = load_json_if_exists(path)
@@ -170,11 +175,13 @@ def policy_event_from_outcome(
     scope = policy_scope(ticket, outcome)
     policy_id = f"policy:{scope}:repeat_{slug_text(action_verb)}:v1"
     outcome_id = str(outcome.get("outcome_id", "") or "")
-    event_id = f"policy_event:{outcome_id}:{event_type}"
+    event_id = f"policy_event:{outcome_id}"
     label = str(outcome.get("outcome_label", "") or "")
     horizon = str(outcome.get("horizon", "") or "")
     fund_code = str(outcome.get("fund_code", "") or "")
     actual_return = safe_float(outcome.get("actual_return_pct"))
+    source_path = relative_posix(source_artifact, agent_home)
+    source_hash = content_sha256(source_artifact) if source_artifact.exists() else ""
     return AdaptivePolicyEvent(
         event_id=event_id,
         policy_id=policy_id,
@@ -188,14 +195,19 @@ def policy_event_from_outcome(
         effect_value="review_outcome_history_before_repeating_action",
         source_outcome_id=outcome_id,
         source_ticket_id=str(outcome.get("ticket_id", "") or ticket.get("ticket_id", "") or ""),
-        source_artifact=relative_posix(source_artifact, agent_home),
+        source_artifact=source_path,
         outcome_label=label,
         diagnostic_label=str(outcome.get("diagnostic_label", "") or ""),
         delta={event_type: 1},
         notes=f"{label} outcome for {fund_code} over {horizon}; actual_return_pct={actual_return}.",
         write_scope="learning_only",
         non_executable=True,
-        audit={"created_by": "scripts/update_adaptive_policies.py"},
+        audit={
+            "created_by": "scripts/update_adaptive_policies.py",
+            "derived_from": "outcome_event",
+            "source_artifact_sha256": source_hash,
+            "source_identity": f"{source_path}#{outcome_id}",
+        },
     )
 
 
@@ -246,21 +258,57 @@ def existing_event_ids(path: Path) -> set[str]:
     return ids
 
 
-def append_policy_events(agent_home: Path, events: list[AdaptivePolicyEvent]) -> tuple[Path, int]:
+def event_source_identity(event: AdaptivePolicyEvent) -> str:
+    audit = event.audit if isinstance(event.audit, dict) else {}
+    return str(audit.get("source_identity") or f"{event.source_artifact}#{event.source_outcome_id}")
+
+
+def read_policy_event_payloads(path: Path) -> tuple[list[dict[str, Any]], int]:
+    if not path.exists():
+        return [], 0
+    payloads: list[dict[str, Any]] = []
+    invalid_count = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise ValueError("policy event line must be a JSON object")
+            AdaptivePolicyEvent.from_dict(payload)
+            payloads.append(payload)
+        except Exception:
+            invalid_count += 1
+    return payloads, invalid_count
+
+
+def rewrite_policy_events(agent_home: Path, events: list[AdaptivePolicyEvent]) -> tuple[Path, int]:
     path = policy_event_log_path(agent_home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    seen = existing_event_ids(path)
-    appended = 0
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        for event in events:
-            if event.event_id in seen:
-                continue
-            payload = event.to_dict()
-            assert_refactor_write_allowed(path, payload, agent_home)
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-            seen.add(event.event_id)
-            appended += 1
-    return path, appended
+    existing_payloads, _invalid_count = read_policy_event_payloads(path)
+    replacement_identities = {event_source_identity(event) for event in events}
+    kept_payloads = [
+        payload
+        for payload in existing_payloads
+        if event_source_identity(AdaptivePolicyEvent.from_dict(payload)) not in replacement_identities
+    ]
+    new_payloads = [event.to_dict() for event in events]
+    seen_event_ids: set[str] = set()
+    rewritten_payloads: list[dict[str, Any]] = []
+    for payload in [*kept_payloads, *new_payloads]:
+        event_id = str(payload.get("event_id", "") or "")
+        if not event_id or event_id in seen_event_ids:
+            continue
+        assert_refactor_write_allowed(path, payload, agent_home)
+        rewritten_payloads.append(payload)
+        seen_event_ids.add(event_id)
+    existing_text = path.read_text(encoding="utf-8") if path.exists() else ""
+    new_text = "".join(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n" for payload in rewritten_payloads)
+    if new_text != existing_text:
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(new_text)
+        return path, len(new_payloads)
+    return path, 0
 
 
 def read_policy_events(path: Path) -> tuple[list[AdaptivePolicyEvent], int]:
@@ -488,16 +536,16 @@ def run_updater(
     materialize_only: bool = False,
 ) -> tuple[Path, Path, int, AdaptivePolicyStore]:
     generated_at = generated_at or timestamp_now()
-    appended = 0
+    updated = 0
     event_path = policy_event_log_path(agent_home)
     if not materialize_only:
         if not base_date:
             raise ValueError("base_date is required unless materialize_only=true")
         events = derive_policy_events(agent_home, base_date, horizons, generated_at)
-        event_path, appended = append_policy_events(agent_home, events)
+        event_path, updated = rewrite_policy_events(agent_home, events)
     store = materialize_policy_store(agent_home, generated_at=generated_at)
     store_path = write_policy_store(agent_home, store)
-    return event_path, store_path, appended, store
+    return event_path, store_path, updated, store
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -516,7 +564,7 @@ def main() -> None:
     base_date = resolve_date(args.date) if args.date else None
     if not base_date and not args.materialize_only:
         raise SystemExit("--date is required unless --materialize-only is set")
-    event_path, store_path, appended, store = run_updater(
+    event_path, store_path, updated, store = run_updater(
         agent_home,
         base_date,
         args.horizon,
@@ -524,7 +572,7 @@ def main() -> None:
         materialize_only=args.materialize_only,
     )
     print(
-        f"appended {appended} policy events to {relative_posix(event_path, agent_home)}; "
+        f"updated {updated} derived policy events in {relative_posix(event_path, agent_home)}; "
         f"materialized {len(store.policies)} policies at {relative_posix(store_path, agent_home)}"
     )
 

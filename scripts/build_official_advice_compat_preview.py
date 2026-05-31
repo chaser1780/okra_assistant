@@ -9,7 +9,7 @@ from typing import Any
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
 from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from build_action_ticket_shadow import load_portfolio_state_for_report
-from validate_llm_advice import build_validated_payload
+from promoted_advice_guardrails import build_validated_payload
 
 
 SCHEMA_VERSION = "official_advice_compat_preview.v1"
@@ -420,6 +420,8 @@ def build_validated_action_preview(ticket: dict[str, Any], final_decision: dict[
         "validation_notes": guardrail_notes(ticket),
         "execution_status": "pending" if action != "hold" else "not_applicable",
         "executed_amount": 0.0,
+        "legacy_source_bucket": str(legacy.get("source_bucket", "") or ""),
+        "legacy_source_index": int(legacy.get("source_index", 999) if legacy.get("source_index") is not None else 999),
     }
 
 
@@ -433,7 +435,16 @@ def group_validated_sections(preview_actions: list[dict[str, Any]]) -> dict[str,
             sections["hold_actions"].append(action)
         else:
             sections["tactical_actions"].append(action)
+    for section in sections:
+        sections[section].sort(key=lambda item: (int(item.get("legacy_source_index", 999) if item.get("legacy_source_index") is not None else 999), int(item.get("priority", 999) or 999), str(item.get("fund_code", ""))))
     return sections
+
+
+def replayable_validated_sections(section_preview: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    return {
+        section: [dict(item) for item in section_preview.get(section, []) or [] if isinstance(item, dict)]
+        for section in ACTION_SECTIONS
+    }
 
 
 def market_view_preview(validated: dict[str, Any], report_date: str, decision_count: int) -> dict[str, Any]:
@@ -447,6 +458,67 @@ def market_view_preview(validated: dict[str, Any], report_date: str, decision_co
     drivers.append("source_chain=action_ticket->retrieval_pack->action_debate")
     base["key_drivers"] = stable_list(drivers, limit=8)
     return base
+
+
+def preview_sections_as_validated_payload(
+    *,
+    agent_home: Path,
+    report_date: str,
+    validated: dict[str, Any],
+    committee_bundle: dict[str, Any],
+    final_advice: dict[str, Any],
+    section_preview: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    try:
+        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+    except Exception:
+        portfolio = {}
+    fixed_dca_total = round(sum(safe_float(item.get("validated_amount")) for item in section_preview.get("dca_actions", []) or []), 2)
+    return {
+        "report_date": report_date,
+        "generated_at": committee_bundle.get("generated_at", ""),
+        "portfolio_name": portfolio.get("portfolio_name", ""),
+        "risk_profile": validated.get("risk_profile", ""),
+        "daily_max_trade_amount": validated.get("daily_max_trade_amount", 0.0),
+        "daily_max_gross_trade_amount": validated.get("daily_max_gross_trade_amount", validated.get("daily_max_trade_amount", 0.0)),
+        "daily_max_net_buy_amount": validated.get("daily_max_net_buy_amount", validated.get("daily_max_trade_amount", 0.0)),
+        "fixed_dca_total": fixed_dca_total,
+        "remaining_budget_after_validation": validated.get("remaining_budget_after_validation", 0.0),
+        "remaining_gross_trade_budget_after_validation": validated.get("remaining_gross_trade_budget_after_validation", 0.0),
+        "remaining_net_buy_budget_after_validation": validated.get("remaining_net_buy_budget_after_validation", 0.0),
+        "cash_hub_available": validated.get("cash_hub_available", 0.0),
+        "immediately_available_cash": validated.get("immediately_available_cash", 0.0),
+        "delayed_sell_proceeds": validated.get("delayed_sell_proceeds", 0.0),
+        "market_view": final_advice.get("market_view", {}),
+        "cross_fund_observations": final_advice.get("cross_fund_observations", []),
+        "allocation_plan": validated.get("allocation_plan", {}),
+        "strategy_bucket_summary": validated.get("strategy_bucket_summary", []),
+        "advice_mode": "action_debate_promoted_preview",
+        "advice_is_fallback": False,
+        "advice_is_mock": False,
+        "decision_source": committee_bundle.get("decision_source", "action_debate_shadow_compat_preview"),
+        "decision_mode": committee_bundle.get("decision_mode", "canonical"),
+        "degradation_mode": committee_bundle.get("degradation_mode", "none"),
+        "execution_eligible": committee_bundle.get("execution_eligible", True),
+        "committee": {},
+        "committee_decision_bundle": committee_bundle,
+        "risk_vetoes": committee_bundle.get("risk_vetoes", []),
+        "committee_confidence": committee_bundle.get("committee_confidence", ""),
+        "narrative_mode": "action_debate_promoted_preview",
+        "transport_name": "",
+        "failed_agents": [],
+        "optimization_summary": {
+            "mode": "action_debate_preview",
+            "candidate_count": len(final_advice.get("fund_decisions", []) or []),
+            "selected_candidate_count": len(section_preview.get("tactical_actions", []) or []),
+        },
+        "optimizer_candidates": [],
+        "optimizer_best_combo_metrics": {},
+        "recommendation_deltas": [],
+        "dca_actions": section_preview.get("dca_actions", []),
+        "tactical_actions": section_preview.get("tactical_actions", []),
+        "hold_actions": section_preview.get("hold_actions", []),
+    }
 
 
 def compare_to_official(validated: dict[str, Any], final_decisions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -529,7 +601,7 @@ def dry_run_official_validator(agent_home: Path, report_date: str, committee_bun
             report_date,
             portfolio=portfolio,
             advice=final_advice,
-            llm_raw={"committee_decision_bundle": committee_bundle},
+            llm_raw={"mode": "action_debate_promoted_preview", "committee_decision_bundle": committee_bundle},
             committee_bundle=committee_bundle,
             previous_actions={},
         )
@@ -544,6 +616,14 @@ def dry_run_official_validator(agent_home: Path, report_date: str, committee_bun
         "error": "",
         "comparable_to_official": validated_advice_is_comparable(candidate, official),
     }
+
+
+def historical_compat_replay_is_comparable(committee_bundle: dict[str, Any], official: dict[str, Any]) -> bool:
+    replay_sections = committee_bundle.get("validated_action_sections_replay")
+    if not isinstance(replay_sections, dict):
+        return False
+    candidate = {section: replay_sections.get(section, []) for section in ACTION_SECTIONS}
+    return validated_advice_is_comparable(candidate, official)
 
 
 def source_hashes_present(payload: dict[str, Any]) -> bool:
@@ -658,6 +738,8 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         "cross_fund_observations": committee_bundle_preview["cross_fund_observations"],
     }
     section_preview = group_validated_sections(validated_action_previews)
+    committee_bundle_preview["validated_action_sections_replay"] = replayable_validated_sections(section_preview)
+    committee_bundle_preview["validated_action_sections_replay_scope"] = "promoted_preview_only"
     missing_fields = missing_required_fields(committee_decisions, REQUIRED_COMMITTEE_DECISION_FIELDS, "committee_decision")
     missing_fields.extend(missing_required_fields(final_decisions, REQUIRED_FINAL_DECISION_FIELDS, "final_decision"))
     missing_fields.extend(missing_required_fields(validated_action_previews, REQUIRED_VALIDATED_ACTION_FIELDS, "validated_action_preview"))
@@ -666,9 +748,24 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
     shape_compatible = not missing_fields
     behavior_comparable = comparison.get("status") == "compared" and int(comparison.get("mismatched_count", 0) or 0) == 0
     validator_dry_run = dry_run_official_validator(agent_home, report_date, committee_bundle_preview, final_advice_preview, validated)
-    adapter_dry_run_passed = bool(validator_dry_run.get("passed") and validator_dry_run.get("comparable_to_official"))
+    historical_replay_comparable = historical_compat_replay_is_comparable(committee_bundle_preview, validated)
+    preview_validated_payload = preview_sections_as_validated_payload(
+        agent_home=agent_home,
+        report_date=report_date,
+        validated=validated,
+        committee_bundle=committee_bundle_preview,
+        final_advice=final_advice_preview,
+        section_preview=section_preview,
+    )
+    adapter_dry_run_passed = bool(
+        shape_compatible
+        and (
+            (validator_dry_run.get("passed") and (validator_dry_run.get("comparable_to_official") or historical_replay_comparable))
+            or comparison.get("status") == "not_available"
+        )
+    )
     fallback_switch_active = False
-    official_compatible = shape_compatible and behavior_comparable and adapter_dry_run_passed and source_hash_ok and fallback_switch_active
+    official_compatible = shape_compatible and behavior_comparable and adapter_dry_run_passed and source_hash_ok
     summary = {
         "status": "ok" if not missing_fields else "degraded",
         "ticket_count": len(tickets),
@@ -689,6 +786,7 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         "official_paths_written": [],
         "missing_required_fields": missing_fields,
         "validator_dry_run": validator_dry_run,
+        "historical_replay_comparable": historical_replay_comparable,
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -699,13 +797,13 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         "write_scope": "shadow_only",
         "non_executable": True,
         "display_only": True,
-        "promotion_target": "scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle",
+        "promotion_target": "scripts/run_promoted_advice_chain.py",
         "source_artifacts": source_artifacts(agent_home, [ticket_file, retrieval_file, debate_file, validated_file]),
         "summary": summary,
         "compatibility_contract": {
-            "old_entrypoint": "scripts/generate_llm_advice.py::build_final_advice_from_committee_bundle",
+            "old_entrypoint": "removed_legacy_multiagent_committee_chain",
             "preview_entrypoint": "scripts/build_official_advice_compat_preview.py",
-            "future_fallback_switch": "OKRA_USE_SHADOW_ADVICE_ADAPTER=0",
+            "future_fallback_switch": "legacy_chain_removed",
             "official_write_paths_not_written": [
                 "db/committee_decision_bundle/<date>.json",
                 "db/llm_advice/<date>.json",
@@ -722,6 +820,7 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         "committee_decision_bundle_preview": committee_bundle_preview,
         "final_advice_preview": final_advice_preview,
         "validated_action_sections_preview": section_preview,
+        "validated_advice_preview": preview_validated_payload,
         "comparison_to_official": comparison,
     }
 

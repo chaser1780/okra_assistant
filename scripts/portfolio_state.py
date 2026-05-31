@@ -21,6 +21,7 @@ from common import (
     portfolio_state_current_path,
     portfolio_state_event_dir,
     portfolio_state_snapshot_path,
+    project_relative_path,
     timestamp_now,
 )
 
@@ -189,6 +190,7 @@ def _save_portfolio_state_unlocked(
     parent_state_id = str((previous_state.get("state_metadata", {}) or {}).get("state_id", ""))
     resolved_event_id = event_id or timestamp_now().replace(":", "").replace("+", "_").replace(".", "_")
     state_id = uuid.uuid4().hex
+    relative_source_path = project_relative_path(agent_home, source_path)
     current_payload = deepcopy(portfolio)
     current_payload.setdefault("state_metadata", {})
     updated_at = timestamp_now()
@@ -198,27 +200,42 @@ def _save_portfolio_state_unlocked(
             "parent_state_id": parent_state_id,
             "event_id": resolved_event_id,
             "source": source,
-            "source_path": source_path,
+            "source_path": relative_source_path,
             "event_type": event_type,
             "event_date": event_date,
             "updated_at": updated_at,
         }
     )
     if extra_meta:
-        current_payload["state_metadata"].update(extra_meta)
+        current_payload["state_metadata"].update(_portable_metadata(agent_home, extra_meta))
 
     current_path = dump_json(portfolio_state_current_path(agent_home), current_payload)
     snapshot_payload = deepcopy(current_payload)
     snapshot_path = dump_json(portfolio_state_snapshot_path(agent_home, event_date), snapshot_payload)
     event_path = portfolio_state_event_path(agent_home, event_date, event_type, resolved_event_id)
     event_payload = deepcopy(current_payload)
-    event_payload["state_metadata"].update({"event_journal_path": str(event_path), "latest_snapshot_path": str(snapshot_path)})
+    event_payload["state_metadata"].update(
+        {
+            "event_journal_path": project_relative_path(agent_home, event_path),
+            "latest_snapshot_path": project_relative_path(agent_home, snapshot_path),
+        }
+    )
     dump_json(event_path, event_payload)
-    current_payload["state_metadata"]["event_journal_path"] = str(event_path)
+    current_payload["state_metadata"]["event_journal_path"] = project_relative_path(agent_home, event_path)
     current_path = dump_json(portfolio_state_current_path(agent_home), current_payload)
     if persist_legacy:
         dump_json(legacy_portfolio_path(agent_home), current_payload)
     return current_path, snapshot_path
+
+
+def _portable_metadata(agent_home: Path, payload: dict) -> dict:
+    result = deepcopy(payload)
+    for key, value in list(result.items()):
+        if isinstance(value, Path):
+            result[key] = project_relative_path(agent_home, value)
+        elif isinstance(value, str) and (key.endswith("_path") or key.endswith("_file")):
+            result[key] = project_relative_path(agent_home, value)
+    return result
 
 
 def _trade_items_until(agent_home: Path, target_date: str) -> list[dict]:

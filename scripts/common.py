@@ -38,7 +38,7 @@ PORTFOLIO_RUNTIME_FIELDS = {
     "real_position_source",
 }
 
-DEFAULT_AGENT_HOME = Path(r"F:\okra_assistant")
+DEFAULT_AGENT_HOME = Path(__file__).resolve().parents[1]
 try:
     SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -68,6 +68,7 @@ REQUIRED_DIRS = (
     "db/committee_decision_bundle",
     "db/llm_raw",
     "db/validated_advice",
+    "db/action_seed",
     "db/action_tickets",
     "db/retrieval_packs",
     "db/action_debates",
@@ -175,7 +176,25 @@ def repair_data(value):
 
 def resolve_agent_home(candidate: str | None = None) -> Path:
     value = candidate or os.getenv("FUND_AGENT_HOME") or str(DEFAULT_AGENT_HOME)
-    return Path(value).expanduser()
+    return Path(value).expanduser().resolve()
+
+
+def project_path(agent_home: Path, value: str | Path | None) -> Path:
+    path = Path(str(value or "")).expanduser()
+    if path.is_absolute():
+        return path
+    return agent_home / path
+
+
+def project_relative_path(agent_home: Path, path: str | Path | None) -> str:
+    if not path:
+        return ""
+    resolved_home = agent_home.resolve()
+    resolved_path = project_path(resolved_home, path).resolve()
+    try:
+        return resolved_path.relative_to(resolved_home).as_posix()
+    except ValueError:
+        return resolved_path.as_posix()
 
 
 def ensure_layout(agent_home: Path) -> None:
@@ -422,7 +441,7 @@ def load_portfolio(agent_home: Path) -> dict:
         definition = {
             "portfolio_name": payload.get("portfolio_name", ""),
             "bootstrapped_at": timestamp_now(),
-            "bootstrapped_from": str(legacy_path),
+            "bootstrapped_from": project_relative_path(agent_home, legacy_path),
             "base_as_of_date": payload.get("as_of_date", ""),
             "funds": [],
         }

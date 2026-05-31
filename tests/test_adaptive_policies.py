@@ -177,12 +177,12 @@ class AdaptivePolicyTests(unittest.TestCase):
         tickets = [self.ticket("F001"), self.ticket("F002")]
         self.write_inputs(outcomes, tickets)
 
-        event_path, store_path, appended, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        event_path, store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
         policy = store.policies[0]
 
         self.assertEqual(policy_event_log_path(self.agent.root), event_path)
         self.assertEqual(policy_store_path(self.agent.root), store_path)
-        self.assertEqual(2, appended)
+        self.assertEqual(2, updated)
         self.assertEqual("candidate", policy.status)
         self.assertEqual(2, policy.support_count)
         self.assertEqual(0, policy.contradiction_count)
@@ -233,9 +233,9 @@ class AdaptivePolicyTests(unittest.TestCase):
         ]
         self.write_inputs(outcomes, [self.ticket("F001"), self.ticket("F002")])
 
-        _event_path, _store_path, appended, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        _event_path, _store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
 
-        self.assertEqual(0, appended)
+        self.assertEqual(0, updated)
         self.assertEqual([], store.policies)
         self.assertEqual(0, store.summary["valid_event_count"])
 
@@ -244,9 +244,9 @@ class AdaptivePolicyTests(unittest.TestCase):
         outcome["decision_context"] = {"exposure_context": "unclear_hold_context", "learning_eligible": False}
         self.write_inputs([outcome], [self.ticket("F001", "hold")])
 
-        _event_path, _store_path, appended, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        _event_path, _store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
 
-        self.assertEqual(0, appended)
+        self.assertEqual(0, updated)
         self.assertEqual([], store.policies)
 
     def test_policy_cap_per_scope_is_enforced(self) -> None:
@@ -265,18 +265,37 @@ class AdaptivePolicyTests(unittest.TestCase):
         self.assertLessEqual(len(active_or_candidate), store.caps["max_candidate_policies_per_scope"])
         self.assertEqual(5, store.summary["cap_adjusted_count"])
 
-    def test_policy_event_log_is_append_only_and_idempotent(self) -> None:
+    def test_policy_event_log_replay_is_idempotent(self) -> None:
         outcomes = [self.outcome("F001", "helped")]
         self.write_inputs(outcomes, [self.ticket("F001")])
 
         run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
         first = policy_event_log_path(self.agent.root).read_text(encoding="utf-8")
-        _event_path, _store_path, appended, _store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        _event_path, _store_path, updated, _store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
         second = policy_event_log_path(self.agent.root).read_text(encoding="utf-8")
 
-        self.assertEqual(0, appended)
+        self.assertEqual(0, updated)
         self.assertEqual(first, second)
         self.assertEqual(1, len(first.splitlines()))
+
+    def test_policy_event_replay_replaces_stale_derived_outcome_event(self) -> None:
+        outcome = self.outcome("F001", "hurt")
+        self.write_inputs([outcome], [self.ticket("F001")])
+        run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+
+        outcome["outcome_label"] = "helped"
+        outcome["diagnostic_label"] = "add_helped"
+        outcome["actual_return_pct"] = 1.5
+        self.write_inputs([outcome], [self.ticket("F001")])
+        _event_path, _store_path, rewritten, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+
+        lines = [json.loads(line) for line in policy_event_log_path(self.agent.root).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(1, rewritten)
+        self.assertEqual(1, len(lines))
+        self.assertEqual("support", lines[0]["event_type"])
+        self.assertEqual("helped", lines[0]["outcome_label"])
+        self.assertEqual(1, store.policies[0].support_count)
+        self.assertEqual(0, store.policies[0].contradiction_count)
 
     def test_soft_policy_cannot_produce_hard_block(self) -> None:
         with self.assertRaises(AdaptivePolicyValidationError):
@@ -310,7 +329,7 @@ class AdaptivePolicyTests(unittest.TestCase):
     def test_round_trip_and_boundary(self) -> None:
         outcomes = [self.outcome("F001", "helped")]
         self.write_inputs(outcomes, [self.ticket("F001")])
-        _event_path, _store_path, _appended, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        _event_path, _store_path, _updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
         payload = store.to_dict()
 
         self.assertEqual(payload, AdaptivePolicyStore.from_dict(payload).to_dict())
@@ -331,7 +350,7 @@ class AdaptivePolicyTests(unittest.TestCase):
             GENERATED_AT,
         )
 
-        self.assertIn("appended 1 policy events", completed.stdout)
+        self.assertIn("updated 1 derived policy events", completed.stdout)
         self.assertTrue(policy_event_log_path(self.agent.root).exists())
         self.assertTrue(policy_store_path(self.agent.root).exists())
 

@@ -116,7 +116,7 @@ class ValidationAndTradeTests(unittest.TestCase):
             },
         )
 
-    def test_validate_llm_advice_clamps_add_and_preserves_dca(self):
+    def test_promoted_guardrails_clamps_add_and_preserves_dca(self):
         self.build_portfolio()
         self.agent.write_json(
             "db/llm_advice/2026-03-10.json",
@@ -138,7 +138,7 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
 
         self.assertEqual(payload["fixed_dca_total"], 25.0)
@@ -148,7 +148,7 @@ class ValidationAndTradeTests(unittest.TestCase):
         self.assertEqual(tactical["validated_amount"], 200.0)
         self.assertEqual(payload["cash_hub_available"], 400.0)
 
-    def test_validate_llm_advice_allows_full_exit_reduce(self):
+    def test_promoted_guardrails_allows_full_exit_reduce(self):
         self.build_portfolio()
         strategy_path = self.agent.root / "config" / "strategy.toml"
         text = strategy_path.read_text(encoding="utf-8").replace("daily_max_trade_amount = 1000.0", "daily_max_trade_amount = 600.0")
@@ -173,13 +173,13 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         tactical = next(item for item in payload["tactical_actions"] if item["fund_code"] == "TRED")
         self.assertEqual(tactical["validated_action"], "reduce")
         self.assertEqual(tactical["validated_amount"], 250.0)
 
-    def test_validate_llm_advice_uses_portfolio_optimizer_for_competing_candidates(self):
+    def test_promoted_guardrails_uses_portfolio_optimizer_for_competing_candidates(self):
         self.build_portfolio()
         strategy_path = self.agent.root / "config" / "strategy.toml"
         text = strategy_path.read_text(encoding="utf-8")
@@ -216,7 +216,7 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["optimization_summary"]["mode"], "portfolio_search")
         self.assertEqual(payload["optimization_summary"]["selected_candidate_count"], 1)
@@ -228,7 +228,7 @@ class ValidationAndTradeTests(unittest.TestCase):
         self.assertEqual(rejected["validated_action"], "hold")
         self.assertTrue(any("optimizer" in note.lower() for note in rejected["validation_notes"]))
 
-    def test_validate_llm_advice_hard_blocks_committee_risk_veto(self):
+    def test_promoted_guardrails_hard_blocks_promoted_risk_veto(self):
         self.build_portfolio()
         self.agent.write_json(
             "db/llm_advice/2026-03-10.json",
@@ -270,7 +270,7 @@ class ValidationAndTradeTests(unittest.TestCase):
             },
         )
 
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
 
         self.assertFalse(any(item["fund_code"] == "TADD" for item in payload["tactical_actions"]))
@@ -279,7 +279,7 @@ class ValidationAndTradeTests(unittest.TestCase):
         self.assertIn("committee_bundle_fund_gate", held["policy_rule_hits"])
         self.assertIn("risk_veto", held["constraint_hits"])
 
-    def test_validate_llm_advice_does_not_fund_add_with_unsettled_sell_proceeds(self):
+    def test_promoted_guardrails_does_not_fund_add_with_unsettled_sell_proceeds(self):
         self.build_portfolio()
         record_actual_trade(
             self.agent.root,
@@ -314,14 +314,14 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         self.assertGreater(payload["delayed_sell_proceeds"], 0.0)
         tactical = next((item for item in payload["tactical_actions"] if item["fund_code"] == "TADD"), None)
         if tactical is not None:
             self.assertLessEqual(tactical["validated_amount"], payload["immediately_available_cash"])
 
-    def test_validate_llm_advice_blocks_add_that_worsens_theme_family_overweight(self):
+    def test_promoted_guardrails_blocks_add_that_worsens_theme_family_overweight(self):
         self.build_portfolio()
         portfolio = json.loads((self.agent.root / "config" / "portfolio.json").read_text(encoding="utf-8"))
         for fund in portfolio["funds"]:
@@ -354,7 +354,7 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         held = next(item for item in payload["hold_actions"] if item["fund_code"] == "TADD")
         self.assertEqual(held["validated_action"], "hold")
@@ -474,7 +474,7 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-11")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-11")
         payload = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-11.json").read_text(encoding="utf-8"))
         tactical = next(item for item in payload["tactical_actions"] if item["fund_code"] == "TRED")
         self.assertEqual(tactical["validated_amount"], 100.0)
@@ -502,7 +502,7 @@ class ValidationAndTradeTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.run_script("validate_llm_advice.py", "--date", "2026-03-10")
+        self.agent.run_script("promoted_advice_guardrails.py", "--date", "2026-03-10")
         validated = json.loads((self.agent.root / "db" / "validated_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
         suggestion = validated["tactical_actions"][0]
         result = record_actual_trade(

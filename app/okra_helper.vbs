@@ -1,3 +1,5 @@
 Set shell = CreateObject("WScript.Shell")
-shell.CurrentDirectory = "F:\okra_assistant"
-shell.Run "powershell.exe -ExecutionPolicy Bypass -File ""F:\okra_assistant\run_desktop_app.ps1""", 0, False
+scriptDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
+projectDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(scriptDir)
+shell.CurrentDirectory = projectDir
+shell.Run "powershell.exe -ExecutionPolicy Bypass -File """ & projectDir & "\run_desktop_app.ps1""", 0, False

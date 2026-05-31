@@ -1,4 +1,4 @@
-$agentHome = 'F:\okra_assistant'
+$agentHome = $PSScriptRoot
 $tempDir = Join-Path $agentHome 'temp'
 $logDir = Join-Path $agentHome 'logs\tasks'
 New-Item -ItemType Directory -Force -Path $tempDir, $logDir | Out-Null
@@ -56,7 +56,7 @@ function Resolve-PythonCommand {
 
 $pythonCommand = Resolve-PythonCommand -ProjectRoot $agentHome
 $env:OKRA_PYTHON_EXE = $pythonCommand.Exe
-$runner = 'F:\okra_assistant\scripts\run_report_window.py'
+$runner = Join-Path $agentHome 'scripts\run_report_window.py'
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $logPath = Join-Path $logDir ("nightly_" + $timestamp + ".log")
 & $pythonCommand.Exe @($pythonCommand.Prefix) -B -X utf8 $runner --agent-home $agentHome --mode nightly *> $logPath

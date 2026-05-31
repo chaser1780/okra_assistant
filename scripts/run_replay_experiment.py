@@ -22,7 +22,7 @@ from learning_memory import apply_replay_summary_to_ledger
 from long_memory_store import stable_memory_id, upsert_memory_record
 from rag_profile_evidence import build_backtest_evidence_pack
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
-from validate_llm_advice import build_validated_payload
+from promoted_advice_guardrails import build_validated_payload
 from decision_ledger import load_decisions
 
 

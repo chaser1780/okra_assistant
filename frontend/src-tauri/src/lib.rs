@@ -65,7 +65,7 @@ fn project_root(app: &AppHandle) -> PathBuf {
 
     app.path()
         .home_dir()
-        .unwrap_or_else(|_| PathBuf::from(r"F:\okra_assistant"))
+        .unwrap_or_else(|_| PathBuf::from("."))
         .join("okra_assistant")
 }
 

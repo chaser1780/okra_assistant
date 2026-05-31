@@ -1,7 +1,7 @@
-# Shadow Review API Contract Draft
+# Shadow Review API Contract
 
-Status: Phase 7 contract draft. Do not implement before Phase 1/3 artifacts
-stabilize.
+Status: implemented partial. The read-only API and Workbench page are live for
+shadow review; this contract is now the current implementation reference.
 
 This document defines the proposed read-only Workbench API surface for
 old-versus-new shadow review. It is intentionally display-only. Shadow review
@@ -19,7 +19,7 @@ approve long-memory records, or label advice accuracy.
 - Keep execution-only evidence out of normal strategy review unless explicitly
   requested by a separate execution review flow.
 
-## Proposed Routes
+## Routes
 
 Primary page route:
 
@@ -29,7 +29,7 @@ Compatibility alias, if needed:
 
 - `GET /api/workbench/shadow-review?date=YYYY-MM-DD`
 
-Optional detail route:
+Optional detail route, not implemented yet:
 
 - `GET /api/shadow-review/<review_id>?date=YYYY-MM-DD`
 
@@ -49,7 +49,7 @@ These routes should use the normal API envelope:
 }
 ```
 
-## Proposed Response DTO
+## Response DTO
 
 ```ts
 type ShadowReviewPageDto = {
@@ -72,17 +72,25 @@ type ShadowReviewPageDto = {
     legacyAdvicePath?: string;
     shadowAdvicePath?: string;
     shadowTracePath?: string;
+    retrievalPackPath?: string;
     evalReportPath?: string;
+    policyRegistryPath?: string;
+    strategySkillRegistryPath?: string;
     exists: {
       legacyAdvice: boolean;
       shadowAdvice: boolean;
       shadowTrace: boolean;
+      retrievalPack: boolean;
       evalReport: boolean;
+      outcomeEvents: boolean;
+      adaptivePolicies: boolean;
+      strategySkills: boolean;
     };
+    states?: Record<string, string>;
     missing: Array<{
       kind: string;
       path?: string;
-      reason: "missing_source" | "not_generated" | "invalid_json" | "empty" | "unsupported_version";
+      reason: "missing_source" | "not_generated" | "invalid_json" | "empty" | "unsupported_version" | "boundary_violation";
       message: string;
     }>;
   };
@@ -121,6 +129,7 @@ type ShadowReviewItemDto = {
   severity: "info" | "low" | "medium" | "high";
   displayLabel: string;
   nonExecutable: true;
+  displayOnly: true;
 
   legacy?: {
     action?: string;
@@ -159,6 +168,25 @@ type ShadowReviewItemDto = {
       tone: "neutral" | "info" | "success" | "warning" | "danger";
     }>;
   };
+
+  guardrails?: Record<string, unknown>;
+  softPolicies?: Record<string, unknown>[];
+  skillRefs?: Record<string, unknown>[];
+  skillOutputs?: Record<string, unknown>[];
+  retrieval?: {
+    packId?: string;
+    traceCompletenessRate?: number;
+    missingDataCount?: number;
+    ragTraceCount?: number;
+  };
+  debate?: {
+    debateId?: string;
+    verdict?: string;
+    degraded?: boolean;
+    writesTicketFile?: false;
+    proposedPatch?: Record<string, unknown>;
+  };
+  outcomeEvents?: Record<string, unknown>[];
 };
 ```
 
@@ -191,6 +219,8 @@ Recommended mapping:
   `items=[]`, `artifacts.missing[]` explains the missing shadow source.
 - Shadow artifact exists but invalid JSON: `status="degraded"` or
   `status="failed"` depending on whether any comparable items can be recovered.
+- Shadow artifact has invalid `write_scope` or `non_executable=false`:
+  `status="failed"` and no display item is synthesized from that artifact.
 - Shadow trace missing but shadow summary exists: `status="partial"`.
 - Both legacy and shadow artifacts missing: `status="missing"` with frontend
   empty state.
@@ -230,6 +260,16 @@ Every response and item must carry a non-execution marker:
 }
 ```
 
+Runtime contract:
+
+- page-level and item-level `nonExecutable` and `displayOnly` are strict true
+  literals;
+- guardrail fields such as `executionDisabled=true` and
+  `affectsPortfolio=false` are strict literals in API DTO and frontend schema;
+- frontend schema must not silently coerce `false` into `true`;
+- service-level artifact readers must reject boundary-invalid shadow artifacts
+  before building comparison rows.
+
 Guardrails:
 
 - No execute, buy, sell, apply, or confirm command should be rendered from this
@@ -246,7 +286,8 @@ Guardrails:
 - Add this as a new page route; do not change existing `/api/today`,
   `/api/research`, `/api/review`, or `/api/system` DTOs.
 - Keep `app/api_contracts.py` models additive and `extra="allow"`.
-- Keep frontend Zod schemas `.passthrough()` for nested shadow fields.
+- Keep frontend Zod schemas `.passthrough()` for nested shadow fields, but not
+  for safety boundary literals.
 - Do not wrap `/api/snapshot`; it remains legacy raw payload.
 - If fallback is needed, frontend may show an empty shadow review from
   `/api/system.system.ragRuntime` and runtime metadata, but should not

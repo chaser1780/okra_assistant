@@ -379,8 +379,8 @@ const shadowReviewItemSchema = z.object({
   category: z.string().catch("missing"),
   severity: z.string().catch("info"),
   displayLabel: z.string().catch(""),
-  nonExecutable: z.literal(true).catch(true),
-  displayOnly: z.literal(true).catch(true),
+  nonExecutable: z.literal(true),
+  displayOnly: z.literal(true),
   legacy: unknownRecordSchema.nullable().optional(),
   shadow: unknownRecordSchema.nullable().optional(),
   diff: z.object({
@@ -396,8 +396,11 @@ const shadowReviewItemSchema = z.object({
     badges: z.array(shadowReviewBadgeSchema).catch([])
   }).passthrough(),
   guardrails: unknownRecordSchema.optional(),
-  retrieval: unknownRecordSchema.optional(),
-  debate: unknownRecordSchema.optional(),
+  softPolicies: z.array(unknownRecordSchema).catch([]),
+  skillRefs: z.array(unknownRecordSchema).catch([]),
+  skillOutputs: z.array(unknownRecordSchema).catch([]),
+  retrieval: unknownRecordSchema.nullable().optional(),
+  debate: unknownRecordSchema.nullable().optional(),
   outcomeEvents: z.array(unknownRecordSchema).catch([])
 }).passthrough();
 
@@ -412,8 +415,8 @@ export const shadowReviewPageSchema = z.object({
   selectedDate: z.string(),
   status: shadowReviewStatusSchema.catch("missing"),
   generatedAt: z.string().catch(""),
-  nonExecutable: z.literal(true).catch(true),
-  displayOnly: z.literal(true).catch(true),
+  nonExecutable: z.literal(true),
+  displayOnly: z.literal(true),
   summary: z.object({
     legacyCount: z.number().catch(0),
     shadowCount: z.number().catch(0),
@@ -434,12 +437,12 @@ export const shadowReviewPageSchema = z.object({
   items: z.array(shadowReviewItemSchema).catch([]),
   runtime: unknownRecordSchema.catch({}),
   guardrails: z.object({
-    nonExecutable: z.literal(true).catch(true),
-    executionDisabled: z.literal(true).catch(true),
-    affectsPortfolio: z.literal(false).catch(false),
-    affectsAdviceAccuracy: z.literal(false).catch(false),
-    affectsLongMemoryPromotion: z.literal(false).catch(false),
-    allowExecutionEvidence: z.literal(false).catch(false)
+    nonExecutable: z.literal(true),
+    executionDisabled: z.literal(true),
+    affectsPortfolio: z.literal(false),
+    affectsAdviceAccuracy: z.literal(false),
+    affectsLongMemoryPromotion: z.literal(false),
+    allowExecutionEvidence: z.literal(false)
   }).passthrough()
 }).passthrough();
 

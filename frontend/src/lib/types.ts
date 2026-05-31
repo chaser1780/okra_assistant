@@ -249,8 +249,8 @@ export type ShadowReviewItem = Record<string, unknown> & {
   category: ShadowReviewCategory | string;
   severity: ShadowReviewSeverity | string;
   displayLabel: string;
-  nonExecutable: boolean;
-  displayOnly: boolean;
+  nonExecutable: true;
+  displayOnly: true;
   legacy?: Record<string, unknown> | null;
   shadow?: Record<string, unknown> | null;
   diff: Record<string, unknown> & {
@@ -264,8 +264,11 @@ export type ShadowReviewItem = Record<string, unknown> & {
     badges?: Array<{ label: string; tone: Tone | string }>;
   };
   guardrails?: Record<string, unknown>;
-  retrieval?: Record<string, unknown>;
-  debate?: Record<string, unknown>;
+  softPolicies?: Array<Record<string, unknown>>;
+  skillRefs?: Array<Record<string, unknown>>;
+  skillOutputs?: Array<Record<string, unknown>>;
+  retrieval?: Record<string, unknown> | null;
+  debate?: Record<string, unknown> | null;
   outcomeEvents?: Array<Record<string, unknown>>;
 };
 

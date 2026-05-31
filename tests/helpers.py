@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(r"F:\okra_assistant")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
 
