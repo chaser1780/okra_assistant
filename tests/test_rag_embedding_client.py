@@ -74,7 +74,7 @@ backend = "sqlite_mock"
         self.assertEqual("warning", result["status"])
         self.assertEqual("mock_fallback", result["mode"])
 
-    def test_relative_api_key_file_resolves_under_project_root(self):
+    def test_explicit_relative_api_key_file_resolves_under_project_root(self):
         self.agent.write_text(
             "config/rag.toml",
             """[rag]
@@ -93,9 +93,9 @@ backend = "sqlite_mock"
         )
         self.agent.write_text(
             "config/llm.toml",
-            'model_provider = "OpenAI"\napi_key_file = "config/openai_api_key.txt"\napi_key_env = "MISSING_RAG_KEY"\n[model_providers.OpenAI]\nbase_url = "https://api.example.test/v1"\n',
+            'model_provider = "OpenAI"\napi_key_file = "secrets/test_api_key.txt"\napi_key_env = "MISSING_RAG_KEY"\n[model_providers.OpenAI]\nbase_url = "https://api.example.test/v1"\n',
         )
-        self.agent.write_text("config/openai_api_key.txt", "file-key")
+        self.agent.write_text("secrets/test_api_key.txt", "file-key")
 
         class FakeResponse:
             status_code = 200

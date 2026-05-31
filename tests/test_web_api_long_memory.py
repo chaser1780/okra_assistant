@@ -422,7 +422,7 @@ class WebApiLongMemoryTests(unittest.TestCase):
     def test_open_url_rejects_non_http_urls(self):
         api = OkraWebApi(self.agent.root)
         with self.assertRaises(ValueError):
-            api.open_url({"url": "file:///C:/Windows/win.ini"})
+            api.open_url({"url": "file:///not-http-url"})
 
     def test_contract_handler_uses_api_error_contract(self):
         with self.assertRaises(HTTPError) as ctx:

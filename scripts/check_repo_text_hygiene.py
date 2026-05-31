@@ -40,6 +40,8 @@ FORBIDDEN_TOKENS = [
     "OKRA_SHADOW_ADVICE_PROMOTION_APPROVED",
     ".codex",
     "fund_agent_data",
+    'api_key_file = "config/openai_api_key.txt"',
+    "windows_wsl_setup_acknowledged",
     "db/review_memory/",
     "db/trade_journal/",
     "record_trade.py",

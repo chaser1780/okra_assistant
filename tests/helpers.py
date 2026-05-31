@@ -289,7 +289,6 @@ model_auto_compact_token_limit = 900000
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
-windows_wsl_setup_acknowledged = true
 preferred_auth_method = "apikey"
 api_key_env = "OPENAI_API_KEY"
 api_key_file = ""

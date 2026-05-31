@@ -15,6 +15,9 @@ from preflight_check import perform_preflight
 
 from helpers import TempAgentHome
 
+PROJECT_API_KEY_FILE = "config/" + "openai_api_key.txt"
+REMOVED_WINDOWS_ACK_KEY = "windows_" + "wsl_setup_acknowledged"
+
 
 class ConfigWiringTests(unittest.TestCase):
     @classmethod
@@ -80,7 +83,8 @@ class ConfigWiringTests(unittest.TestCase):
 
         self.assertNotRegex(llm_config + portfolio + definition, r"[A-Za-z]:\\")
         sentiment = settings["providers"]["sentiment_news"]
-        self.assertEqual(self.agent_home / "config" / "openai_api_key.txt", project_path(self.agent_home, "config/openai_api_key.txt"))
+        self.assertNotIn(f'api_key_file = "{PROJECT_API_KEY_FILE}"', llm_config)
+        self.assertNotIn(REMOVED_WINDOWS_ACK_KEY, llm_config)
         self.assertEqual(self.agent_home / "config" / "xueqiu_cookie.txt", project_path(self.agent_home, sentiment["xueqiu_cookie_file"]))
         self.assertEqual(self.agent_home / "config" / "douyin_cookie.txt", project_path(self.agent_home, sentiment["douyin_cookie_file"]))
 

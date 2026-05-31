@@ -50,7 +50,7 @@ Implemented capabilities:
   `mode=rag_llm`, `traceId`, `citations`, and retrieval metadata when active.
 - Web/admin routes: `/api/rag/status`, `/api/rag/trace`, `/api/rag/search`,
   `/api/rag/reindex`, `/api/rag/eval`, and `/api/rag/maintenance`.
-- Multi-agent input hooks in `scripts/agent_inputs.py`, including
+- Promoted retrieval-pack hooks in `scripts/build_layered_retrieval_pack.py`, including
   `rag_retrieved_evidence`, `rag_default_trace_id`,
   `rag_default_fallback_reason`, and `rag_legacy_diff`.
 - `run_daily_pipeline.py --rag-shadow` support for optional shadow ingest/eval
@@ -243,9 +243,11 @@ frontend/src/components/okra/CopilotPanel.tsx
 scripts/today_orchestrator.py
   -> run_daily_pipeline.py
   -> build_llm_context.py
-  -> run_multiagent_research.py
-  -> agent_inputs.py
-  -> evidence_index.retrieve_agent_evidence()
+  -> run_promoted_advice_chain.py
+  -> build_layered_seed.py
+  -> build_layered_retrieval_pack.py
+  -> action_debate_graph.py
+  -> promoted_advice_guardrails.py
 ```
 
 `scripts/evidence_index.py` 已经做了：
@@ -534,7 +536,7 @@ cache_enabled = true
 [embedding_provider.OpenAI]
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
-api_key_file = "config/openai_api_key.txt"
+api_key_file = ""
 ```
 
 ### 7.2 Vector Store 选型
@@ -882,7 +884,7 @@ Copilot system prompt 需要改为：
 
 ### 12.1 第一阶段：并行影子检索
 
-不直接替换 `evidence_index.py`。先在 `run_daily_pipeline.py` 中生成统一 RAG index，并在 `agent_inputs.py` 中增加可选字段：
+不直接替换结构化 source adapters。先在 `run_daily_pipeline.py` 中生成统一 RAG index，并在 `build_layered_retrieval_pack.py` 中增加可选字段：
 
 ```json
 {
@@ -1045,8 +1047,8 @@ config/rag.toml
 | 入口 | 当前文件 | 当前行为 | RAG 改造目标 | 优先级 |
 |---|---|---|---|---|
 | 右侧 Copilot 问答 | `app/web_api.py`、`app/copilot_service.py` | 压缩当前页面 payload 后直接交给 LLM | 改为 Copilot profile 检索 evidence pack，返回 citations/trace | P0 |
-| 多 Agent 每日研究 | `scripts/run_multiagent_research.py`、`scripts/agent_inputs.py` | 使用 `evidence_index.py` 规则检索 + agent prompt | 先 shadow 注入 `rag_retrieved_evidence`，通过评估后替代默认 evidence | P1 |
-| 最终建议生成 | `scripts/generate_llm_advice.py` | 汇总 agent aggregate 和 committee bundle | 使用 decision profile 检索约束、当日证据、历史相似情形，但不绕过 committee | P1 |
+| Promoted 每日动作辩论 | `scripts/run_promoted_advice_chain.py`、`scripts/action_debate_graph.py` | 使用 layered seed、retrieval pack、debate graph 和 promoted guardrails 生成官方建议 | 将 RAG evidence pack 作为分层检索输入，保留 trace/citations，并继续由 guardrails 输出官方兼容结果 | P1 |
+| 官方建议落地 | `scripts/promoted_advice_guardrails.py`、`scripts/decision_ledger.py` | 将 action ticket / debate 结果映射为 validated advice、decision ledger 和兼容旧消费端的 artifacts | 使用 decision profile 检索约束、当日证据、历史相似情形，但不绕过 promoted guardrails | P1 |
 | 长期记忆分析 | `scripts/run_long_memory_analysis.py` | 从 validated/review/agent 输出提炼记忆 | 使用 memory profile 检索已有记忆和 superseded 关系，避免重复、冲突和记忆复活 | P1 |
 | 复盘与回放 | `scripts/review_advice.py`、`scripts/run_replay_experiment.py` | 读取 advice、review result、ledger | 使用 review profile，允许 archived/rejected 作为反例，并强制标注 negative example | P2 |
 | 支付宝持仓截图解析 | `scripts/sync_portfolio_from_screenshots.py` | vision 模型解析截图 | RAG 仅提供基金清单、字段定义、执行边界；图片 OCR 结果不进入普通 RAG | P2 |
@@ -1495,8 +1497,9 @@ _copilot_evidence()
 修改文件：
 
 ```text
-scripts/agent_inputs.py
-scripts/run_multiagent_research.py
+scripts/build_layered_retrieval_pack.py
+scripts/run_promoted_advice_chain.py
+scripts/action_debate_graph.py
 scripts/run_daily_pipeline.py
 scripts/rag_eval.py
 tests/test_rag_agent_shadow.py
@@ -1591,8 +1594,8 @@ include_execution = false
 工作步骤：
 
 1. 将 `evidence_index.ROLE_PREFERENCES` 映射到 `rag.agent_profiles`，不要一次删除旧常量。
-2. `agent_inputs.py` 默认读 RAG profile；RAG 失败或 hit 不足时回退 legacy `retrieve_agent_evidence()`。
-3. `run_multiagent_research.py` 的 `workflow_meta` 记录：
+2. `build_layered_retrieval_pack.py` 默认读 RAG profile；RAG 失败或 hit 不足时回退结构化 source adapters，不恢复旧 multi-agent 链路。
+3. `run_promoted_advice_chain.py` 的 `workflow_meta` 记录：
    - `retrieval_backend`
    - `rag_enabled`
    - `fallback_used`
@@ -1620,7 +1623,8 @@ include_execution = false
 修改文件：
 
 ```text
-scripts/generate_llm_advice.py
+scripts/run_promoted_advice_chain.py
+scripts/promoted_advice_guardrails.py
 scripts/run_long_memory_analysis.py
 scripts/review_advice.py
 scripts/run_replay_experiment.py
@@ -1629,9 +1633,9 @@ tests/test_rag_decision_memory_review.py
 
 工作步骤：
 
-1. `generate_llm_advice.py`：
-   - 使用 decision profile 检索当日 committee、validated candidate、约束、组合状态。
-   - RAG 只提供证据，不允许绕过 `committee_decision_bundle`。
+1. `run_promoted_advice_chain.py` / `promoted_advice_guardrails.py`：
+   - 使用 decision profile 检索当日 action tickets、debate trace、validated candidate、约束、组合状态。
+   - RAG 只提供证据，不允许绕过 promoted guardrails。
    - 输出中记录 `rag_trace_id`。
 2. `run_long_memory_analysis.py`：
    - 使用 memory profile 检索已有同域同实体 memory。
@@ -2171,7 +2175,7 @@ tests/fixtures/rag_questions/execution_boundary.json
 改动：
 
 - 修改 `scripts/run_daily_pipeline.py` 加可选 RAG ingest/eval。
-- 修改 `scripts/agent_inputs.py` 写 shadow 字段。
+- 修改 `scripts/build_layered_retrieval_pack.py` 写 shadow 字段。
 - 新建 `scripts/rag_eval.py`。
 
 完成标准：
@@ -2185,7 +2189,7 @@ tests/fixtures/rag_questions/execution_boundary.json
 改动：
 
 - 将 agent profiles 写入 `config/rag.toml`。
-- 修改 `agent_inputs.py` 默认使用 RAG，legacy fallback。
+- 修改 `build_layered_retrieval_pack.py` 默认使用 RAG，结构化 source adapter fallback。
 - 新建 `scripts/rag_maintenance.py`。
 
 完成标准：
