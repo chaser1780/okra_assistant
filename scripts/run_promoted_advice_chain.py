@@ -150,13 +150,16 @@ def run_chain(
     *,
     generated_at: str | None = None,
     use_rag: bool = False,
+    debate_mode: str = "llm",
 ) -> tuple[Path, dict[str, Any]]:
     generated_at = generated_at or timestamp_now()
     ensure_layout(agent_home)
     (agent_home / "db" / "action_seed").mkdir(parents=True, exist_ok=True)
     run_action_ticket_builder(agent_home, report_date, generated_at=generated_at, source_mode="native")
     run_retrieval_pack_builder(agent_home, report_date, generated_at=generated_at, source_mode="native", use_rag=use_rag)
-    run_debate_graph(agent_home, report_date, generated_at=generated_at)
+    _debate_path, debate_artifact = run_debate_graph(agent_home, report_date, generated_at=generated_at, debate_mode=debate_mode)
+    if debate_mode == "llm" and debate_artifact.get("summary", {}).get("status") != "ok":
+        raise RuntimeError("promoted advice chain requires successful LLM debate graph before official outputs are written")
     preview = build_preview_payload(agent_home, report_date, generated_at=generated_at)
     paths = write_official_outputs(agent_home, report_date, preview=preview, generated_at=generated_at)
     status = build_status_payload(agent_home, report_date, generated_at=generated_at, preview=preview, paths=paths)
@@ -170,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD format.")
     parser.add_argument("--generated-at", default="", help="Optional fixed generated_at timestamp.")
     parser.add_argument("--use-rag", action="store_true", help="Use non-canonical RAG evidence inside retrieval packs.")
+    parser.add_argument("--llm-mock", action="store_true", help="Use deterministic debate nodes instead of live LLM debate calls.")
     parser.add_argument("--format", choices=["path", "json"], default="path")
     return parser
 
@@ -178,7 +182,7 @@ def main() -> None:
     args = build_parser().parse_args()
     agent_home = resolve_agent_home(args.agent_home)
     report_date = resolve_date(args.date)
-    path, payload = run_chain(agent_home, report_date, generated_at=args.generated_at or None, use_rag=args.use_rag)
+    path, payload = run_chain(agent_home, report_date, generated_at=args.generated_at or None, use_rag=args.use_rag, debate_mode="deterministic" if args.llm_mock else "llm")
     if args.format == "json":
         print(json.dumps({"path": project_relative_path(agent_home, path), "summary": payload["summary"]}, ensure_ascii=False, indent=2))
     else:

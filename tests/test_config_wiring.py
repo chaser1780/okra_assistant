@@ -12,6 +12,7 @@ from build_realtime_profit import apply_realtime_policy
 from common import load_realtime_valuation_config, load_settings, project_path, resolve_agent_home
 from cleanup_retention import load_retention_config
 from preflight_check import perform_preflight
+from multiagent_utils import resolve_api_key
 
 from helpers import TempAgentHome
 
@@ -100,6 +101,21 @@ class ConfigWiringTests(unittest.TestCase):
             self.assertIn("llm:probe", check_names)
         finally:
             os.environ.pop("OPENAI_API_KEY", None)
+            temp.cleanup()
+
+    def test_resolve_api_key_uses_ignored_local_openai_key_file_as_fallback(self):
+        temp = TempAgentHome()
+        try:
+            os.environ.pop("OPENAI_API_KEY", None)
+            temp.write_text("config/openai_api_key.txt", "local-key")
+            config = {
+                "model_provider": "OpenAI",
+                "api_key_env": "OPENAI_API_KEY",
+                "api_key_file": "",
+            }
+
+            self.assertEqual("local-key", resolve_api_key(config, temp.root))
+        finally:
             temp.cleanup()
 
 

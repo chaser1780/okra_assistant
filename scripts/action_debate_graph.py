@@ -11,10 +11,49 @@ from artifact_boundary import assert_refactor_write_allowed, relative_posix
 from build_action_ticket_shadow import action_ticket_path
 from build_layered_retrieval_pack import retrieval_pack_path
 from common import dump_json, load_json, timestamp_now
+from multiagent_utils import call_json_agent
 
 
 SCHEMA_VERSION = "action_debate.v1"
 STATE_SIZE_LIMIT_BYTES = 50000
+LLM_NODE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "ticket_id": {"type": "string"},
+                    "stance": {"type": "string"},
+                    "strength": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "verdict": {"type": "string"},
+                    "uncertainty": {"type": "string"},
+                    "target_status": {"type": "string"},
+                    "confidence_delta": {"type": "number"},
+                    "reason": {"type": "string"},
+                    "non_executable": {"type": "boolean"},
+                },
+                "required": [
+                    "ticket_id",
+                    "stance",
+                    "strength",
+                    "summary",
+                    "verdict",
+                    "uncertainty",
+                    "target_status",
+                    "confidence_delta",
+                    "reason",
+                    "non_executable",
+                ],
+            },
+        }
+    },
+    "required": ["items"],
+}
 NODE_SEQUENCE = (
     "load_retrieval_pack",
     "analyst_evidence_view",
@@ -244,6 +283,91 @@ def compact_refs(items: list[dict[str, Any]], limit: int = 4) -> list[dict[str, 
     return [compact_item_ref(item) for item in items[:limit]]
 
 
+def compact_llm_items(items: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for item in items[:limit]:
+        target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+        ticket_id = str(item.get("ticket_id", "") or target.get("ticket_id", "") or "")
+        compacted.append(
+            {
+                "ticket_id": ticket_id,
+                "target": target,
+                "ticket_status": str(item.get("ticket_status", "") or ""),
+                "execution_mode": str(item.get("execution_mode", "") or ""),
+                "validated_amount": item.get("validated_amount", 0.0),
+                "confidence_label": str(item.get("confidence_label", "") or ""),
+                "counts": item.get("counts", {}),
+                "primary_support": truncate_text(item.get("primary_support", ""), 300),
+                "primary_risk": truncate_text(item.get("primary_risk", ""), 300),
+                "missing_data": list(item.get("missing_data", []) or [])[:6],
+                "source_refs": list(item.get("source_refs", []) or [])[:6],
+                "rag_trace_refs": list(item.get("rag_trace_refs", []) or [])[:3],
+            }
+        )
+    return compacted
+
+
+def llm_node_enabled(context: dict[str, Any]) -> bool:
+    return str(context.get("debate_mode", "") or "deterministic") == "llm"
+
+
+def call_debate_llm_node(
+    state: ActionDebateState,
+    context: dict[str, Any],
+    node_name: str,
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not llm_node_enabled(context) or not items:
+        return {}
+    system_prompt = (
+        NODE_PROMPTS[node_name]
+        + "\nReturn strict JSON only. Do not invent facts. Every item must remain non_executable=true "
+        "and must be a shadow-only proposal."
+    )
+    user_payload = {
+        "report_date": state.report_date,
+        "node": node_name,
+        "write_scope": "shadow_only",
+        "non_executable": True,
+        "items": compact_llm_items(items, limit=20),
+    }
+    response = call_json_agent(
+        context["agent_home"],
+        system_prompt,
+        json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
+        schema=LLM_NODE_SCHEMA,
+        max_attempts=1,
+        reasoning_effort=context.get("llm_reasoning_effort") or None,
+        request_name=f"action_debate_{node_name}",
+        text_verbosity="low",
+        max_output_tokens=3000,
+        temperature=0.0,
+        timeout=(10, 120),
+    )
+    context.setdefault("llm_node_meta", {})[node_name] = {
+        "transport_name": str(response.get("transport_name", "") or ""),
+        "stream_incomplete": bool(response.get("stream_incomplete", False)),
+        "item_count": len((response.get("response_json", {}) or {}).get("items", []) or []),
+    }
+    output = {
+        str(item.get("ticket_id", "") or ""): item
+        for item in (response.get("response_json", {}) or {}).get("items", []) or []
+        if isinstance(item, dict) and item.get("ticket_id")
+    }
+    expected_ids = {
+        str(item.get("ticket_id", "") or (item.get("target", {}) or {}).get("ticket_id", "") or "")
+        for item in items
+        if item.get("ticket_id") or (item.get("target", {}) or {}).get("ticket_id")
+    }
+    if set(output) != expected_ids:
+        missing = sorted(expected_ids - set(output))
+        extra = sorted(set(output) - expected_ids)
+        raise ActionDebateGraphError(f"llm node {node_name} returned mismatched ticket ids: missing={missing[:3]}, extra={extra[:3]}")
+    if any(item.get("non_executable") is not True for item in output.values()):
+        raise ActionDebateGraphError(f"llm node {node_name} returned executable item")
+    return output
+
+
 def first_summary(items: list[dict[str, Any]], fallback: str) -> str:
     for item in items:
         summary = truncate_text(item.get("summary", ""), 180)
@@ -384,48 +508,57 @@ def node_analyst_evidence_view(state: ActionDebateState, context: dict[str, Any]
 
 def node_bull_case(state: ActionDebateState, context: dict[str, Any]) -> DebateNodeResult:
     bull_cases: dict[str, dict[str, Any]] = {}
+    llm_cases = call_debate_llm_node(state, context, "bull_case", context["evidence_views"])
     for view in context["evidence_views"]:
         target = view["target"]
         ticket_id = target["ticket_id"]
         action = target["action_verb"]
         amount = view["validated_amount"]
         support_strength = "moderate" if view["counts"]["derived_signal_count"] or view["counts"]["long_text_evidence_count"] else "thin"
+        llm_case = llm_cases.get(ticket_id, {})
         bull_cases[ticket_id] = {
             "stance": "support_current_shadow_action",
-            "support_strength": support_strength,
-            "summary": truncate_text(f"{action} amount {amount}: {view['primary_support']}", 240),
+            "support_strength": truncate_text(llm_case.get("strength") or support_strength, 80),
+            "summary": truncate_text(llm_case.get("summary") or f"{action} amount {amount}: {view['primary_support']}", 240),
             "support_ref_count": len(view["source_refs"]),
+            "reasoning_mode": "llm" if llm_case else "deterministic",
         }
     context["bull_cases"] = bull_cases
+    meta = context.get("llm_node_meta", {}).get("bull_case", {})
     return DebateNodeResult(
         node="bull_case",
         status="ok",
         summary=f"Captured bull cases for {len(bull_cases)} tickets.",
-        refs=[{"prompt": "bull_case", "mode": "deterministic"}],
-        output={"case_count": len(bull_cases), "prompt": NODE_PROMPTS["bull_case"]},
+        refs=[{"prompt": "bull_case", "mode": "llm" if llm_cases else "deterministic", **meta}],
+        output={"case_count": len(bull_cases), "prompt": NODE_PROMPTS["bull_case"], "llm_item_count": len(llm_cases)},
     )
 
 
 def node_bear_case(state: ActionDebateState, context: dict[str, Any]) -> DebateNodeResult:
     bear_cases: dict[str, dict[str, Any]] = {}
+    llm_cases = call_debate_llm_node(state, context, "bear_case", context["evidence_views"])
     for view in context["evidence_views"]:
         target = view["target"]
         ticket_id = target["ticket_id"]
         missing_blockers = [item for item in view["missing_data"] if item.get("blocks_debate")]
+        risk_strength = "high" if view["ticket_status"] == "blocked" or missing_blockers else "medium" if view["counts"]["anti_pattern_count"] else "low"
+        llm_case = llm_cases.get(ticket_id, {})
         bear_cases[ticket_id] = {
             "stance": "challenge_or_limit_shadow_action",
-            "risk_strength": "high" if view["ticket_status"] == "blocked" or missing_blockers else "medium" if view["counts"]["anti_pattern_count"] else "low",
-            "summary": truncate_text(view["primary_risk"], 240),
+            "risk_strength": truncate_text(llm_case.get("strength") or risk_strength, 80),
+            "summary": truncate_text(llm_case.get("summary") or view["primary_risk"], 240),
             "missing_data_count": view["counts"]["missing_data_count"],
             "blocking_missing_fields": [item["field"] for item in missing_blockers],
+            "reasoning_mode": "llm" if llm_case else "deterministic",
         }
     context["bear_cases"] = bear_cases
+    meta = context.get("llm_node_meta", {}).get("bear_case", {})
     return DebateNodeResult(
         node="bear_case",
         status="ok",
         summary=f"Captured bear cases for {len(bear_cases)} tickets.",
-        refs=[{"prompt": "bear_case", "mode": "deterministic"}],
-        output={"case_count": len(bear_cases), "prompt": NODE_PROMPTS["bear_case"]},
+        refs=[{"prompt": "bear_case", "mode": "llm" if llm_cases else "deterministic", **meta}],
+        output={"case_count": len(bear_cases), "prompt": NODE_PROMPTS["bear_case"], "llm_item_count": len(llm_cases)},
     )
 
 
@@ -441,23 +574,30 @@ def node_debate_referee(state: ActionDebateState, context: dict[str, Any]) -> De
     verdicts: dict[str, dict[str, Any]] = {}
     bull_cases = context["bull_cases"]
     bear_cases = context["bear_cases"]
+    llm_verdicts = call_debate_llm_node(state, context, "debate_referee", context["evidence_views"])
     for view in context["evidence_views"]:
         ticket_id = view["target"]["ticket_id"]
         bear = bear_cases[ticket_id]
         verdict = referee_status(view["ticket_status"], bear)
+        llm_verdict = llm_verdicts.get(ticket_id, {})
         verdicts[ticket_id] = {
-            "verdict": verdict,
-            "uncertainty": "high" if view["counts"]["missing_data_count"] > 2 else "medium" if bear["risk_strength"] != "low" else "low",
-            "summary": truncate_text(f"Bull: {bull_cases[ticket_id]['summary']} Bear: {bear['summary']}", 280),
+            "verdict": truncate_text(llm_verdict.get("verdict") or verdict, 80),
+            "uncertainty": truncate_text(
+                llm_verdict.get("uncertainty") or ("high" if view["counts"]["missing_data_count"] > 2 else "medium" if bear["risk_strength"] != "low" else "low"),
+                80,
+            ),
+            "summary": truncate_text(llm_verdict.get("summary") or f"Bull: {bull_cases[ticket_id]['summary']} Bear: {bear['summary']}", 280),
             "non_executable": True,
+            "reasoning_mode": "llm" if llm_verdict else "deterministic",
         }
     context["referee_verdicts"] = verdicts
+    meta = context.get("llm_node_meta", {}).get("debate_referee", {})
     return DebateNodeResult(
         node="debate_referee",
         status="ok",
         summary=f"Produced referee verdicts for {len(verdicts)} tickets.",
-        refs=[{"prompt": "debate_referee", "mode": "deterministic"}],
-        output={"verdict_count": len(verdicts), "prompt": NODE_PROMPTS["debate_referee"]},
+        refs=[{"prompt": "debate_referee", "mode": "llm" if llm_verdicts else "deterministic", **meta}],
+        output={"verdict_count": len(verdicts), "prompt": NODE_PROMPTS["debate_referee"], "llm_item_count": len(llm_verdicts)},
     )
 
 
@@ -473,12 +613,19 @@ def action_status_from_verdict(ticket: dict[str, Any], verdict: dict[str, Any]) 
 def node_action_former(state: ActionDebateState, context: dict[str, Any]) -> DebateNodeResult:
     tickets = ticket_by_id(context["ticket_artifact"])
     drafts: dict[str, dict[str, Any]] = {}
+    llm_drafts = call_debate_llm_node(state, context, "action_former", context["evidence_views"])
     for view in context["evidence_views"]:
         ticket_id = view["target"]["ticket_id"]
         ticket = tickets.get(ticket_id, {})
         verdict = context["referee_verdicts"][ticket_id]
         next_status = action_status_from_verdict(ticket, verdict)
         confidence_delta = -0.05 if verdict["uncertainty"] == "high" else 0.02 if verdict["verdict"] == "support_shadow_ticket" else 0.0
+        llm_draft = llm_drafts.get(ticket_id, {})
+        llm_status = str(llm_draft.get("target_status", "") or "").strip()
+        if llm_status in {"shadow_only", "blocked", "degraded"} and next_status != "blocked":
+            next_status = llm_status
+        if llm_draft and next_status != "blocked":
+            confidence_delta = float(llm_draft.get("confidence_delta", confidence_delta) or 0.0)
         drafts[ticket_id] = {
             "ticket_id": ticket_id,
             "target_status": next_status,
@@ -486,15 +633,17 @@ def node_action_former(state: ActionDebateState, context: dict[str, Any]) -> Deb
             "execution_mode": str(ticket.get("execution_mode", view["execution_mode"]) or ""),
             "validated_amount": ticket.get("validated_amount", view["validated_amount"]),
             "confidence_delta": confidence_delta,
-            "reason": truncate_text(verdict["summary"], 240),
+            "reason": truncate_text(llm_draft.get("reason") or verdict["summary"], 240),
+            "reasoning_mode": "llm" if llm_draft else "deterministic",
         }
     context["action_drafts"] = drafts
+    meta = context.get("llm_node_meta", {}).get("action_former", {})
     return DebateNodeResult(
         node="action_former",
         status="ok",
         summary=f"Prepared proposed action patches for {len(drafts)} tickets.",
-        refs=[{"prompt": "action_former", "mode": "deterministic"}],
-        output={"draft_count": len(drafts), "prompt": NODE_PROMPTS["action_former"]},
+        refs=[{"prompt": "action_former", "mode": "llm" if llm_drafts else "deterministic", **meta}],
+        output={"draft_count": len(drafts), "prompt": NODE_PROMPTS["action_former"], "llm_item_count": len(llm_drafts)},
     )
 
 
@@ -707,6 +856,7 @@ def build_artifact(state: ActionDebateState, context: dict[str, Any], debates: l
         "runtime": {
             "run_id": state.run_id,
             "graph_kind": "local_file_backed_shadow_graph",
+            "debate_mode": str(context.get("debate_mode", "deterministic") or "deterministic"),
             "langgraph_dependency": "not_declared",
             "checkpoint_backend": "local_shadow_runtime_json",
             "runtime_state_path": state.artifact_refs.get("runtime", ""),
@@ -728,6 +878,7 @@ def build_artifact(state: ActionDebateState, context: dict[str, Any], debates: l
             "writes_ticket_file": False,
             "non_executable_violation_count": 0,
             "prompted_node_count": sum(1 for node in NODE_SEQUENCE if node in NODE_PROMPTS),
+            "llm_node_count": len(context.get("llm_node_meta", {}) or {}),
         },
         "debates": debates,
     }
@@ -792,8 +943,12 @@ def run_debate_graph(
     *,
     generated_at: str | None = None,
     fail_node: str = "",
+    debate_mode: str = "deterministic",
+    llm_reasoning_effort: str = "",
 ) -> tuple[Path, dict[str, Any]]:
     generated_at = generated_at or timestamp_now()
+    if debate_mode not in {"deterministic", "llm"}:
+        raise ActionDebateGraphError(f"unknown debate_mode: {debate_mode}")
     ticket_path = action_ticket_path(agent_home, report_date)
     pack_path = retrieval_pack_path(agent_home, report_date)
     debate_path = action_debate_path(agent_home, report_date)
@@ -820,6 +975,9 @@ def run_debate_graph(
         source_hashes=source_hashes_from_artifacts(source_refs),
     )
     context: dict[str, Any] = {
+        "agent_home": agent_home,
+        "debate_mode": debate_mode,
+        "llm_reasoning_effort": llm_reasoning_effort,
         "source_artifacts": source_refs,
         "ticket_artifact": load_json_dict(ticket_path),
         "pack_artifact": load_json_dict(pack_path),

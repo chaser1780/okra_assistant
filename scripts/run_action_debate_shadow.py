@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD.")
     parser.add_argument("--generated-at", default="", help="Optional fixed generated_at timestamp for deterministic tests.")
     parser.add_argument("--fail-node", default="", help="Test hook: inject a degraded node failure by node name.")
+    parser.add_argument("--debate-mode", choices=["deterministic", "llm"], default="deterministic", help="Run deterministic skeleton or live LLM debate nodes.")
     return parser
 
 
@@ -25,6 +26,7 @@ def main() -> None:
         report_date,
         generated_at=args.generated_at or None,
         fail_node=args.fail_node,
+        debate_mode=args.debate_mode,
     )
     print(
         "wrote "

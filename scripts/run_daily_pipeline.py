@@ -414,6 +414,7 @@ def run_intraday(
         agent_home,
         report_date,
         False,
+        extra_args=["--llm-mock"] if llm_mock else None,
         resume_existing=resume_existing,
         record_step=record_step,
     )

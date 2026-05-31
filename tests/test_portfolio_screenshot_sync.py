@@ -276,7 +276,7 @@ class PortfolioScreenshotSyncTests(unittest.TestCase):
             result = call_screenshot_vision(self.agent.root, [image_path], "alipay")
 
         self.assertEqual(result["provider"], "alipay")
-        self.assertEqual(captured["payload"]["model"], "gpt-5.4")
+        self.assertEqual(captured["payload"]["model"], "gpt-5.5")
         self.assertEqual(captured["payload"]["reasoning"]["effort"], "low")
         image_items = [
             item

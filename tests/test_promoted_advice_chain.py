@@ -125,7 +125,7 @@ class PromotedAdviceChainTests(unittest.TestCase):
     def test_promoted_chain_does_not_require_existing_validated_advice_seed(self) -> None:
         self.write_inputs()
 
-        status_path, status = run_chain(self.agent.root, "2026-06-01", generated_at="2026-06-01T14:30:00+08:00")
+        status_path, status = run_chain(self.agent.root, "2026-06-01", generated_at="2026-06-01T14:30:00+08:00", debate_mode="deterministic")
 
         self.assertTrue(status_path.exists())
         self.assertFalse((self.agent.root / "db" / "validated_advice" / "legacy_seed.json").exists())

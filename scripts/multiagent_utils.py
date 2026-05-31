@@ -10,6 +10,9 @@ from requests.adapters import HTTPAdapter
 
 from common import dump_json, load_llm_config, project_path, timestamp_now
 
+
+DEFAULT_LOCAL_OPENAI_API_KEY_FILE = "config/" + "openai_api_key.txt"
+
 SIGNAL_CARD_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -189,6 +192,10 @@ def resolve_api_key(config: dict, agent_home: Path | str | None = None) -> str:
     env_value = os.getenv(api_key_env, "").strip()
     if env_value:
         return env_value
+    if agent_home is not None and not api_key_file and api_key_env == "OPENAI_API_KEY":
+        local_path = project_path(Path(agent_home), DEFAULT_LOCAL_OPENAI_API_KEY_FILE)
+        if local_path.exists():
+            return local_path.read_text(encoding="utf-8").strip()
     raise RuntimeError(f"Missing API key. Checked api_key, api_key_file, and env var {api_key_env}.")
 
 

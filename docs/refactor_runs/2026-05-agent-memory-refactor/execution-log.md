@@ -1426,3 +1426,50 @@ important observations during the refactor.
   or machine-level environment state is part of the contract.
 - Validation:
   - `python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_phase8_completion_audit tests.test_phase8_readiness tests.test_promoted_advice_chain tests.test_config_wiring`
+
+## 2026-05-31 Unified LLM API Wiring
+
+- Updated `config/llm.toml` to the user-provided OpenAI-compatible Responses
+  settings:
+  - `model=gpt-5.5`;
+  - `review_model=gpt-5.5`;
+  - `model_reasoning_effort=xhigh`;
+  - `base_url=https://api.vip1129.cc`;
+  - `wire_api=responses`.
+- Kept API credentials out of tracked configuration:
+  - `OPENAI_API_KEY` is configured for the current user environment;
+  - `config/openai_api_key.txt` is written locally and remains ignored by Git;
+  - `scripts/multiagent_utils.py::resolve_api_key` can fall back to that ignored
+    local file when `OPENAI_API_KEY` is absent.
+- Wired the promoted action-debate path into the same LLM API adapter:
+  - `scripts/action_debate_graph.py` now supports `debate_mode=llm`;
+  - `bull_case`, `bear_case`, `debate_referee`, and `action_former` call
+    `call_json_agent` with strict JSON schema in LLM mode;
+  - hard guardrails, soft-policy repricing, ticket writing, and official-output
+    writes remain deterministic and bounded;
+  - LLM node outputs must remain `non_executable=true` and match input
+    `ticket_id`s.
+- Production wiring:
+  - `scripts/run_promoted_advice_chain.py` defaults to live `llm` debate mode;
+  - `--llm-mock` keeps deterministic debate nodes for tests or dry local runs;
+  - `scripts/run_daily_pipeline.py --llm-mock` passes the deterministic mode
+    through to the promoted chain.
+- Verification:
+  - `python -B -X utf8 -m py_compile scripts\multiagent_utils.py scripts\action_debate_graph.py scripts\run_action_debate_shadow.py scripts\run_promoted_advice_chain.py scripts\run_daily_pipeline.py app\copilot_service.py scripts\preflight_check.py scripts\sync_portfolio_from_screenshots.py scripts\rag_embedding_client.py scripts\fetch_fund_news.py scripts\run_long_memory_analysis.py`
+  - `python -B -X utf8 -m unittest tests.test_config_wiring tests.test_llm_responses_transport tests.test_action_debate_graph tests.test_promoted_advice_chain tests.test_portfolio_screenshot_sync tests.test_rag_embedding_client tests.test_sentiment_news_provider tests.test_long_memory`
+  - `python -B -X utf8 -m unittest tests.test_action_debate_graph tests.test_promoted_advice_chain tests.test_config_wiring tests.test_llm_responses_transport tests.test_portfolio_screenshot_sync`
+  - `python -B -X utf8 scripts\preflight_check.py --scope intraday`
+  - Lightweight live structured JSON probe through `call_json_agent`.
+  - `python -B -X utf8 scripts\check_repo_text_hygiene.py`
+  - `git diff --check`
+- Live API result:
+  - preflight LLM probe succeeded with `model=gpt-5.5`;
+  - endpoint used: `https://api.vip1129.cc/responses`;
+  - transport: `direct`;
+  - HTTP status: `200`.
+- Notes:
+  - A full 15-ticket live `run_action_debate_shadow.py --debate-mode llm`
+    probe was stopped manually after it ran too long; the lightweight live JSON
+    probe and adapter unit test prove the unified API wiring, while full-chain
+    latency still needs batching or smaller node payloads before routine manual
+    inspection.

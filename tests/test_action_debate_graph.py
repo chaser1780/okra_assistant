@@ -5,6 +5,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,54 @@ class ActionDebateGraphTests(unittest.TestCase):
             self.assertTrue(node_outputs[key])
         self.assertFalse(node_outputs["ticket_writer"]["writes_ticket_file"])
         self.assertEqual("proposed_patch_only", node_outputs["ticket_writer"]["proposed_ticket_patch"]["mutation_mode"])
+        self.assertEqual("deterministic", artifact["runtime"]["debate_mode"])
+
+    def test_llm_debate_mode_routes_prompted_nodes_through_adapter(self) -> None:
+        self.build_phase2_inputs()
+        seen_requests = []
+
+        def fake_call_json_agent(agent_home, system_prompt, user_prompt, **kwargs):
+            payload = json.loads(user_prompt)
+            seen_requests.append((payload["node"], kwargs["request_name"]))
+            return {
+                "transport_name": "fake",
+                "response_json": {
+                    "items": [
+                        {
+                            "ticket_id": item["ticket_id"],
+                            "stance": "shadow_review",
+                            "strength": "medium",
+                            "summary": f"llm summary for {item['ticket_id']}",
+                            "verdict": "support_shadow_ticket",
+                            "uncertainty": "low",
+                            "target_status": "shadow_only",
+                            "confidence_delta": 0.01,
+                            "reason": f"llm reason for {item['ticket_id']}",
+                            "non_executable": True,
+                        }
+                        for item in payload["items"]
+                    ]
+                },
+            }
+
+        with patch("action_debate_graph.call_json_agent", side_effect=fake_call_json_agent):
+            _, artifact = run_debate_graph(
+                self.agent.root,
+                REPORT_DATE,
+                generated_at=DEBATE_GENERATED_AT,
+                debate_mode="llm",
+            )
+
+        self.assertEqual("ok", artifact["summary"]["status"])
+        self.assertEqual("llm", artifact["runtime"]["debate_mode"])
+        self.assertEqual(4, artifact["summary"]["llm_node_count"])
+        self.assertEqual(
+            ["bull_case", "bear_case", "debate_referee", "action_former"],
+            [node for node, _request_name in seen_requests],
+        )
+        first = artifact["debates"][0]["node_outputs"]
+        self.assertEqual("llm", first["bull_case"]["reasoning_mode"])
+        self.assertEqual("llm", first["action_former"]["reasoning_mode"])
 
     def test_node_failure_writes_degraded_artifact_without_official_mutation(self) -> None:
         self.build_phase2_inputs()

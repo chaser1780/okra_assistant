@@ -282,8 +282,8 @@ max_staleness_minutes = 20
 
 
 BASE_LLM_TOML = """model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
+model = "gpt-5.5"
+review_model = "gpt-5.5"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 model_reasoning_effort = "xhigh"
