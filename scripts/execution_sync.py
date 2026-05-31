@@ -16,6 +16,7 @@ from common import (
     load_json,
     load_portfolio,
     lock_path,
+    project_relative_path,
     resolve_date,
     settlement_event_path,
     timestamp_now,
@@ -86,7 +87,7 @@ def load_actual_trades(agent_home: Path, limit: int = 200) -> list[dict[str, Any
         for path in sorted(base.glob("*.json"), reverse=True):
             payload = load_json(path)
             for item in payload.get("items", []) or []:
-                items.append({**item, "source_path": str(path)})
+                items.append({**item, "source_path": project_relative_path(agent_home, path)})
                 if len(items) >= limit:
                     return items
     return items
@@ -105,11 +106,15 @@ def _write_pending_confirmations(agent_home: Path, items: list[dict[str, Any]]) 
     return dump_json(pending_confirmations_path(agent_home), {"updated_at": timestamp_now(), "items": active})
 
 
+def _with_source_path(agent_home: Path, item: dict[str, Any], path: Path) -> dict[str, Any]:
+    return {**item, "source_path": project_relative_path(agent_home, path)}
+
+
 def _append_actual_trade(agent_home: Path, trade_date: str, item: dict[str, Any]) -> Path:
     path = actual_trade_path(agent_home, trade_date)
     payload = load_json(path) if path.exists() else {"trade_date": trade_date, "items": []}
     items = [entry for entry in payload.get("items", []) or [] if entry.get("trade_id") != item.get("trade_id")]
-    items.append(item)
+    items.append(_with_source_path(agent_home, item, path))
     payload["trade_date"] = trade_date
     payload["updated_at"] = timestamp_now()
     payload["items"] = items
@@ -267,10 +272,11 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
     }
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
     path = _append_actual_trade(agent_home, trade_date, item)
+    persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("trade_id") != item["trade_id"]]
     if item["status"] not in {"settled", "canceled", "failed"}:
-        pending.append(item)
+        pending.append(persisted_item)
     _write_pending_confirmations(agent_home, pending)
     if item.get("linked_suggestion_id"):
         upsert_execution_status(
@@ -288,7 +294,7 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
                 "execution_deviation": item.get("execution_deviation", {}),
             },
         )
-    return {"ok": True, "trade": item, "path": str(path)}
+    return {"ok": True, "trade": persisted_item, "path": project_relative_path(agent_home, path)}
 
 
 def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -348,12 +354,13 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "execution_deviation": {"type": "conversion_substitute", "label": "转换替代执行", "affects_advice_accuracy": False},
     }
     path = _append_actual_trade(agent_home, trade_date, item)
+    persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("conversion_id") != conversion_id]
     if item["status"] not in {"settled", "canceled", "failed"}:
-        pending.append(item)
+        pending.append(persisted_item)
     _write_pending_confirmations(agent_home, pending)
-    return {"ok": True, "conversion": item, "path": str(path)}
+    return {"ok": True, "conversion": persisted_item, "path": project_relative_path(agent_home, path)}
 
 
 def update_pending_confirmations(agent_home: Path, as_of: str | None = None) -> dict[str, Any]:
@@ -391,7 +398,7 @@ def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None =
             elif settlement_event_exists(agent_home, entry):
                 entry["portfolio_applied_at"] = entry.get("portfolio_applied_at") or timestamp_now()
                 entry["portfolio_applied_as_of"] = entry.get("portfolio_applied_as_of") or as_of_date
-                entry["portfolio_settlement_event_path"] = str(settlement_event_path(agent_home, settlement_idempotency_key(entry)))
+                entry["portfolio_settlement_event_path"] = project_relative_path(agent_home, settlement_event_path(agent_home, settlement_idempotency_key(entry)))
             _update_actual_trade_record(agent_home, entry)
         updated.append(entry)
     path = _write_pending_confirmations(agent_home, updated)
@@ -402,7 +409,7 @@ def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None =
         "portfolio_applied_count": applied,
         "apply_errors": apply_errors,
         "pending_count": len(load_json(path).get("items", []) or []),
-        "path": str(path),
+        "path": project_relative_path(agent_home, path),
     }
 
 
@@ -589,8 +596,8 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
         "dropped_missing_count": len(dropped_codes),
         "dropped_missing_fund_codes": dropped_codes,
         "mode": "replace" if drop_missing else "update",
-        "current_path": str(current_path),
-        "snapshot_path": str(snapshot_path),
+        "current_path": project_relative_path(agent_home, current_path),
+        "snapshot_path": project_relative_path(agent_home, snapshot_path),
     }
     dump_json(reconciliation_report_path(agent_home, snapshot_date), report)
     return report
@@ -612,7 +619,7 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
             target.write_bytes(base64.b64decode(raw))
         except Exception:
             target.write_text(str(item.get("data") or ""), encoding="utf-8")
-        saved.append(str(target))
+        saved.append(project_relative_path(agent_home, target))
     preview = {
         "import_id": import_id,
         "source": "alipay_screenshot",
@@ -697,7 +704,7 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
     idempotency_key = settlement_idempotency_key(trade)
     event_path = settlement_event_path(agent_home, idempotency_key)
     if trade.get("portfolio_applied_at") or event_path.exists():
-        return {"ok": True, "skipped": True, "reason": "settlement_already_applied", "settlement_event_path": str(event_path)}
+        return {"ok": True, "skipped": True, "reason": "settlement_already_applied", "settlement_event_path": project_relative_path(agent_home, event_path)}
     portfolio = load_portfolio(agent_home)
     before_hash = portfolio_state_hash(portfolio)
     operation = str(trade.get("operation_type", ""))
@@ -728,14 +735,19 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
         event_type="actual_trade_settlement",
         event_id=idempotency_key,
         source_path=str(trade.get("source_path", "")),
-        extra_meta={**settlement_payload, "settlement_event_path": str(event_path)},
+        extra_meta={**settlement_payload, "settlement_event_path": project_relative_path(agent_home, event_path)},
     )
     settlement_payload.update(
         {
-            "current_path": str(current_path),
-            "snapshot_path": str(snapshot_path),
+            "current_path": project_relative_path(agent_home, current_path),
+            "snapshot_path": project_relative_path(agent_home, snapshot_path),
             "source_path": str(trade.get("source_path", "")),
         }
     )
     dump_json(event_path, settlement_payload)
-    return {"ok": True, "current_path": str(current_path), "snapshot_path": str(snapshot_path), "settlement_event_path": str(event_path)}
+    return {
+        "ok": True,
+        "current_path": project_relative_path(agent_home, current_path),
+        "snapshot_path": project_relative_path(agent_home, snapshot_path),
+        "settlement_event_path": project_relative_path(agent_home, event_path),
+    }

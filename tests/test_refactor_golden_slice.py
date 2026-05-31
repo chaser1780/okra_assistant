@@ -14,7 +14,7 @@ SLICE_ID = "2026-05-22__017641__scheduled_dca"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from artifact_boundary import BoundaryViolation, assert_shadow_write_allowed
+from artifact_boundary import BoundaryViolation, assert_refactor_write_allowed, assert_shadow_write_allowed
 from diff_refactor_slice import build_diff_report, run_diff
 from replay_refactor_slice import build_artifacts, load_slice_inputs, run_slice
 
@@ -70,6 +70,30 @@ class RefactorGoldenSliceTests(unittest.TestCase):
         }
         with self.assertRaises(BoundaryViolation):
             assert_shadow_write_allowed(PROJECT_ROOT / "db" / "validated_advice" / "2026-05-22.json", artifact)
+
+    def test_non_executable_check_scans_nested_debates(self) -> None:
+        artifact = {
+            "schema_version": "action_debate.v1",
+            "artifact_id": "action_debates:test",
+            "write_scope": "shadow_only",
+            "non_executable": True,
+            "debates": [
+                {
+                    "debate_id": "debate:test",
+                    "non_executable": True,
+                    "node_outputs": {
+                        "ticket_writer": {
+                            "proposed_ticket_patch": {
+                                "ticket_id": "ticket:test",
+                                "non_executable": False,
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+        with self.assertRaises(BoundaryViolation):
+            assert_refactor_write_allowed(PROJECT_ROOT / "db" / "action_debates" / "test.json", artifact)
 
     def test_diff_report_builder_flags_changed_artifact(self) -> None:
         run_slice(SLICE_ID, output_dir=self.output_dir)

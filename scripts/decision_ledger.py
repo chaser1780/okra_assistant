@@ -16,6 +16,7 @@ from common import (
     load_json,
     load_portfolio,
     news_path,
+    project_relative_path,
     quote_path,
     resolve_agent_home,
     timestamp_now,
@@ -78,12 +79,12 @@ def _action_items(validated: dict) -> list[dict]:
 
 def _evidence_refs(agent_home: Path, report_date: str, action: dict) -> list[dict]:
     refs = [
-        {"kind": "quotes", "path": str(quote_path(agent_home, report_date))},
-        {"kind": "news", "path": str(news_path(agent_home, report_date))},
-        {"kind": "fund_profiles", "path": str(fund_profile_path(agent_home, report_date))},
-        {"kind": "agent_aggregate", "path": str(agent_output_dir(agent_home, report_date) / "aggregate.json")},
-        {"kind": "validated_advice", "path": str(validated_advice_path(agent_home, report_date))},
-        {"kind": "llm_advice", "path": str(llm_advice_path(agent_home, report_date))},
+        {"kind": "quotes", "path": project_relative_path(agent_home, quote_path(agent_home, report_date))},
+        {"kind": "news", "path": project_relative_path(agent_home, news_path(agent_home, report_date))},
+        {"kind": "fund_profiles", "path": project_relative_path(agent_home, fund_profile_path(agent_home, report_date))},
+        {"kind": "agent_aggregate", "path": project_relative_path(agent_home, agent_output_dir(agent_home, report_date) / "aggregate.json")},
+        {"kind": "validated_advice", "path": project_relative_path(agent_home, validated_advice_path(agent_home, report_date))},
+        {"kind": "llm_advice", "path": project_relative_path(agent_home, llm_advice_path(agent_home, report_date))},
     ]
     for signal_id in action.get("source_signal_ids", []) or []:
         refs.append({"kind": "source_signal", "id": signal_id})

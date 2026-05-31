@@ -1,6 +1,7 @@
 # Phase 5 Checklist: Adaptive Policy Memory
 
-Status: lifecycle design can start early; promotion logic depends on Phase 4.
+Status: implemented as learning-only partial. Promotion into active trading
+behavior remains blocked by Phase 6 skill curation and explicit user approval.
 
 ## Goal
 
@@ -56,21 +57,26 @@ Forbidden effects:
 ## Implementation Steps
 
 1. Add event model and materialized current-view model.
-2. Store all policy changes in append-only `policy_events.jsonl`.
+2. Store manual lifecycle changes as event history and replay derived outcome
+   events by source outcome identity when the source artifact changes.
 3. Materialize current policies into `policies.json`.
 4. Require outcome support or explicit user feedback before promotion.
 5. Track support count, contradiction count, confidence, and source ids.
 6. Enforce caps per scope to prevent policy explosion.
-7. Make contradictions weaken or revise policies rather than silently deleting
-   them.
+7. Make contradictions weaken/archive policies rather than silently deleting
+   them; accept explicit `revise` events as a separate manual lifecycle action.
 
 ## Required Tests
 
 - supportive outcomes promote draft to candidate under threshold rules
 - active promotion requires enough support or user approval
-- contradictions weaken/revise/archive according to rules
+- contradictions weaken/archive according to rules
+- explicit revise events update policy statement/effect without becoming a hard
+  constraint
 - policy cap per scope is enforced
-- policy event log is append-only
+- policy event replay is idempotent
+- stale derived support/contradict events from the same outcome source are not
+  both retained
 - soft policy cannot produce hard block
 - malformed policy event does not corrupt materialized view
 
@@ -84,15 +90,17 @@ python -B -X utf8 -m unittest tests.test_long_memory tests.test_action_outcomes
 
 ## Manual Verification
 
-- Inspect `policy_events.jsonl` and confirm event history is auditable.
+- Inspect `policy_events.jsonl` and confirm event history is auditable and
+  derived events include source artifact identity/hash.
 - Inspect `policies.json` and confirm it is a current view, not the only record.
 - Confirm policy scopes are specific enough to avoid global overreach.
 
 ## Rollback Notes
 
-If a generated policy is wrong, append an archive/weaken event rather than
-editing history. During development, generated files can be deleted if they have
-not been used by later phases.
+If a manual or promoted policy is wrong, append an archive/weaken event rather
+than editing history. Derived outcome events may be replayed from the current
+source artifact so stale generated support/contradict labels do not survive
+beside the corrected outcome.
 
 ## Promotion Gate
 

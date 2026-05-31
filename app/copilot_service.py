@@ -33,7 +33,7 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
         raise RuntimeError("requests is not installed")
     config = load_llm_config(home)
     provider = config["model_providers"][config["model_provider"]]
-    api_key = resolve_api_key(config)
+    api_key = resolve_api_key(config, home)
     is_rag_pack = isinstance(evidence, dict) and evidence.get("kind") == "copilot_rag_pack"
     is_general_chat = isinstance(evidence, dict) and evidence.get("kind") == "general_chat"
     history = _conversation_history(evidence)

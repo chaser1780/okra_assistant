@@ -96,6 +96,25 @@ def _positive_number(payload: dict[str, Any], *keys: str) -> bool:
     return False
 
 
+def _reject_shadow_mutation_payload(payload: dict[str, Any], *, endpoint: str) -> None:
+    write_scope = str(payload.get("write_scope", "") or payload.get("writeScope", "") or "")
+    artifact_kind = str(payload.get("artifact_kind", "") or payload.get("artifactKind", "") or "")
+    markers = {
+        "write_scope": write_scope,
+        "artifact_kind": artifact_kind,
+    }
+    has_shadow_marker = (
+        payload.get("non_executable") is True
+        or payload.get("nonExecutable") is True
+        or payload.get("display_only") is True
+        or payload.get("displayOnly") is True
+        or markers["write_scope"] in {"shadow_only", "learning_only", "review_only"}
+        or any(token in markers["artifact_kind"] for token in ("shadow", "learning", "retrieval_pack", "action_debate", "official_advice_compat_preview"))
+    )
+    if has_shadow_marker:
+        raise ValueError(f"{endpoint} does not accept shadow, display-only, or non-executable artifacts.")
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         numeric = float(value)
@@ -209,6 +228,7 @@ class ExecutionController:
         return _to_jsonable(build_execution_sync_payload(self.home))
 
     def execution_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="execution trade")
         if not str(payload.get("fund_code", "") or "").strip():
             raise ValueError("fund_code is required")
         operation_type = str(payload.get("operation_type", "") or "").strip().lower()
@@ -219,6 +239,7 @@ class ExecutionController:
         return _to_jsonable(record_actual_trade(self.home, payload))
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="execution conversion")
         out_code = str(payload.get("out_fund_code", "") or "").strip()
         in_code = str(payload.get("in_fund_code", "") or "").strip()
         if not out_code or not in_code:
@@ -239,13 +260,17 @@ class ExecutionController:
         return _to_jsonable(preview_reconciliation(self.home, items, snapshot_date=snapshot_date, source=source))
 
     def execution_reconcile_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="execution reconcile apply")
         preview = payload.get("preview") or payload
+        if isinstance(preview, dict):
+            _reject_shadow_mutation_payload(preview, endpoint="execution reconcile apply")
         drop_missing = bool(payload.get("dropMissing") or payload.get("drop_missing"))
         if preview.get("apply_ready") is False and preview.get("unmatched_detected"):
             raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
         return _to_jsonable(apply_reconciliation(self.home, preview, drop_missing=drop_missing))
 
     def execution_confirmation_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="execution confirmation update")
         as_of = str(payload.get("date") or payload.get("asOf") or "") or None
         return _to_jsonable(update_pending_confirmations(self.home, as_of))
 
@@ -443,6 +468,7 @@ class PageService:
         }
 
     def long_memory_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="long memory action")
         memory_id = str(payload.get("memoryId", "") or payload.get("memory_id", "") or "").strip()
         action = str(payload.get("action", "") or "").strip().lower()
         note = str(payload.get("note", "") or "").strip()

@@ -1,7 +1,7 @@
 {
   "portfolio_name": "我的基金组合",
   "bootstrapped_at": "2026-03-13T13:51:30+08:00",
-  "bootstrapped_from": "F:\\okra_assistant\\config\\portfolio.json",
+  "bootstrapped_from": "config/portfolio.json",
   "base_as_of_date": "2026-03-11",
   "funds": [
     {

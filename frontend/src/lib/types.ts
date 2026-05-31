@@ -238,6 +238,82 @@ export type ReviewPayload = {
   pending_memory_lines?: string[];
 };
 
+export type ShadowReviewStatus = "missing" | "not_run" | "running" | "ready" | "partial" | "degraded" | "failed";
+export type ShadowReviewCategory = "same" | "changed" | "new_shadow_only" | "legacy_only" | "missing" | "error";
+export type ShadowReviewSeverity = "info" | "low" | "medium" | "high";
+
+export type ShadowReviewItem = Record<string, unknown> & {
+  reviewId: string;
+  fundCode: string;
+  fundName: string;
+  category: ShadowReviewCategory | string;
+  severity: ShadowReviewSeverity | string;
+  displayLabel: string;
+  nonExecutable: true;
+  displayOnly: true;
+  legacy?: Record<string, unknown> | null;
+  shadow?: Record<string, unknown> | null;
+  diff: Record<string, unknown> & {
+    actionChanged?: boolean;
+    confidenceDelta?: number | null;
+    notes?: string[];
+  };
+  display: Record<string, unknown> & {
+    primaryText?: string;
+    secondaryText?: string;
+    badges?: Array<{ label: string; tone: Tone | string }>;
+  };
+  guardrails?: Record<string, unknown>;
+  softPolicies?: Array<Record<string, unknown>>;
+  skillRefs?: Array<Record<string, unknown>>;
+  skillOutputs?: Array<Record<string, unknown>>;
+  retrieval?: Record<string, unknown> | null;
+  debate?: Record<string, unknown> | null;
+  outcomeEvents?: Array<Record<string, unknown>>;
+};
+
+export type ShadowReviewMissingArtifact = {
+  kind: string;
+  path?: string | null;
+  reason: string;
+  message: string;
+};
+
+export type ShadowReviewPagePayload = Record<string, unknown> & {
+  selectedDate: string;
+  status: ShadowReviewStatus;
+  generatedAt: string;
+  nonExecutable: true;
+  displayOnly: true;
+  summary: {
+    legacyCount: number;
+    shadowCount: number;
+    comparableCount: number;
+    changedCount: number;
+    agreementRate?: number | null;
+    highRiskDiffCount?: number;
+  };
+  artifacts: Record<string, unknown> & {
+    legacyAdvicePath?: string | null;
+    shadowAdvicePath?: string | null;
+    shadowTracePath?: string | null;
+    evalReportPath?: string | null;
+    exists: Record<string, boolean>;
+    states?: Record<string, string>;
+    missing: ShadowReviewMissingArtifact[];
+  };
+  items: ShadowReviewItem[];
+  runtime: Record<string, unknown>;
+  guardrails: Record<string, unknown> & {
+    nonExecutable: true;
+    executionDisabled: true;
+    affectsPortfolio: false;
+    affectsAdviceAccuracy: false;
+    affectsLongMemoryPromotion: false;
+    allowExecutionEvidence: false;
+  };
+};
+
 export type MemoryStatus = "candidate" | "strategic" | "permanent" | "archived" | "rejected";
 export type MemoryDomain = "fund" | "market" | "execution" | "portfolio";
 export type MemoryAction = "approve" | "reject" | "archive" | "demote";

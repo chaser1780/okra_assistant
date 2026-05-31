@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from http.server import ThreadingHTTPServer
 
 from app.web_api import ContractRequestHandler, OkraWebApi, cors_origin_value, is_allowed_origin
+from app.web_api_services import ExecutionController
 from helpers import TempAgentHome
 from long_memory_store import stable_memory_id, upsert_memory_record
 from today_orchestrator import AlreadyRunningError
@@ -285,6 +286,87 @@ class WebApiLongMemoryTests(unittest.TestCase):
         api = OkraWebApi(self.agent.root)
         with self.assertRaises(ValueError):
             api.execution_conversion({"out_fund_code": "F1", "in_fund_code": "F1", "out_amount": 100})
+
+    def test_mutation_endpoints_reject_shadow_artifacts(self):
+        api = OkraWebApi(self.agent.root)
+        shadow_payload = {
+            "fund_code": "F1",
+            "operation_type": "buy",
+            "amount": 100,
+            "ticket_id": "ticket:2026-05-22:F1:add:001",
+            "write_scope": "shadow_only",
+            "non_executable": True,
+            "displayOnly": True,
+        }
+        with self.assertRaises(ValueError):
+            api.execution_trade(shadow_payload)
+        with self.assertRaises(ValueError):
+            api.execution_conversion(
+                {
+                    "out_fund_code": "F1",
+                    "in_fund_code": "F2",
+                    "out_amount": 100,
+                    "artifact_kind": "action_ticket_shadow",
+                    "nonExecutable": True,
+                }
+            )
+        with self.assertRaises(ValueError):
+            api.long_memory_action({"memoryId": "m1", "action": "approve", "write_scope": "learning_only"})
+
+    def test_reconcile_and_confirmation_reject_shadow_artifacts(self):
+        api = OkraWebApi(self.agent.root)
+        with self.assertRaises(ValueError):
+            api.execution_reconcile_apply(
+                {
+                    "preview": {
+                        "apply_ready": True,
+                        "write_scope": "shadow_only",
+                        "nonExecutable": True,
+                    }
+                }
+            )
+        with self.assertRaises(ValueError):
+            api.execution_confirmation_update(
+                {
+                    "date": "2026-05-22",
+                    "artifact_kind": "outcome_evidence_learning",
+                    "displayOnly": True,
+                }
+            )
+
+    def test_source_path_alone_does_not_make_manual_payload_shadow(self):
+        controller = ExecutionController(self.agent.root)
+        with patch("app.web_api_services.record_actual_trade", return_value={"ok": True, "trade_id": "manual-1"}) as record:
+            result = controller.execution_trade(
+                {
+                    "fund_code": "F1",
+                    "operation_type": "buy",
+                    "amount": 100,
+                    "source_path": "manual-import.csv",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        record.assert_called_once()
+
+    def test_contract_trade_request_rejects_shadow_extra_fields(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self._request_json(
+                "/api/execution-sync/trade",
+                method="POST",
+                body={
+                    "fund_code": "F1",
+                    "operation_type": "buy",
+                    "amount": 100,
+                    "ticket_id": "ticket:2026-05-22:F1:add:001",
+                    "write_scope": "shadow_only",
+                    "non_executable": True,
+                },
+                headers={"Origin": "http://tauri.localhost"},
+            )
+        self.assertEqual(ctx.exception.code, 400)
+        body = json.loads(ctx.exception.read().decode("utf-8"))
+        self.assertEqual(body["error"]["error_code"], "bad_request")
 
     def test_intelligence_tolerates_non_numeric_heat_score(self):
         report_date = "2026-05-15"

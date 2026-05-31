@@ -55,14 +55,14 @@ def _resolve_embedding_provider(agent_home: Path, config: dict[str, Any]) -> dic
     return resolved
 
 
-def _resolve_embedding_api_key(provider: dict[str, Any]) -> str:
+def _resolve_embedding_api_key(agent_home: Path, provider: dict[str, Any]) -> str:
     temp_config = {
         "model_provider": provider.get("provider", "OpenAI"),
         "api_key": str(provider.get("api_key", "") or ""),
         "api_key_file": str(provider.get("api_key_file", "") or ""),
         "api_key_env": str(provider.get("api_key_env", "OPENAI_API_KEY") or "OPENAI_API_KEY"),
     }
-    return resolve_api_key(temp_config)
+    return resolve_api_key(temp_config, agent_home)
 
 
 class RagEmbeddingClient:
@@ -95,7 +95,7 @@ class RagEmbeddingClient:
         if not self.provider.get("endpoint"):
             return {"status": "error", "mode": "live", "detail": "embedding endpoint is not configured", "provider": self.provider["provider"]}
         try:
-            api_key = _resolve_embedding_api_key(self.provider)
+            api_key = _resolve_embedding_api_key(self.agent_home, self.provider)
         except Exception as exc:
             return {"status": "warning", "mode": "mock_fallback", "detail": str(exc), "provider": self.provider["provider"], "model": self.model}
         try:
@@ -131,7 +131,7 @@ class RagEmbeddingClient:
         use_dry_run = self.dry_run if dry_run is None else dry_run
         if use_dry_run:
             return [mock_embedding(text, self.dimensions) for text in texts]
-        api_key = _resolve_embedding_api_key(self.provider)
+        api_key = _resolve_embedding_api_key(self.agent_home, self.provider)
         response = requests.post(
             self.provider["endpoint"],
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},

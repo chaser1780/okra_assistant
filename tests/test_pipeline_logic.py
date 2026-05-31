@@ -22,6 +22,51 @@ from web_api_services import TaskController
 
 
 class PipelineLogicTests(unittest.TestCase):
+    def _write_promoted_outputs(self, agent: TempAgentHome, report_date: str) -> Path:
+        for relative in (
+            f"db/daily_scores/{report_date}.json",
+            "db/portfolio_state/current.json",
+            "config/portfolio.json",
+            "db/long_memory/exports/all_memory.json",
+        ):
+            agent.write_json(relative, {"report_date": report_date})
+        for relative in (
+            f"db/committee_advice/{report_date}.json",
+            f"db/llm_raw/{report_date}.json",
+            f"db/llm_advice/{report_date}.json",
+            f"db/committee_decision_bundle/{report_date}.json",
+            f"db/validated_advice/{report_date}.json",
+        ):
+            agent.write_json(relative, {"report_date": report_date})
+        return agent.write_json(f"db/phase8/promoted_runs/{report_date}.json", {"status": True})
+
+    def _make_promoted_outputs_newer_than_inputs(self, agent: TempAgentHome, report_date: str, future: float) -> None:
+        for relative in (
+            f"db/llm_context/{report_date}.json",
+            f"db/daily_scores/{report_date}.json",
+            "db/portfolio_state/current.json",
+            "config/portfolio.json",
+            "db/long_memory/exports/all_memory.json",
+            "config/strategy.toml",
+        ):
+            os.utime(agent.root / relative, (future - 10, future - 10))
+        for relative in (
+            f"db/committee_advice/{report_date}.json",
+            f"db/llm_raw/{report_date}.json",
+            f"db/llm_advice/{report_date}.json",
+            f"db/committee_decision_bundle/{report_date}.json",
+            f"db/validated_advice/{report_date}.json",
+            f"db/phase8/promoted_runs/{report_date}.json",
+        ):
+            os.utime(agent.root / relative, (future, future))
+
+    def _fresh_promoted_output_timestamp(self, agent: TempAgentHome, report_date: str) -> float:
+        from run_daily_pipeline import STEP_OUTPUT_CHECKS
+
+        step = STEP_OUTPUT_CHECKS["run_promoted_advice_chain.py"]
+        newest_input = max(path.stat().st_mtime for path in step.input_paths(agent.root, report_date) if path.exists())
+        return newest_input + 10
+
     def test_resume_existing_rebuilds_llm_context_when_raw_input_changes(self):
         agent = TempAgentHome()
         try:
@@ -59,53 +104,52 @@ class PipelineLogicTests(unittest.TestCase):
         finally:
             agent.cleanup()
 
-    def test_resume_existing_rebuilds_aggregate_when_evidence_index_changes(self):
+    def test_resume_existing_rebuilds_promoted_chain_when_context_changes(self):
         agent = TempAgentHome()
         try:
             report_date = "2026-03-11"
-            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
-            index_path = agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
-            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
+            context_path = agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            status_path = self._write_promoted_outputs(agent, report_date)
+            future = self._fresh_promoted_output_timestamp(agent, report_date)
+            self._make_promoted_outputs_newer_than_inputs(agent, report_date, future)
 
-            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
-            os.utime(index_path, (aggregate_path.stat().st_mtime + 10, aggregate_path.stat().st_mtime + 10))
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
+            os.utime(context_path, (status_path.stat().st_mtime + 10, status_path.stat().st_mtime + 10))
 
-            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
         finally:
             agent.cleanup()
 
-    def test_resume_existing_rebuilds_aggregate_when_agent_config_changes(self):
+    def test_resume_existing_rebuilds_promoted_chain_when_strategy_changes(self):
         agent = TempAgentHome()
         try:
             report_date = "2026-03-11"
             agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
-            agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
-            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
-            future = aggregate_path.stat().st_mtime + 1000
-            os.utime(aggregate_path, (future, future))
+            self._write_promoted_outputs(agent, report_date)
+            future = self._fresh_promoted_output_timestamp(agent, report_date)
+            self._make_promoted_outputs_newer_than_inputs(agent, report_date, future)
 
-            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
-            os.utime(agent.root / "config" / "agents.toml", (future + 10, future + 10))
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
+            os.utime(agent.root / "config" / "strategy.toml", (future + 10, future + 10))
 
-            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
         finally:
             agent.cleanup()
 
-    def test_resume_existing_rebuilds_aggregate_when_rag_config_changes(self):
+    def test_resume_existing_rebuilds_promoted_chain_when_guardrail_source_changes(self):
         agent = TempAgentHome()
         try:
             report_date = "2026-03-11"
             agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
-            agent.write_json(f"db/evidence_index/{report_date}.json", {"index": True})
-            aggregate_path = agent.write_json(f"db/agent_outputs/{report_date}/aggregate.json", {"aggregate": True})
-            future = aggregate_path.stat().st_mtime + 1000
-            os.utime(aggregate_path, (future, future))
+            self._write_promoted_outputs(agent, report_date)
+            future = self._fresh_promoted_output_timestamp(agent, report_date)
+            self._make_promoted_outputs_newer_than_inputs(agent, report_date, future)
 
-            self.assertTrue(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
-            rag_config = agent.write_text("config/rag.toml", "[rag]\nenabled = false\n")
-            os.utime(rag_config, (future + 10, future + 10))
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
+            guardrail_source = Path(__file__).resolve().parents[1] / "scripts" / "promoted_advice_guardrails.py"
+            os.utime(guardrail_source, (future + 10, future + 10))
 
-            self.assertFalse(step_output_exists(agent.root, report_date, "run_multiagent_research.py"))
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
         finally:
             agent.cleanup()
 

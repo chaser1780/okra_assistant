@@ -80,7 +80,11 @@ class PortfolioStateTests(unittest.TestCase):
         self.assertEqual(event_files, ["official_nav_revaluation_nav.json", "portfolio_screenshot_sync_screenshot.json"])
         self.assertEqual(snapshot_path.name, "2026-05-08.json")
         current = json.loads(current_path.read_text(encoding="utf-8"))
-        self.assertIn("event_journal_path", current["state_metadata"])
+        self.assertEqual(
+            "db/portfolio_state/events/2026-05-08/portfolio_screenshot_sync_screenshot.json",
+            current["state_metadata"]["event_journal_path"],
+        )
+        self.assertNotRegex(json.dumps(current["state_metadata"]), r"[A-Za-z]:\\")
         self.assertFalse(lock_path(self.agent.root, "portfolio_state").exists())
 
     def test_upsert_execution_status_releases_lock(self):

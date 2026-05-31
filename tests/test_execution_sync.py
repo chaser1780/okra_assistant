@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 from execution_sync import apply_reconciliation, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, update_pending_confirmations
-from common import lock_path
+from common import lock_path, project_path
 from helpers import TempAgentHome
 from long_memory_store import build_fund_memory
 from trade_lifecycle import effective_trade_date, resolve_trade_lifecycle
@@ -228,7 +228,8 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertTrue(result["auto_parse_attempted"])
         self.assertIn("HTTP 502", result["auto_parse_error"])
         self.assertTrue(result["saved_files"])
-        saved = Path(result["saved_files"][0])
+        self.assertFalse(Path(result["saved_files"][0]).is_absolute())
+        saved = project_path(self.agent.root, result["saved_files"][0])
         self.assertTrue(saved.exists())
 
     def test_alipay_screenshot_upload_uses_llm_vision_preview(self):
@@ -290,7 +291,8 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertTrue(event["before_state_hash"])
         self.assertTrue(event["after_state_hash"])
 
-        actual_path = Path(recorded["path"])
+        self.assertFalse(Path(recorded["path"]).is_absolute())
+        actual_path = project_path(self.agent.root, recorded["path"])
         actual_payload = json.loads(actual_path.read_text(encoding="utf-8"))
         for item in actual_payload["items"]:
             item.pop("portfolio_applied_at", None)
@@ -305,6 +307,28 @@ class ExecutionSyncTests(unittest.TestCase):
         portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
         fund = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
         self.assertEqual(fund["current_value"], 1300.0)
+
+    def test_settlement_metadata_paths_are_project_relative(self):
+        record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "trade_relative_paths",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "鐢电綉璁惧C",
+                "operation_type": "buy",
+                "amount": 100,
+                "confirm_date": "2026-05-05",
+            },
+        )
+        update_pending_confirmations(self.agent.root, "2026-05-05")
+
+        current = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        metadata = current["state_metadata"]
+        self.assertEqual("db/execution_sync/actual_trades/2026-05-04.json", metadata["source_path"])
+        self.assertEqual("db/execution_sync/settlement_events/trade_relative_paths.json", metadata["settlement_event_path"])
+        self.assertEqual("db/portfolio_state/events/2026-05-05/actual_trade_settlement_trade_relative_paths.json", metadata["event_journal_path"])
+        self.assertNotRegex(json.dumps(metadata), r"[A-Za-z]:\\")
 
     def test_fund_memory_ignores_actual_trade_journal(self):
         record_actual_trade(

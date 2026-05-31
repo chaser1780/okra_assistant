@@ -25,6 +25,7 @@ from api_contracts import (
     ExecutionTradeRequestDto,
     FundDetailDto,
     IntelligencePageDto,
+    ShadowReviewPageDto,
     coerce_model,
     model_dump_compat,
 )
@@ -46,10 +47,11 @@ from rag_retriever import retrieve_rag_evidence
 from today_orchestrator import AlreadyRunningError
 from web_api_services import ExecutionController, PageService, TaskController
 from web_api_format import to_jsonable as _to_jsonable
+from shadow_review_service import ShadowReviewService
 from workbench_state import WorkbenchStateService
 
 
-DEFAULT_HOME = Path(r"F:\okra_assistant")
+DEFAULT_HOME = ROOT_DIR
 ALLOWED_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
@@ -201,6 +203,7 @@ class OkraWebApi:
         self.task_controller = TaskController(home)
         self.execution_controller = ExecutionController(home)
         self.page_service = PageService(home, self.state_service)
+        self.shadow_review_service = ShadowReviewService(home)
 
     def start_bootstrap_alignment(self) -> None:
         try:
@@ -279,6 +282,9 @@ class OkraWebApi:
             review=_to_jsonable(self.state_service.build_review_view_model(snapshot)),
             long_memory=self.page_service.long_memory_payload(),
         )
+
+    def shadow_review_page(self, selected: str | None = None) -> dict:
+        return coerce_model(ShadowReviewPageDto, self.shadow_review_service.build(selected))
 
     def system_page(self, selected: str | None = None) -> dict:
         snapshot = self.state_service.load_snapshot(selected)
@@ -755,6 +761,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.api.realtime_page(selected))
             elif parsed.path == "/api/workbench/review":
                 self._send_json(self.api.review_page(selected))
+            elif parsed.path == "/api/shadow-review" or parsed.path == "/api/workbench/shadow-review":
+                self._send_json(self.api.shadow_review_page(selected))
             elif parsed.path == "/api/workbench/system":
                 self._send_json(self.api.system_page(selected))
             elif parsed.path.startswith("/api/fund/"):
@@ -898,6 +906,9 @@ class ContractRequestHandler(RequestHandler):
             elif endpoint_path == "/api/review":
                 selected = self._selected_date_from_query(query)
                 self._send_envelope(self.api.review_page(selected), page="review", selected_date=selected)
+            elif endpoint_path == "/api/shadow-review":
+                selected = self._selected_date_from_query(query)
+                self._send_envelope(self.api.shadow_review_page(selected), page="shadow-review", selected_date=selected)
             elif endpoint_path == "/api/system":
                 selected = self._selected_date_from_query(query)
                 self._send_envelope(self.api.system_page(selected), page="system", selected_date=selected)

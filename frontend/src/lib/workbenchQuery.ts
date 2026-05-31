@@ -7,6 +7,7 @@ import {
   getRealtimePage,
   getResearchPage,
   getReviewPage,
+  getShadowReviewPage,
   getSystemPage,
   getTodayPage,
   getWorkbenchShell
@@ -19,6 +20,7 @@ import type {
   RealtimePagePayload,
   ResearchPagePayload,
   ReviewPagePayload,
+  ShadowReviewPagePayload,
   ShellPayload,
   SystemPagePayload,
   TodayPagePayload
@@ -34,6 +36,7 @@ export const workbenchQueryKeys = {
   intelligence: (date?: string) => ["workbench", "intelligence", date ?? "latest"] as const,
   realtime: (date?: string) => ["workbench", "realtime", date ?? "latest"] as const,
   review: (date?: string) => ["workbench", "review", date ?? "latest"] as const,
+  shadowReview: (date?: string) => ["workbench", "shadowReview", date ?? "latest"] as const,
   system: (date?: string) => ["workbench", "system", date ?? "latest"] as const,
   fundDetail: (fundCode: string, date?: string, range?: string) => ["workbench", "fundDetail", fundCode, date ?? "latest", range ?? "default"] as const
 };
@@ -108,6 +111,15 @@ export function useReviewPageQuery(date?: string, options?: QueryOverride<Review
   return useQuery({
     queryKey: workbenchQueryKeys.review(date),
     queryFn: () => getReviewPage(date),
+    staleTime: 30_000,
+    ...options
+  });
+}
+
+export function useShadowReviewPageQuery(date?: string, options?: QueryOverride<ShadowReviewPagePayload>) {
+  return useQuery({
+    queryKey: workbenchQueryKeys.shadowReview(date),
+    queryFn: () => getShadowReviewPage(date),
     staleTime: 30_000,
     ...options
   });

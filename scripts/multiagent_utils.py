@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
 
-from common import dump_json, load_llm_config, timestamp_now
+from common import dump_json, load_llm_config, project_path, timestamp_now
 
 SIGNAL_CARD_SCHEMA = {
     "type": "object",
@@ -176,13 +176,13 @@ RESEARCHER_DEBATE_SCHEMA = GENERIC_AGENT_SCHEMA
 MANAGER_DECISION_SCHEMA = GENERIC_AGENT_SCHEMA
 
 
-def resolve_api_key(config: dict) -> str:
+def resolve_api_key(config: dict, agent_home: Path | str | None = None) -> str:
     direct = config.get("api_key", "").strip()
     if direct:
         return direct
     api_key_file = config.get("api_key_file", "").strip()
     if api_key_file:
-        path = Path(api_key_file)
+        path = project_path(Path(agent_home), api_key_file) if agent_home is not None else Path(api_key_file).expanduser()
         if path.exists():
             return path.read_text(encoding="utf-8").strip()
     api_key_env = config.get("api_key_env", f"{config['model_provider'].upper()}_API_KEY")
@@ -366,7 +366,7 @@ def call_responses_text(
 ) -> dict:
     provider_key = config["model_provider"]
     provider = config["model_providers"][provider_key]
-    api_key = resolve_api_key(config)
+    api_key = resolve_api_key(config, agent_home)
     endpoint = responses_endpoint(provider)
     last_error = None
     transport_order = [("direct", False), ("env_proxy", True)]
@@ -652,7 +652,7 @@ def call_json_agent(
 ) -> dict:
     config = load_llm_config(agent_home)
     provider = config["model_providers"][config["model_provider"]]
-    api_key = resolve_api_key(config)
+    api_key = resolve_api_key(config, agent_home)
     endpoint = responses_endpoint(provider)
     effective_schema = schema or GENERIC_AGENT_SCHEMA
     payload = {

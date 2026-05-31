@@ -74,6 +74,47 @@ backend = "sqlite_mock"
         self.assertEqual("warning", result["status"])
         self.assertEqual("mock_fallback", result["mode"])
 
+    def test_relative_api_key_file_resolves_under_project_root(self):
+        self.agent.write_text(
+            "config/rag.toml",
+            """[rag]
+enabled = false
+
+[rag.embedding]
+enabled = true
+dry_run = false
+provider = "OpenAI"
+model = "text-embedding-3-large"
+dimensions = 8
+
+[rag.vector_store]
+backend = "sqlite_mock"
+""",
+        )
+        self.agent.write_text(
+            "config/llm.toml",
+            'model_provider = "OpenAI"\napi_key_file = "config/openai_api_key.txt"\napi_key_env = "MISSING_RAG_KEY"\n[model_providers.OpenAI]\nbase_url = "https://api.example.test/v1"\n',
+        )
+        self.agent.write_text("config/openai_api_key.txt", "file-key")
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"embedding": [0.2] * 8}]}
+
+        seen = {}
+
+        def fake_post(url, headers, json, timeout):
+            seen["auth"] = headers["Authorization"]
+            return FakeResponse()
+
+        with patch("rag_embedding_client.requests.post", side_effect=fake_post):
+            result = RagEmbeddingClient(self.agent.root).probe(dry_run=False)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("Bearer file-key", seen["auth"])
+
     def test_embed_chunk_uses_cache_on_second_call(self):
         chunk = self._chunk()
         client = RagEmbeddingClient(self.agent.root)

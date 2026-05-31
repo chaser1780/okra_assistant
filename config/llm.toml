@@ -9,7 +9,7 @@ network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 preferred_auth_method = "apikey"
 api_key_env = "OPENAI_API_KEY"
-api_key_file = "F:\\okra_assistant\\config\\openai_api_key.txt"
+api_key_file = "config/openai_api_key.txt"
 personality = "friendly"
 
 [model_providers.OpenAI]

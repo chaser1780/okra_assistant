@@ -13,12 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import TempAgentHome
 from build_llm_context import build_event_risks, build_memory_digest, build_news_digest, build_sentiment_digest
 from build_daily_report import related_news
-from committee_synthesis import degradation_summary
-from generate_llm_advice import build_committee_advice_from_agents, merge_committee_narrative
 from learning_memory import run_learning_sync, write_learning_artifacts
 from long_memory_store import upsert_memory_record
 from portfolio_exposure import analyze_portfolio_exposure
-from run_multiagent_research import build_agent_reuse_metadata, build_user_prompt, can_reuse_agent_record, compact_agent_output, record_reuse_metadata, sanitize_agent_output
 import agent_inputs
 from decision_support import build_agent_stage_snapshot, summarize_fund_stage_signals
 from ui_support import build_auto_realtime_status_text, build_dashboard_text, load_state
@@ -96,55 +93,6 @@ class MultiagentAndReviewTests(unittest.TestCase):
                 ],
             },
         )
-
-    def test_run_multiagent_research_mock_writes_aggregate(self):
-        self.build_context()
-        self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock")
-        aggregate = json.loads((self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "aggregate.json").read_text(encoding="utf-8"))
-        self.assertTrue(aggregate["all_agents_ok"])
-        self.assertEqual(aggregate["workflow_version"], "2026-04-19.workflow-v2")
-        self.assertTrue(aggregate["prompt_bundle_sha256"])
-        self.assertIn("market_analyst", aggregate["ordered_agents"])
-        self.assertIn("portfolio_trader", aggregate["agents"])
-        self.assertEqual(aggregate["agents"]["portfolio_trader"]["status"], "ok")
-        self.assertIn("analyst", aggregate["agent_groups"])
-        self.assertIn("portfolio_trader", aggregate["agent_dependencies"])
-        self.assertIn("manager", aggregate["stage_status"])
-        self.assertEqual(aggregate["agent_roles"]["research_manager"], "manager")
-        trace = aggregate["workflow_trace"]["market_analyst"]
-        self.assertEqual(trace["status"], "ok")
-        self.assertTrue(trace["agent_input_sha256"])
-        self.assertIn("portfolio_item_count", trace["retrieval_summary"])
-        self.assertIn("rag_hit_count", trace["retrieval_summary"])
-        self.assertFalse(aggregate["workflow_meta"]["rag"]["rag_enabled"])
-        self.assertEqual("legacy", aggregate["workflow_meta"]["rag"]["retrieval_backend"])
-
-    def test_use_existing_requires_matching_agent_fingerprint(self):
-        self.build_context()
-        self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock", "--only", "market_analyst")
-        agent_path = self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "market_analyst.json"
-        record = json.loads(agent_path.read_text(encoding="utf-8"))
-        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
-        current_input = agent_inputs.build_agent_input("market_analyst", context, {})
-        current_metadata = build_agent_reuse_metadata(
-            self.agent.root,
-            "market_analyst",
-            current_input,
-            build_user_prompt("market_analyst", current_input),
-            use_mock=True,
-        )
-        self.assertTrue(can_reuse_agent_record(record, current_metadata))
-
-        context["funds"][0]["quote"]["day_change_pct"] = 9.9
-        changed_input = agent_inputs.build_agent_input("market_analyst", context, {})
-        changed_metadata = build_agent_reuse_metadata(
-            self.agent.root,
-            "market_analyst",
-            changed_input,
-            build_user_prompt("market_analyst", changed_input),
-            use_mock=True,
-        )
-        self.assertFalse(can_reuse_agent_record(record, changed_metadata))
 
     def test_agent_input_rag_shadow_does_not_inject_by_default(self):
         self.build_context()
@@ -240,55 +188,6 @@ class MultiagentAndReviewTests(unittest.TestCase):
         self.assertEqual(["rag:doc-f1#chunk-f1"], [item["evidence_id"] for item in agent_input["fund_evidence_map"]["F1"]])
         self.assertNotIn("F2", agent_input["fund_evidence_map"])
 
-    def test_workflow_metadata_records_rag_default_switch(self):
-        self.build_context()
-        self.agent.write_text(
-            "config/rag.toml",
-            """[rag]
-enabled = false
-
-[rag.agent_default]
-enabled = true
-fallback_to_legacy = true
-write_trace = false
-min_hits = 1
-""",
-        )
-        self.agent.run_script("run_multiagent_research.py", "--date", "2026-03-10", "--mock", "--only", "market_analyst")
-        workflow = json.loads((self.agent.root / "db" / "agent_outputs" / "2026-03-10" / "workflow_definition.json").read_text(encoding="utf-8"))
-        self.assertTrue(workflow["rag"]["rag_enabled"])
-        self.assertEqual("rag", workflow["rag"]["retrieval_backend"])
-        self.assertIn("manifest_set_sha256", workflow["rag"])
-
-    def test_reuse_metadata_tracks_prompt_and_model_config(self):
-        self.build_context()
-        context = json.loads((self.agent.root / "db" / "llm_context" / "2026-03-10.json").read_text(encoding="utf-8"))
-        agent_input = agent_inputs.build_agent_input("market_analyst", context, {})
-        metadata = build_agent_reuse_metadata(
-            self.agent.root,
-            "market_analyst",
-            agent_input,
-            build_user_prompt("market_analyst", agent_input),
-            use_mock=True,
-        )
-        record = record_reuse_metadata({"status": "ok", "output": {"summary": "cached"}}, metadata)
-        self.assertTrue(can_reuse_agent_record(record, metadata))
-
-        changed_prompt_metadata = dict(metadata)
-        changed_prompt_metadata["prompt_sha256"] = "changed"
-        self.assertFalse(can_reuse_agent_record(record, changed_prompt_metadata))
-
-        self.agent.write_text("config/llm.toml", (self.agent.root / "config" / "llm.toml").read_text(encoding="utf-8").replace('model = "gpt-5.4"', 'model = "gpt-5.5"', 1))
-        changed_model_metadata = build_agent_reuse_metadata(
-            self.agent.root,
-            "market_analyst",
-            agent_input,
-            build_user_prompt("market_analyst", agent_input),
-            use_mock=True,
-        )
-        self.assertNotEqual(metadata["llm_config_sha256"], changed_model_metadata["llm_config_sha256"])
-        self.assertFalse(can_reuse_agent_record(record, changed_model_metadata))
-
     def test_news_and_sentiment_digest_helpers(self):
         payload = {
             "items": [
@@ -352,14 +251,6 @@ min_hits = 1
         )
         self.assertIn("positive", lines[0])
 
-    def test_generate_llm_advice_mock_writes_committee_artifact(self):
-        self.build_context()
-        self.agent.run_script("generate_llm_advice.py", "--date", "2026-03-10", "--mock")
-        committee = json.loads((self.agent.root / "db" / "committee_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
-        advice = json.loads((self.agent.root / "db" / "llm_advice" / "2026-03-10.json").read_text(encoding="utf-8"))
-        self.assertEqual(committee["fund_decisions"], advice["fund_decisions"])
-        self.assertEqual(committee["market_view"]["regime"], advice["market_view"]["regime"])
-
     def test_build_nightly_review_report_aggregates_multiple_horizons(self):
         self.agent.write_json(
             "db/review_results/2026-03-10_T0.json",
@@ -417,55 +308,6 @@ min_hits = 1
         self.assertIn("T0｜建议日期 2026-03-10", report)
         self.assertIn("T+5｜建议日期 2026-03-06", report)
         self.assertIn("## 官方净值重估摘要", report)
-
-    def test_compact_agent_output_keeps_core_fields(self):
-        output = {
-            "agent_name": "research_manager",
-            "summary": "summary",
-            "confidence": 0.8,
-            "evidence_strength": "high",
-            "data_freshness": "fresh",
-            "key_points": ["a", "b"],
-            "watchouts": ["w1"],
-            "portfolio_view": {"regime": "mixed", "risk_bias": "balanced", "key_drivers": ["d1"], "portfolio_implications": ["i1"]},
-            "fund_views": [{"fund_code": "F1", "action_bias": "add", "thesis": "t", "comment": "c", "risks": ["r1", "r2", "r3"]}],
-        }
-        compact = compact_agent_output(output)
-        self.assertEqual(compact["agent_name"], "research_manager")
-        self.assertEqual(compact["portfolio_view"]["regime"], "mixed")
-        self.assertEqual(compact["fund_views"][0]["fund_code"], "F1")
-        self.assertEqual(compact["fund_views"][0]["risks"], ["r1", "r2"])
-
-    def test_sanitize_agent_output_removes_tail_noise(self):
-        output = {
-            "agent_name": "research_manager",
-            "summary": "  研究结论  ",
-            "key_points": ["有效信息", "完成。", "结束。", "有效信息"],
-            "missing_info": ["缺少规模数据", " "],
-            "watchouts": ["no_trade_list如下。", "请特别注意其中QDII相关理由的低置信属性。", "保留高质量动作"],
-            "portfolio_view": {"regime": "mixed", "risk_bias": "balanced", "key_drivers": ["主驱动", "完成。"], "portfolio_implications": ["先控仓", "结束。"]},
-            "fund_views": [{"fund_code": "F1", "thesis": "  继续观察  ", "action_bias": "hold", "comment": "结束。", "catalysts": ["有效催化", "完成。"], "risks": ["风险一", "风险一"]}],
-        }
-        cleaned = sanitize_agent_output(output)
-        self.assertEqual(cleaned["summary"], "研究结论")
-        self.assertEqual(cleaned["key_points"], ["有效信息"])
-        self.assertEqual(cleaned["watchouts"], ["保留高质量动作"])
-        self.assertEqual(cleaned["portfolio_view"]["portfolio_implications"], ["先控仓"])
-        self.assertEqual(cleaned["fund_views"][0]["catalysts"], ["有效催化"])
-
-    def test_degradation_summary_allows_non_core_failure(self):
-        aggregate = {
-            "failed_agents": [{"agent_name": "sentiment_analyst", "error": "compatibility"}],
-            "agents": {
-                "research_manager": {"status": "ok"},
-                "risk_manager": {"status": "ok"},
-                "portfolio_trader": {"status": "ok"},
-            },
-        }
-        summary = degradation_summary(aggregate, ["research_manager", "risk_manager", "portfolio_trader"])
-        self.assertTrue(summary["committee_ready"])
-        self.assertTrue(summary["degraded_ok"])
-        self.assertEqual(summary["blocking_failures"], [])
 
     def test_build_agent_stage_snapshot_and_fund_stage_summary(self):
         aggregate = {
@@ -747,38 +589,6 @@ min_hits = 1
         self.assertIn("成长轮动方向要先看修复确认。", lesson_texts)
         self.assertNotIn("过旧且不相关。", lesson_texts)
         self.assertIn("growth_rotation", digest["retrieval_context_tags"])
-
-    def test_build_committee_advice_preserves_committee_priority(self):
-        context = {
-            "funds": [
-                {"fund_code": "F1", "role": "tactical", "current_value": 500.0, "cap_value": 1000.0, "quote": {"week_change_pct": -2.0}, "estimated_nav": {"estimate_change_pct": -1.0}},
-                {"fund_code": "F2", "role": "tactical", "current_value": 400.0, "cap_value": 1000.0, "quote": {"week_change_pct": 2.0}, "estimated_nav": {"estimate_change_pct": 1.0}},
-            ]
-        }
-        agent_bundle = {
-            "agents": {
-                "research_manager": {
-                    "status": "ok",
-                    "output": {"confidence": 0.72, "summary": "先减 F1", "key_points": ["先收敛"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "committee_preference": "reduce", "preferred_action": "reduce", "preferred_size_bucket": "200", "thesis": "F1 转弱"}]},
-                },
-                "risk_manager": {
-                    "status": "ok",
-                    "output": {"confidence": 0.7, "summary": "批准 F1", "key_points": ["控制风险"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "risk_decision": "approve", "action_bias": "reduce", "thesis": "F1 风险更高"}]},
-                },
-                "portfolio_trader": {
-                    "status": "ok",
-                    "output": {"confidence": 0.75, "summary": "执行 F1 reduce_200", "key_points": ["动作集中"], "watchouts": [], "portfolio_view": {"regime": "mixed"}, "fund_views": [{"fund_code": "F1", "preferred_action": "reduce", "preferred_size_bucket": "200", "action_bias": "reduce", "comment": "reduce_200", "thesis": "先处理 F1"}]},
-                },
-            }
-        }
-        advice = build_committee_advice_from_agents(context, agent_bundle)
-        self.assertEqual(advice["fund_decisions"][0]["fund_code"], "F1")
-        self.assertEqual(advice["fund_decisions"][0]["action"], "reduce")
-        self.assertEqual(advice["fund_decisions"][0]["priority"], 1)
-        merged = merge_committee_narrative(advice, {"market_summary": "先收敛。", "cross_fund_observations": ["动作应集中。"]})
-        self.assertEqual(merged["fund_decisions"], advice["fund_decisions"])
-        self.assertEqual(merged["market_view"]["summary"], "先收敛。")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,25 +58,55 @@ notes for the refactor.
 - [done] Add focused action-ticket tests for add, reduce, scheduled DCA,
   meaningful hold, hard-blocked, soft-adjusted, and missing-data tickets.
 - [done] Add action-ticket dataclass round-trip tests with fixed clock.
-- [pending] Finalize Phase 2 retrieval-pack dataclasses and no-future checks.
-- [pending] Design retrieval-pack builder for action-ticket generation.
-- [pending] Add retrieval-pack round-trip tests and trace completeness metric.
-- [pending] Classify existing hard constraints and keep them explicit.
-- [pending] Design adaptive soft-constraint memory lifecycle.
-- [pending] Design adaptive policy promotion, weakening, contradiction, and
+- [done] Finalize Phase 2 retrieval-pack dataclasses and no-future checks.
+- [done] Design retrieval-pack builder for action-ticket generation.
+- [done] Add retrieval-pack round-trip tests and trace completeness metric.
+- [done] Classify existing hard constraints and keep them explicit.
+- [done] Design adaptive soft-constraint memory lifecycle.
+- [done] Design adaptive policy promotion, weakening, contradiction, and
   cap rules.
-- [pending] Define strategy skill Markdown and registry metadata schema.
-- [pending] Add strategy skill registry/Markdown frontmatter round-trip tests.
-- [pending] Design Skill Curator Agent input/output contract.
-- [pending] Design skill-pack builder and skill usage tracking.
-- [pending] Design skill outcome evaluation and promotion/revision rules.
-- [pending] Decide LangGraph dependency/version and checkpoint backend before
+- [done] Define strategy skill Markdown and registry metadata schema.
+- [done] Add strategy skill registry/Markdown frontmatter round-trip tests.
+- [done] Design Skill Curator Agent input/output contract.
+- [done] Design skill-pack builder and skill usage tracking.
+- [done] Design skill outcome evaluation and promotion/revision rules.
+- [done] Decide LangGraph dependency/version and checkpoint backend before
   Phase 3 coding.
-- [pending] Define graph state schema for `debate_to_action_graph`.
-- [pending] Implement `run_action_debate_shadow.py` as non-mutating shadow entry.
-- [pending] Add CLI/Markdown refactor review before full Workbench UI.
-- [pending] Add read-only Workbench comparison only after shadow artifacts
+- [done] Define graph state schema for `debate_to_action_graph`.
+- [done] Implement `run_action_debate_shadow.py` as non-mutating shadow entry.
+- [done] Implement Phase 4 outcome event model and standalone evaluator.
+- [done] Add CLI/Markdown refactor review before full Workbench UI.
+- [done] Add read-only Workbench comparison only after shadow artifacts
   stabilize.
+- [done] Build Phase 8 downstream consumer map before official-path
+  replacement.
+- [done] Add read-only Phase 8 readiness audit before compatibility adapter or
+  fallback switch work.
+- [done] Add Phase 8 official-advice compatibility preview without official
+  path mutation.
+- [done] Design Phase 8 fallback switch and rollback command before
+  touching the official daily chain.
+- [done] Fix adaptive-policy replay so derived policy events are re-materialized
+  from current outcome artifacts without stale support/contradict conflicts.
+- [done] Harden Shadow Review API/UI safety contracts and same-fund multi-action
+  comparison.
+- [done] Build strict named multi-date shadow regression baselines:
+  `2026-05-21..2026-05-22` passes official-compatible DCA/hold replay;
+  the broader `2026-03-13`, `2026-04-20`, and `2026-05-20..2026-05-22`
+  coverage baseline covers add/reduce/switch_out and now passes with the
+  shadow-adapter-only validated-section replay contract.
+- [done] Build named multi-date outcome evidence baseline for
+  `2026-03-13`, `2026-04-20`, and `2026-05-20..2026-05-22` across T+1/T+5
+  horizons.
+- [done] Add Phase 8 canary scope guards, adapter event logging, promotion
+  review, and completion audit so fallback/rollback readiness is auditable
+  before any official-path mutation.
+- [done] Add isolated Phase 8 canary drill so the promoted adapter path can be
+  exercised in a temporary `FUND_AGENT_HOME` without mutating source-repo
+  official outputs.
+- [blocked-by-promotion] Enable Phase 8 fallback switch, mutate official daily
+  chain, or delete legacy code. This requires explicit promotion, multi-date
+  comparison evidence, named regression baselines, and rollback drill review.
 
 ## Completed Documentation Tasks
 
@@ -90,6 +120,18 @@ notes for the refactor.
 | Workbench API contract update | 7/UI | `docs/modern_workbench.md` | Current envelope, routes, DTOs, error behavior, and compatibility risks recorded |
 | Review refinement | 0.5/all | `11_review_refinement_and_vertical_slice.md` | User review incorporated into route, KPIs, core fields, boundary checks, and replacement/fallback strategy |
 | Phase 0.5 golden vertical slice | 0.5 | `tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, `scripts/artifact_boundary.py` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` passed; replay diff verdict PASS |
+| Phase 8 downstream consumer map | 8 | `phase8_downstream_consumer_map.md`, `scripts/audit_phase8_readiness.py`, `tests/test_phase8_readiness.py` | Read-only audit marks `promotion_ready=false` until official-compatible adapter, fallback switch, broader outcome evidence, regression baselines, rollback path, and explicit promotion are present |
+| Phase 8 compatibility preview | 8 | `scripts/build_official_advice_compat_preview.py`, `tests/test_official_advice_compat_preview.py` | `2026-05-22` preview produced committee-bundle-like, final-advice-like, and validated-section-like shapes under `db/refactor_shadow_runs/`; official outputs remain unchanged and promotion remains blocked |
+| Hard constraint catalog | 0/1/8 | `scripts/build_hard_constraint_catalog.py`, `tests/test_hard_constraint_catalog.py`, `db/refactor_shadow_runs/hard_constraint_catalog.json` | Machine-readable `shadow_only` catalog parsed from `hard_constraints_inventory.md`; deterministic hard constraints remain official source of truth |
+| Strategy skill pack and usage candidates | 6 | `scripts/build_strategy_skill_pack.py`, `tests/test_strategy_skill_pack.py`, `db/strategy_skills/skill_pack.json`, `db/strategy_skills/usage/<date>.json` | Learning-only skill pack and non-mutating usage candidates are written with `applied_to_ticket_file=false` and `auto_activation_allowed=false` |
+| Phase 8 fallback and rollback contract | 8 | `scripts/build_phase8_fallback_contract.py`, `tests/test_phase8_fallback_contract.py`, `db/phase8/fallback_contract.json` | Fallback switch, rollback command, small-scope canary env vars, and adapter event log are documented as `shadow_only`; switch remains inactive and promotion remains blocked |
+| Adaptive policy replay hardening | 5 | `scripts/update_adaptive_policies.py`, `tests/test_adaptive_policies.py`, `db/strategy_memory/policy_events.jsonl`, `db/strategy_memory/policies.json` | Derived policy events are keyed by source outcome and rewritten from current outcome artifacts; `2026-05-22` now has 14 valid events with no source-outcome support/contradict conflicts |
+| Shadow review contract hardening | 7 | `app/shadow_review_service.py`, `app/api_contracts.py`, `frontend/src/lib/schemas.ts`, `frontend/src/app/pages/ShadowReviewPage.tsx`, `tests/test_web_api_action_tickets.py` | Boundary-invalid artifacts fail instead of being silently displayed; same-fund multi-action rows remain distinct; policy/skill/outcome summaries are displayed |
+| Multi-date shadow regression baseline | 8 | `scripts/build_shadow_regression_baseline.py`, `tests/test_shadow_regression_baseline.py`, `db/refactor_shadow_runs/regression_baselines/phase8_shadow_official_compatible_2026_05_21_22/`, `db/refactor_shadow_runs/regression_baselines/phase8_shadow_coverage_add_reduce_switch_2026_03_13_04_20_05_20_22/` | DCA/hold official-compatible baseline remains a local compatibility fixture; broad add/reduce/switch_out/scheduled_dca/hold baseline passes for all 5 dates and now must also satisfy audit-time source-hash, date-count, ready-row, and broad-action checks before `regression_baselines=ready` |
+| Multi-date outcome evidence baseline | 4/8 | `scripts/build_outcome_evidence_baseline.py`, `tests/test_outcome_evidence_baseline.py`, `db/refactor_shadow_runs/outcome_evidence_baselines/phase8_outcome_add_reduce_switch_2026_03_13_04_20_05_20_22/` | Broad baseline passed for `2026-03-13`, `2026-04-20`, and `2026-05-20..2026-05-22` across T+1/T+5; 10 artifacts, 143 scored events, action types `add`, `reduce`, `switch_out`, `scheduled_dca`, `hold`; Phase 8 audit now rejects single-date/DCA-only or stale-hash baselines for `outcome_examples=ready` |
+| Phase 8 isolated canary drill | 8 | `scripts/run_phase8_canary_drill.py`, `tests/test_phase8_canary_drill.py`, `db/phase8/canary_drills/2026-05-22.json`, `db/phase8/canary_drills/2026-05-22.md` | Canary reports `canary_passed=true`, source official mutation count 0, isolated official path generated, adapter-loaded event observed, and 15 validated decisions |
+| Phase 8 promotion review package | 8 | `scripts/build_phase8_promotion_review.py`, `tests/test_phase8_promotion_review.py`, `db/phase8/promotion_reviews/2026-05-22.json`, `db/phase8/promotion_reviews/2026-05-22.md` | Historical pre-promotion package retained as evidence; superseded by the promoted-only rollout row below |
+| Phase 8 completion audit | 8 | `scripts/audit_phase8_completion.py`, `tests/test_phase8_completion_audit.py`, `db/phase8/completion_audit.json`, `db/phase8/completion_audit.md` | Current audit verifies promoted dates, legacy deletion, promoted-only default pipeline, project production config, and main merge; machine-local OKRA environment variables are not completion criteria |
 
 ## Phase Execution Board Template
 
@@ -99,3 +141,11 @@ Use this structure once implementation branches begin:
 |---|---|---|---|---|---|---|---|---|
 | Phase 0.5 | done | Codex | Phase 0 | `tests/fixtures/golden_slices/*`, `scripts/replay_refactor_slice.py`, `scripts/diff_refactor_slice.py`, optional `scripts/artifact_boundary.py` | `db/refactor_shadow_runs/2026-05-22__017641__scheduled_dca/`, `diff_report.md` | `python -B -X utf8 -m unittest tests.test_refactor_golden_slice` | PASS; `2026-05-22 + 017641 + scheduled_dca` locked | One date, one fund, one action type |
 | Phase 1 | partial | Codex | Phase 0 + Phase 0.5 | `scripts/action_ticket_models.py`, `scripts/build_action_ticket_shadow.py`, `tests/test_action_tickets.py` | `db/action_tickets/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_tickets` | PASS; `2026-05-22` produced 15 shadow-only tickets, including `017641` scheduled DCA | Standalone only; not integrated into daily pipeline/UI |
+| Phase 2 | partial | Codex | Phase 1 | `scripts/layered_context_models.py`, `scripts/build_layered_retrieval_pack.py`, `tests/test_layered_retrieval_pack.py` | `db/retrieval_packs/<date>.json` | `python -B -X utf8 -m unittest tests.test_layered_retrieval_pack` | PASS; `2026-05-22` produced 15 packs, trace completeness 1.0, no-future violations 0 | Standalone only; RAG non-canonical and disabled by default |
+| Phase 3 | partial | Codex | Phase 1 + Phase 2 | `scripts/action_debate_graph.py`, `scripts/action_debate_prompts.py`, `scripts/run_action_debate_shadow.py`, `tests/test_action_debate_graph.py` | `db/action_debates/<date>.json`, `db/action_debates/runtime/<date>.json` | `python -B -X utf8 -m unittest tests.test_action_debate_graph` | PASS; `2026-05-22` produced 15 shadow debates, node failures 0, state size 5960 bytes | Local file-backed shadow graph; no external LangGraph dependency yet; no ticket rewrite |
+| Phase 4 | partial | Codex | Phase 1 + official NAV facts | `scripts/outcome_event_models.py`, `scripts/evaluate_action_ticket_outcomes.py`, `scripts/build_outcome_evidence_baseline.py`, `tests/test_action_outcomes.py`, `tests/test_outcome_evidence_baseline.py` | `db/outcome_events/<base_date>__<horizon>.json`, `db/refactor_shadow_runs/outcome_evidence_baselines/<baseline_name>/` | `python -B -X utf8 -m unittest tests.test_action_outcomes tests.test_outcome_evidence_baseline` | PASS; broad baseline for `2026-03-13`, `2026-04-20`, and `2026-05-20..2026-05-22` T+1/T+5 produced 10 outcome artifacts and 143 scored outcome events | Outcome events are learning-only; baseline is shadow-only; no portfolio, execution, long-memory, policy, or skill writes |
+| Phase 5 | partial | Codex | Phase 4 outcome events | `scripts/adaptive_policy_models.py`, `scripts/update_adaptive_policies.py`, `tests/test_adaptive_policies.py` | `db/strategy_memory/policy_events.jsonl`, `db/strategy_memory/policies.json` | `python -B -X utf8 -m unittest tests.test_adaptive_policies` | PASS; `2026-05-22` generated 14 valid policy events and 4 materialized policies; lifecycle, support/contradiction accounting, replay idempotence, stale derived-event replacement, malformed-line isolation, non-blocking effects, and per-scope caps covered | Learning-only, non-executable; no hard constraints, official advice, portfolio state, execution sync, long-memory, or skill writes |
+| Phase 6 | done-for-shadow | Codex | Phase 5 policy clusters + Phase 4 outcomes | `scripts/strategy_skill_models.py`, `scripts/strategy_skill_store.py`, `scripts/run_skill_curator.py`, `scripts/build_strategy_skill_pack.py`, `tests/test_strategy_skills.py`, `tests/test_strategy_skill_pack.py` | `db/strategy_skills/registry.json`, `db/strategy_skills/<skill_id>/skill.md`, `db/strategy_skills/<skill_id>/events.jsonl`, `db/strategy_skills/skill_pack.json`, `db/strategy_skills/usage/<date>.json` | `python -B -X utf8 -m unittest tests.test_strategy_skills tests.test_strategy_skill_pack` | PASS; current real registry has 3 candidate skills and 0 active skills; archived policies remain visible in registry but are excluded from the default skill pack; skill pack and usage candidates are non-mutating | Learning-only, non-executable; auto active promotion disabled; usage candidates do not write back to action tickets |
+| Phase 7 early review | partial | Codex | Phase 1 + Phase 2 + Phase 3 + optional Phase 4/5/6 | `scripts/render_refactor_review.py`, `tests/test_refactor_review_markdown.py`, `scripts/artifact_boundary.py` | `db/refactor_reviews/<date>.md` | `python -B -X utf8 -m unittest tests.test_refactor_review_markdown` | PASS; `2026-05-22` Markdown review rendered ready status and chained official advice, tickets, packs, debates, outcome events, adaptive policy summary, and strategy skill registry summary | CLI/Markdown only; no API, UI, execution, or long-memory writes |
+| Phase 7 Workbench review surface | partial | Codex | Phase 1 + Phase 2 + Phase 3 + optional Phase 4/5/6 | `app/api_contracts.py`, `app/shadow_review_service.py`, `app/web_api.py`, `frontend/src/lib/schemas.ts`, `frontend/src/lib/workbenchApi.ts`, `frontend/src/lib/workbenchQuery.ts`, `frontend/src/lib/types.ts`, `frontend/src/app/routes.tsx`, `frontend/src/app/routeMeta.ts`, `frontend/src/components/okra/WorkbenchLayout.tsx`, `frontend/src/app/pages/ShadowReviewPage.tsx`, `tests/test_web_api_action_tickets.py` | `GET /api/shadow-review?date=YYYY-MM-DD`, `/shadow-review` Workbench page | `python -B -X utf8 -m unittest tests.test_web_api_action_tickets`; `npm run build` | PASS; `2026-05-22` API DTO status `ready`, 15 items, agreement 1.0, `nonExecutable=true`, `displayOnly=true`, `executionDisabled=true`; boundary violations fail; same-fund multi-action rows remain distinct | Read-only API/UI only; no execution buttons, portfolio mutation, official advice mutation, long-memory action, policy/skill promotion, or snapshot-synthesized review items |
+| Phase 8 promoted-only rollout | in-progress-to-main | Codex | Phase 1-7 evidence + Phase 8 audits | `config/production.toml`, `scripts/run_daily_pipeline.py`, `scripts/run_promoted_advice_chain.py`, `scripts/promoted_advice_guardrails.py`, `scripts/audit_phase8_readiness.py`, `scripts/audit_phase8_completion.py`, `scripts/run_promoted_stability_observation.py`, `tests/test_phase8_readiness.py`, `tests/test_phase8_completion_audit.py`, `tests/test_promoted_advice_chain.py` | official-compatible advice outputs, `db/phase8/promoted_runs/<date>.json`, multi-date promoted observation report, completion audit | `python -B -X utf8 -m unittest tests.test_pipeline_logic tests.test_phase8_readiness tests.test_phase8_completion_audit tests.test_promoted_advice_chain tests.test_validation_and_trade`; `python -B -X utf8 scripts\run_promoted_stability_observation.py --date 2026-05-11 --date 2026-05-14 --date 2026-05-18 --date 2026-05-20 --date 2026-05-21 --date 2026-05-22 --format json`; `python -B -X utf8 scripts\audit_phase8_completion.py --date 2026-05-22 --require-main --format json` | Promoted chain is the default official path; legacy multi-agent/committee/final-advice/validator/runtime-adapter scripts are deleted; project production state is stored in `config/production.toml`, not machine-local environment variables | Remaining gate is commit, merge to `main`, and final `--require-main` completion audit |

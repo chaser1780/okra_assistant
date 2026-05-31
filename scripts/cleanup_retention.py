@@ -597,7 +597,7 @@ def _format_bytes(size: int) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Apply OKRA retention rules for rebuildable runtime data.")
-    parser.add_argument("--agent-home", default=None, help="Project root. Defaults to FUND_AGENT_HOME or F:\\okra_assistant.")
+    parser.add_argument("--agent-home", default=None, help="Project root. Defaults to FUND_AGENT_HOME or the repository root.")
     parser.add_argument("--as-of", default=None, help="Date used for age checks, YYYY-MM-DD.")
     parser.add_argument("--dry-run", action="store_true", help="Plan only. This is the default unless --apply is passed.")
     parser.add_argument("--apply", action="store_true", help="Execute the planned archive/delete operations.")

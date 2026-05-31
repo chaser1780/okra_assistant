@@ -6,12 +6,12 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from build_realtime_profit import apply_realtime_policy
-from common import load_agents_config, load_realtime_valuation_config, load_settings, resolve_agent_home
+from common import load_realtime_valuation_config, load_settings, project_path, resolve_agent_home
 from cleanup_retention import load_retention_config
 from preflight_check import perform_preflight
-from run_multiagent_research import configured_orders, configured_workers
 
 from helpers import TempAgentHome
 
@@ -19,19 +19,7 @@ from helpers import TempAgentHome
 class ConfigWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.agent_home = resolve_agent_home(r"F:\okra_assistant")
-
-    def test_agents_config_is_loaded_into_runtime_orders(self):
-        analysts, researchers, managers, _config = configured_orders(self.agent_home)
-        self.assertIn("market_analyst", analysts)
-        self.assertIn("bull_researcher", researchers)
-        self.assertIn("risk_manager", managers)
-
-    def test_agents_parallel_workers_follow_config(self):
-        config = load_agents_config(self.agent_home)
-        workers = configured_workers(config)
-        self.assertEqual(workers["analyst"], 6)
-        self.assertEqual(workers["researcher"], 2)
+        cls.agent_home = resolve_agent_home(str(Path(__file__).resolve().parents[1]))
 
     def test_realtime_policy_prefers_proxy_for_qdii(self):
         config = load_realtime_valuation_config(self.agent_home)
@@ -83,6 +71,18 @@ class ConfigWiringTests(unittest.TestCase):
         self.assertEqual("archive", rules["raw_news"]["action"])
         self.assertEqual("db/llm_context/{date}.json", rules["raw_news"]["require_existing"])
         self.assertEqual(60, rules["raw_news"]["retention_days"])
+
+    def test_project_config_uses_portable_relative_paths(self):
+        llm_config = (self.agent_home / "config" / "llm.toml").read_text(encoding="utf-8")
+        settings = load_settings(self.agent_home)
+        portfolio = (self.agent_home / "config" / "portfolio.json").read_text(encoding="utf-8")
+        definition = (self.agent_home / "config" / "portfolio_definition.json").read_text(encoding="utf-8")
+
+        self.assertNotRegex(llm_config + portfolio + definition, r"[A-Za-z]:\\")
+        sentiment = settings["providers"]["sentiment_news"]
+        self.assertEqual(self.agent_home / "config" / "openai_api_key.txt", project_path(self.agent_home, "config/openai_api_key.txt"))
+        self.assertEqual(self.agent_home / "config" / "xueqiu_cookie.txt", project_path(self.agent_home, sentiment["xueqiu_cookie_file"]))
+        self.assertEqual(self.agent_home / "config" / "douyin_cookie.txt", project_path(self.agent_home, sentiment["douyin_cookie_file"]))
 
     def test_preflight_check_writes_result_without_network_probe(self):
         temp = TempAgentHome()

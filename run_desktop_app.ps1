@@ -15,7 +15,7 @@ if ($env:OKRA_DESKTOP_AUTO_REBUILD -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
     $script:autoRebuildWhenChanged = $true
 }
 
-$agentHome = 'F:\okra_assistant'
+$agentHome = $PSScriptRoot
 $webApiPath = Join-Path $agentHome 'app\web_api.py'
 $frontendDir = Join-Path $agentHome 'frontend'
 $tempDir = Join-Path $agentHome 'temp'
@@ -28,9 +28,9 @@ $env:TMP = $tempDir
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:PYTHONPYCACHEPREFIX = $cacheDir
 $env:PYTHONIOENCODING = 'utf-8'
-$cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-if ((Test-Path $cargoBin) -and ($env:Path -notlike "*$cargoBin*")) {
-    $env:Path = "$cargoBin;$env:Path"
+$projectCargoBin = Join-Path $agentHome 'tools\cargo\bin'
+if ((Test-Path $projectCargoBin) -and ($env:Path -notlike "*$projectCargoBin*")) {
+    $env:Path = "$projectCargoBin;$env:Path"
 }
 
 function Resolve-PythonCommand {

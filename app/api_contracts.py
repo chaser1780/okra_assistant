@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class MutationRequestModel(ContractModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ApiError(ContractModel):
@@ -94,6 +98,60 @@ class ReviewPageDto(ContractModel):
     longMemory: dict[str, Any] = Field(default_factory=dict)
 
 
+class ShadowReviewMissingArtifactDto(ContractModel):
+    kind: str = ""
+    path: str | None = None
+    reason: str = ""
+    message: str = ""
+
+
+class ShadowReviewArtifactsDto(ContractModel):
+    legacyAdvicePath: str | None = None
+    shadowAdvicePath: str | None = None
+    shadowTracePath: str | None = None
+    evalReportPath: str | None = None
+    exists: dict[str, bool] = Field(default_factory=dict)
+    missing: list[ShadowReviewMissingArtifactDto] = Field(default_factory=list)
+
+
+class ShadowReviewItemDto(ContractModel):
+    reviewId: str = ""
+    fundCode: str = ""
+    fundName: str = ""
+    category: str = "missing"
+    severity: str = "info"
+    displayLabel: str = ""
+    nonExecutable: Literal[True] = True
+    displayOnly: Literal[True] = True
+    legacy: dict[str, Any] | None = None
+    shadow: dict[str, Any] | None = None
+    diff: dict[str, Any] = Field(default_factory=dict)
+    display: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShadowReviewGuardrailsDto(ContractModel):
+    nonExecutable: Literal[True] = True
+    executionDisabled: Literal[True] = True
+    affectsPortfolio: Literal[False] = False
+    affectsAdviceAccuracy: Literal[False] = False
+    affectsLongMemoryPromotion: Literal[False] = False
+    allowExecutionEvidence: Literal[False] = False
+    displayOnly: Literal[True] = True
+
+
+class ShadowReviewPageDto(ContractModel):
+    selectedDate: str = ""
+    status: str = "missing"
+    generatedAt: str = ""
+    nonExecutable: Literal[True] = True
+    displayOnly: Literal[True] = True
+    summary: dict[str, Any] = Field(default_factory=dict)
+    artifacts: ShadowReviewArtifactsDto = Field(default_factory=ShadowReviewArtifactsDto)
+    items: list[ShadowReviewItemDto] = Field(default_factory=list)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    guardrails: ShadowReviewGuardrailsDto = Field(default_factory=ShadowReviewGuardrailsDto)
+
+
 class SystemPageDto(ContractModel):
     selectedDate: str = ""
     summary: dict[str, Any] = Field(default_factory=dict)
@@ -117,7 +175,7 @@ class FundDetailDto(ContractModel):
     system: dict[str, Any] = Field(default_factory=dict)
 
 
-class ExecutionTradeRequestDto(ContractModel):
+class ExecutionTradeRequestDto(MutationRequestModel):
     trade_id: str | None = None
     trade_date: str | None = None
     trade_time: str | None = None
@@ -138,7 +196,7 @@ class ExecutionTradeRequestDto(ContractModel):
     user_note: str | None = None
 
 
-class ExecutionConversionRequestDto(ContractModel):
+class ExecutionConversionRequestDto(MutationRequestModel):
     conversion_id: str | None = None
     trade_date: str | None = None
     trade_time: str | None = None

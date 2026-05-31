@@ -326,7 +326,7 @@
     "event_type": "unit_sync",
     "event_date": "2026-05-04",
     "updated_at": "2026-05-04T16:44:20+08:00",
-    "valuation_snapshot_path": "F:\\okra_assistant\\db\\portfolio_valuation\\2026-05-01.json",
+    "valuation_snapshot_path": "db/portfolio_valuation/2026-05-01.json",
     "provider": "alipay",
     "image_count": 3,
     "updated_fund_codes": [

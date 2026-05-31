@@ -13,6 +13,7 @@ import {
   useRealtimePageQuery,
   useResearchPageQuery,
   useReviewPageQuery,
+  useShadowReviewPageQuery,
   useShellQuery,
   useSystemPageQuery,
   useTodayPageQuery,
@@ -28,6 +29,7 @@ const ResearchPage = lazy(async () => ({ default: (await import("./pages/Researc
 const IntelligencePage = lazy(async () => ({ default: (await import("./pages/IntelligencePage")).IntelligencePage }));
 const RealtimePage = lazy(async () => ({ default: (await import("./pages/RealtimePage")).RealtimePage }));
 const ReviewPage = lazy(async () => ({ default: (await import("./pages/ReviewPage")).ReviewPage }));
+const ShadowReviewPage = lazy(async () => ({ default: (await import("./pages/ShadowReviewPage")).ShadowReviewPage }));
 const SystemPage = lazy(async () => ({ default: (await import("./pages/SystemPage")).SystemPage }));
 const FundDetailPage = lazy(async () => ({ default: (await import("./pages/FundDetailPage")).FundDetailPage }));
 
@@ -48,6 +50,7 @@ export function AppRoutes() {
         <Route path="/intelligence" element={<IntelligenceRoute />} />
         <Route path="/realtime" element={<RealtimeRoute />} />
         <Route path="/review" element={<ReviewRoute />} />
+        <Route path="/shadow-review" element={<ShadowReviewRoute />} />
         <Route path="/system" element={<SystemRoute />} />
         <Route path="/fund/:fundCode" element={<FundDetailRoute />} />
       </Route>
@@ -251,6 +254,16 @@ function ReviewRoute() {
           />
         )}
       </QueryBoundary>
+    </RouteSuspense>
+  );
+}
+
+function ShadowReviewRoute() {
+  const { selectedDate } = useWorkbenchContext();
+  const query = useShadowReviewPageQuery(selectedDate || undefined, { enabled: Boolean(selectedDate) });
+  return (
+    <RouteSuspense>
+      <QueryBoundary query={query}>{(data) => <ShadowReviewPage shadowReview={data} />}</QueryBoundary>
     </RouteSuspense>
   );
 }

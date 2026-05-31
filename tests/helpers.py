@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(r"F:\okra_assistant")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
 
@@ -346,6 +346,14 @@ class TempAgentHome:
             "db/committee_advice",
             "db/llm_raw",
             "db/validated_advice",
+            "db/action_tickets",
+            "db/retrieval_packs",
+            "db/action_debates",
+            "db/action_debates/runtime",
+            "db/outcome_events",
+            "db/strategy_memory",
+            "db/strategy_skills",
+            "db/refactor_reviews",
             "db/agent_outputs",
             "db/agent_snapshots",
             "db/replay_experiments",
