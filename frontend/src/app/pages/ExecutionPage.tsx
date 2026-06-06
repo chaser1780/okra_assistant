@@ -76,6 +76,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   const [busy, setBusy] = useState(false);
   const [tradeKind, setTradeKind] = useState<TradeKind>("buy");
   const [screenshotPreview, setScreenshotPreview] = useState<Record<string, unknown> | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState("");
   const [trade, setTrade] = useState<TradeFormValue>({
     trade_date: today,
     trade_time: "14:50",
@@ -166,6 +167,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       );
       const result = await parseAlipayScreenshots({ snapshot_date: today, files: encoded });
       setScreenshotPreview(result);
+      setReplaceConfirm("");
       const rows = extractPreviewRows(result);
       const autoParseAttempted = Boolean(result.auto_parse_attempted);
       const autoParseOk = Boolean(result.auto_parse_ok);
@@ -190,11 +192,20 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       setMessage("截图中还有未匹配持仓，请先完成新基金建档/分类后再写入真实持仓。");
       return;
     }
+    if (mode === "replace" && replaceConfirm.trim().toUpperCase() !== "REPLACE") {
+      setMessage("全部替换会把截图未出现的持仓归零；请输入 REPLACE 后再执行。");
+      return;
+    }
     setBusy(true);
     setMessage(mode === "replace" ? "正在按截图全部替换真实仓位..." : "正在按截图更新真实仓位...");
     try {
-      await applyExecutionReconcile({ preview: screenshotPreview, dropMissing: mode === "replace" });
+      await applyExecutionReconcile({
+        preview: screenshotPreview,
+        dropMissing: mode === "replace",
+        confirmReplace: mode === "replace" ? replaceConfirm.trim().toUpperCase() : undefined
+      });
       setScreenshotPreview(null);
+      setReplaceConfirm("");
       setMessage(mode === "replace" ? "真实仓位已完全按截图替换。" : "真实仓位已按截图更新，未出现在截图中的持仓已保留。");
       onRefresh();
     } catch (error) {
@@ -274,14 +285,24 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
           {screenshotPreview ? (
             <div className="mt-4 space-y-3">
               <PreviewSummary preview={screenshotPreview} rows={recognizedRows} />
+              <div className="rounded-md border border-rose-500/30 bg-rose-950/20 p-3">
+                <div className="text-xs font-semibold text-rose-100">全部替换确认</div>
+                <p className="mt-1 text-xs leading-5 text-rose-100/80">只有选择“全部替换”时需要输入 REPLACE。该操作会把截图未出现的当前持仓归零。</p>
+                <input
+                  className={`${inputClass} mt-2 border-rose-500/40`}
+                  value={replaceConfirm}
+                  placeholder="REPLACE"
+                  onChange={(event) => setReplaceConfirm(event.target.value)}
+                />
+              </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="primary" disabled={busy || !screenshotApplyReady} onClick={() => void applyScreenshot("update")}>
                   更新
                 </Button>
-                <Button variant="danger" disabled={busy || !screenshotApplyReady} onClick={() => void applyScreenshot("replace")}>
+                <Button variant="danger" disabled={busy || !screenshotApplyReady || replaceConfirm.trim().toUpperCase() !== "REPLACE"} onClick={() => void applyScreenshot("replace")}>
                   全部替换
                 </Button>
-                <Button variant="ghost" disabled={busy} onClick={() => setScreenshotPreview(null)}>
+                <Button variant="ghost" disabled={busy} onClick={() => { setScreenshotPreview(null); setReplaceConfirm(""); }}>
                   取消
                 </Button>
               </div>

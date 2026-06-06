@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from http.server import ThreadingHTTPServer
 
 from app.web_api import ContractRequestHandler, OkraWebApi, cors_origin_value, is_allowed_origin
-from app.web_api_services import ExecutionController
+from app.web_api_services import ExecutionController, TaskController
 from helpers import TempAgentHome
 from long_memory_store import stable_memory_id, upsert_memory_record
 from today_orchestrator import AlreadyRunningError
@@ -150,6 +150,32 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertIn("manual", command)
         self.assertIn("--force", command)
         self.assertEqual(result["pid"], 12345)
+
+    def test_historical_daily_run_uses_selected_date_without_startup_alignment(self):
+        api = OkraWebApi(self.agent.root)
+        with patch("app.web_api_services.subprocess.Popen") as popen, patch("app.web_api_services.get_active_runtime", return_value={}), patch.object(
+            TaskController, "run_portfolio_alignment_if_needed", side_effect=AssertionError("historical daily run should not align current portfolio")
+        ):
+            popen.return_value.pid = 12345
+            result = api.run_task("daily", force=True, run_date="2026-05-20")
+        command = popen.call_args.args[0]
+        self.assertIn("--date", command)
+        self.assertIn("2026-05-20", command)
+        self.assertEqual(result["runDate"], "2026-05-20")
+        self.assertTrue(result["portfolioAlignment"]["skipped"])
+        self.assertEqual(result["portfolioAlignment"]["reason"], "historical_daily_run")
+
+    def test_realtime_run_ignores_historical_selected_date(self):
+        api = OkraWebApi(self.agent.root)
+        expected_date = today_str()
+        with patch("app.web_api_services.subprocess.Popen") as popen, patch("app.web_api_services.get_active_runtime", return_value={}):
+            popen.return_value.pid = 12345
+            result = api.run_task("realtime", run_date="2026-05-20")
+        command = popen.call_args.args[0]
+        self.assertIn("--date", command)
+        self.assertIn(expected_date, command)
+        self.assertNotIn("2026-05-20", command)
+        self.assertEqual(result["runDate"], expected_date)
 
     def test_fund_detail_exposes_fund_memory(self):
         upsert_memory_record(
@@ -333,6 +359,17 @@ class WebApiLongMemoryTests(unittest.TestCase):
                     "displayOnly": True,
                 }
             )
+
+    def test_reconcile_replace_requires_explicit_confirmation(self):
+        controller = ExecutionController(self.agent.root)
+        preview = {"apply_ready": True, "matched_items": []}
+        with patch("app.web_api_services.apply_reconciliation", return_value={"ok": True}) as apply:
+            with self.assertRaises(ValueError):
+                controller.execution_reconcile_apply({"preview": preview, "dropMissing": True})
+            result = controller.execution_reconcile_apply({"preview": preview, "dropMissing": True, "confirmReplace": "REPLACE"})
+
+        self.assertTrue(result["ok"])
+        apply.assert_called_once_with(self.agent.root, preview, drop_missing=True)
 
     def test_source_path_alone_does_not_make_manual_payload_shadow(self):
         controller = ExecutionController(self.agent.root)

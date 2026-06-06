@@ -102,7 +102,19 @@ class WebApiRagAdminTests(unittest.TestCase):
         payload = api.system_page("2026-05-20")
         rag_runtime = payload["system"]["ragRuntime"]
         self.assertFalse(rag_runtime["enabled"])
+        self.assertEqual("full", rag_runtime["statusMode"])
         self.assertEqual(1, rag_runtime["counts"]["documents"])
+
+    def test_shell_page_uses_lightweight_rag_runtime_status(self):
+        self._insert_rag_doc()
+        api = OkraWebApi(self.agent.root)
+        payload = api.shell_page("2026-05-20")
+        rag_runtime = payload["system"]["ragRuntime"]
+        self.assertFalse(rag_runtime["enabled"])
+        self.assertEqual("lightweight", rag_runtime["statusMode"])
+        self.assertTrue(rag_runtime["dbExists"])
+        self.assertEqual({}, rag_runtime["counts"])
+        self.assertEqual({}, rag_runtime["sourceCounts"])
 
     def test_rag_search_returns_trace_and_hits(self):
         self._insert_rag_doc()

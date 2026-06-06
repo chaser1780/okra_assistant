@@ -84,7 +84,7 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
           <div>review: {String(llmRuntime.reviewModel ?? "暂无")}</div>
           <div>reasoning: {String(llmRuntime.reasoningEffort ?? "暂无")}</div>
           <div>wire_api: {String(llmRuntime.wireApi ?? "暂无")}</div>
-          <div>base_url: {String(llmRuntime.baseUrl ?? "暂无")}</div>
+          <div>base_url: {llmRuntime.baseUrlConfigured ? "已配置（已隐藏）" : "未配置"}</div>
         </div>
       </Card>
 

@@ -11,9 +11,10 @@ type TodayQueryLike = {
 type UseTodayAnalysisRunnerArgs = {
   todayQuery: TodayQueryLike;
   refreshAll: () => Promise<void>;
+  selectedDate: string;
 };
 
-export function useTodayAnalysisRunner({ todayQuery, refreshAll }: UseTodayAnalysisRunnerArgs) {
+export function useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate }: UseTodayAnalysisRunnerArgs) {
   const [dailyRunning, setDailyRunning] = useState(false);
   const [dailyError, setDailyError] = useState("");
   const [activeDailyRunId, setActiveDailyRunId] = useState("");
@@ -88,7 +89,8 @@ export function useTodayAnalysisRunner({ todayQuery, refreshAll }: UseTodayAnaly
     setDailyError("");
     setDailyRunning(true);
     try {
-      const result = await runTask("daily", { force: !automatic });
+      const runDate = selectedDate || todayQuery.data?.selectedDate || localDateString();
+      const result = await runTask("daily", { force: !automatic, date: runDate });
       const runId = String(result.runId ?? "");
       setActiveDailyRunId(runId);
       await refreshAll();

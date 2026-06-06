@@ -76,7 +76,7 @@ function WorkbenchShell() {
   const refreshAll = async () => {
     await queryClient.invalidateQueries({ queryKey: workbenchQueryKeys.root });
   };
-  const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({ todayQuery, refreshAll });
+  const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate });
   const error = dailyError || realtimeError;
 
   useEffect(() => {

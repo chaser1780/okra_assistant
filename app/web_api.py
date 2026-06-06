@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import sys
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,21 +30,7 @@ from api_contracts import (
     coerce_model,
     model_dump_compat,
 )
-from copilot_service import call_copilot_llm, local_copilot_answer
 from decision_support import build_agent_stage_snapshot, summarize_fund_agent_signals, summarize_fund_stage_signals
-from rag_service import RagUnavailable, build_copilot_rag_pack
-from rag_eval import run_eval as run_rag_eval
-from rag_ingest import build_parser as build_rag_ingest_parser, run_ingest as run_rag_ingest
-from rag_maintenance import (
-    check_integrity as rag_check_integrity,
-    purge_domain as rag_purge_domain,
-    rag_status as build_rag_status,
-    rag_trace as load_rag_trace,
-    rebuild_domain as rag_rebuild_domain,
-    vacuum as rag_vacuum,
-)
-from rag_query_planner import build_rag_query_plan
-from rag_retriever import retrieve_rag_evidence
 from today_orchestrator import AlreadyRunningError
 from web_api_services import ExecutionController, PageService, TaskController
 from web_api_format import to_jsonable as _to_jsonable
@@ -211,6 +198,10 @@ class OkraWebApi:
         except Exception as exc:
             print(f"startup portfolio alignment failed: {exc}", file=sys.stderr, flush=True)
 
+    def start_bootstrap_alignment_async(self) -> None:
+        thread = threading.Thread(target=self.start_bootstrap_alignment, name="okra-bootstrap-alignment", daemon=True)
+        thread.start()
+
     def dates(self) -> dict:
         return self.page_service.dates()
 
@@ -220,7 +211,7 @@ class OkraWebApi:
     def shell_page(self, selected: str | None = None) -> dict:
         snapshot = self.state_service.load_snapshot(selected)
         payload = self.state_service.build_shell_page_dto(snapshot)
-        payload["system"] = self.page_service.system_payload(snapshot.state)
+        payload["system"] = self.page_service.system_payload(snapshot.state, include_full_rag=False)
         return payload
 
     def today_page(self, selected: str | None = None) -> dict:
@@ -235,7 +226,7 @@ class OkraWebApi:
         )
         payload["portfolio"] = self.page_service.portfolio_payload(snapshot.state)
         payload["longMemory"] = self.page_service.long_memory_payload()
-        payload["system"] = self.page_service.system_payload(snapshot.state)
+        payload["system"] = self.page_service.system_payload(snapshot.state, include_full_rag=False)
         return payload
 
     def portfolio_page(self, selected: str | None = None) -> dict:
@@ -248,7 +239,7 @@ class OkraWebApi:
             snapshot,
             execution_sync=self.execution_sync_payload(),
             portfolio=self.page_service.portfolio_payload(snapshot.state),
-            system=self.page_service.system_payload(snapshot.state),
+            system=self.page_service.system_payload(snapshot.state, include_full_rag=False),
         )
 
     def research_page(self, selected: str | None = None) -> dict:
@@ -290,7 +281,7 @@ class OkraWebApi:
         snapshot = self.state_service.load_snapshot(selected)
         return self.state_service.build_system_page_dto(
             snapshot,
-            system=self.page_service.system_payload(snapshot.state),
+            system=self.page_service.system_payload(snapshot.state, include_full_rag=True),
             shell=self.state_service.build_shell_page_dto(snapshot),
         )
 
@@ -306,8 +297,8 @@ class OkraWebApi:
         )
         return coerce_model(FundDetailDto, payload)
 
-    def run_task(self, kind: str, *, force: bool = False) -> dict:
-        return self.task_controller.run_task(kind, force=force)
+    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None) -> dict:
+        return self.task_controller.run_task(kind, force=force, run_date=run_date)
 
     def long_memory_action(self, payload: dict) -> dict:
         return self.page_service.long_memory_action(payload)
@@ -344,9 +335,13 @@ class OkraWebApi:
         return {"ok": True, "url": url, "opened": opened}
 
     def rag_status(self) -> dict:
+        from rag_maintenance import rag_status as build_rag_status
+
         return build_rag_status(self.home)
 
     def rag_trace(self, trace_id: str) -> dict:
+        from rag_maintenance import rag_trace as load_rag_trace
+
         return load_rag_trace(self.home, trace_id)
 
     def rag_search(self, payload: dict) -> dict:
@@ -370,6 +365,9 @@ class OkraWebApi:
                 raise ValueError("includeExecution requires execution profile")
             if intent not in {"execution_explain", "position_reconcile", "pending_confirmation"}:
                 raise ValueError("includeExecution requires execution intent")
+        from rag_query_planner import build_rag_query_plan
+        from rag_retriever import retrieve_rag_evidence
+
         plan = build_rag_query_plan(
             query,
             query_date=query_date,
@@ -401,6 +399,8 @@ class OkraWebApi:
         report_date = selected or self.dates().get("selectedDate", "") or ""
         if not report_date:
             raise ValueError("date is required")
+        from rag_eval import run_eval as run_rag_eval
+
         return run_rag_eval(
             self.home,
             report_date,
@@ -427,11 +427,20 @@ class OkraWebApi:
             args_list.append("--embedding-dry-run")
         if payload.get("embedLimit") not in (None, ""):
             args_list.extend(["--embed-limit", str(_positive_int(payload.get("embedLimit"), 200))])
+        from rag_ingest import build_parser as build_rag_ingest_parser, run_ingest as run_rag_ingest
+
         args = build_rag_ingest_parser().parse_args(args_list)
         return run_rag_ingest(self.home, args)
 
     def rag_maintenance(self, payload: dict) -> dict:
         action = str(payload.get("action", "") or "").strip()
+        from rag_maintenance import (
+            check_integrity as rag_check_integrity,
+            purge_domain as rag_purge_domain,
+            rebuild_domain as rag_rebuild_domain,
+            vacuum as rag_vacuum,
+        )
+
         if action == "check_integrity":
             return rag_check_integrity(self.home)
         if action == "vacuum":
@@ -467,7 +476,7 @@ class OkraWebApi:
                 rag_payload["question"] = prompt_question
                 rag_payload["messages"] = messages
                 rag_pack = self._build_copilot_rag_pack(rag_payload)
-            except RagUnavailable:
+            except self._rag_unavailable_error():
                 rag_pack = None
             except Exception as exc:
                 rag_pack = None
@@ -588,13 +597,24 @@ class OkraWebApi:
         return {"truncated": True, "preview": text[:max_chars], "originalChars": len(text)}
 
     def _call_copilot_llm(self, context: str, question: str, evidence: dict) -> str:
+        from copilot_service import call_copilot_llm
+
         return call_copilot_llm(self.home, context, question, evidence)
 
     def _local_copilot_answer(self, context: str, question: str, evidence: dict, error: str) -> str:
+        from copilot_service import local_copilot_answer
+
         return local_copilot_answer(context, question, evidence, error)
 
     def _build_copilot_rag_pack(self, payload: dict) -> dict:
+        from rag_service import build_copilot_rag_pack
+
         return build_copilot_rag_pack(self.home, payload)
+
+    def _rag_unavailable_error(self):
+        from rag_service import RagUnavailable
+
+        return RagUnavailable
 
 
 def _normalize_range_label(range_label: str) -> str:
@@ -795,9 +815,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
         try:
             if parsed.path == "/api/run/daily":
-                self._send_json(self.api.run_task("daily", force=bool(payload.get("force"))))
+                self._send_json(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif parsed.path == "/api/run/realtime":
-                self._send_json(self.api.run_task("realtime"))
+                self._send_json(self.api.run_task("realtime", run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif parsed.path == "/api/copilot/explain":
                 self._send_json(self.api.explain(payload))
             elif parsed.path == "/api/long-memory/action":
@@ -949,9 +969,9 @@ class ContractRequestHandler(RequestHandler):
             if length:
                 payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             if endpoint_path == "/api/run/daily":
-                self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force"))))
+                self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif endpoint_path == "/api/run/realtime":
-                self._send_envelope(self.api.run_task("realtime"))
+                self._send_envelope(self.api.run_task("realtime", run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif endpoint_path == "/api/copilot/explain":
                 self._send_envelope(self.api.explain(payload))
             elif endpoint_path == "/api/long-memory/action":
@@ -1011,8 +1031,8 @@ def main(argv: list[str] | None = None) -> None:
 
     handler = ContractRequestHandler
     handler.api = OkraWebApi(Path(args.home))
-    handler.api.start_bootstrap_alignment()
     server = ThreadingHTTPServer((args.host, args.port), handler)
+    handler.api.start_bootstrap_alignment_async()
     print(f"OKRA web API listening on http://{args.host}:{args.port}", flush=True)
     server.serve_forever()
 

@@ -42,6 +42,16 @@ from workbench_history import (
 from workbench_state import WorkbenchStateService
 
 
+def _coerce_task_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return today_str()
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError("date must be YYYY-MM-DD") from exc
+
+
 def _news_key(item: dict[str, Any]) -> str:
     return str(item.get("canonical_url") or item.get("source_url") or item.get("url") or item.get("title") or "")
 
@@ -178,17 +188,21 @@ class TaskController:
                 "logPath": str(log_path),
             }
 
-    def run_task(self, kind: str, *, force: bool = False) -> dict[str, Any]:
+    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None) -> dict[str, Any]:
         with self._run_lock:
-            run_date = today_str()
+            run_date = _coerce_task_date(run_date)
             if kind == "daily":
                 active_runtime = get_active_runtime(self.home, run_date)
                 if active_runtime:
                     raise AlreadyRunningError(active_runtime)
-                alignment = self.run_portfolio_alignment_if_needed(force=False)
+                if run_date == today_str():
+                    alignment = self.run_portfolio_alignment_if_needed(force=False)
+                else:
+                    alignment = {"ok": True, "task": "portfolio_alignment", "skipped": True, "reason": "historical_daily_run"}
                 command = build_daily_first_open_command(self.home, run_date, force=force, trigger="manual" if force else "auto")
                 task_name = "today_analysis"
             elif kind == "realtime":
+                run_date = today_str()
                 command = build_realtime_command(self.home, run_date)
                 task_name = "realtime"
                 alignment = {}
@@ -264,7 +278,11 @@ class ExecutionController:
         preview = payload.get("preview") or payload
         if isinstance(preview, dict):
             _reject_shadow_mutation_payload(preview, endpoint="execution reconcile apply")
+        else:
+            raise ValueError("preview is required")
         drop_missing = bool(payload.get("dropMissing") or payload.get("drop_missing"))
+        if drop_missing and str(payload.get("confirmReplace") or payload.get("confirm_replace") or "").strip().upper() != "REPLACE":
+            raise ValueError("confirmReplace=REPLACE is required when replacing all positions.")
         if preview.get("apply_ready") is False and preview.get("unmatched_detected"):
             raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
         return _to_jsonable(apply_reconciliation(self.home, preview, drop_missing=drop_missing))
@@ -630,7 +648,7 @@ class PageService:
             "brief": state.get("daily_first_open_brief", "") or "",
         }
 
-    def system_payload(self, state: dict[str, Any]) -> dict[str, Any]:
+    def system_payload(self, state: dict[str, Any], *, include_full_rag: bool = False) -> dict[str, Any]:
         selected = str(state.get("selected_date", "") or today_str())
         today = today_str()
         llm_config = state.get("llm_config", {}) or {}
@@ -695,7 +713,8 @@ class PageService:
                 "reviewModel": llm_config.get("review_model", ""),
                 "reasoningEffort": llm_config.get("model_reasoning_effort", ""),
                 "wireApi": ((llm_config.get("model_providers", {}) or {}).get(str(llm_config.get("model_provider", "") or ""), {}) or {}).get("wire_api", ""),
-                "baseUrl": ((llm_config.get("model_providers", {}) or {}).get(str(llm_config.get("model_provider", "") or ""), {}) or {}).get("base_url", ""),
+                "baseUrl": "[hidden]",
+                "baseUrlConfigured": bool(((llm_config.get("model_providers", {}) or {}).get(str(llm_config.get("model_provider", "") or ""), {}) or {}).get("base_url", "")),
             },
             "todayAnalysisRuntime": today_analysis_runtime_payload,
             "longMemoryRuntime": long_memory_runtime_payload,
@@ -709,13 +728,74 @@ class PageService:
             },
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
-            "ragRuntime": self.rag_runtime_payload(),
+            "ragRuntime": self.rag_runtime_payload(full=include_full_rag),
         }
 
-    def rag_runtime_payload(self) -> dict[str, Any]:
+    def rag_runtime_payload(self, *, full: bool = True) -> dict[str, Any]:
+        if not full:
+            return self.lightweight_rag_runtime_payload()
         try:
             from rag_maintenance import rag_status
 
-            return rag_status(self.home)
+            payload = rag_status(self.home)
+            payload["statusMode"] = "full"
+            return payload
         except Exception as exc:
-            return {"statusError": str(exc)}
+            return self.empty_rag_runtime_payload(status_error=str(exc), status_mode="full")
+
+    def lightweight_rag_runtime_payload(self) -> dict[str, Any]:
+        try:
+            from rag_config import load_rag_config, rag_db_path
+
+            config = load_rag_config(self.home)
+            settings = config.get("rag", {}) or {}
+            db_path = rag_db_path(self.home, config)
+            return {
+                "generatedAt": timestamp_now(),
+                "enabled": bool(settings.get("enabled", False)),
+                "defaultProfile": str(settings.get("default_profile", "") or ""),
+                "fallbackToLegacy": bool(settings.get("fallback_to_legacy", True)),
+                "traceEnabled": bool(settings.get("trace_enabled", True)),
+                "agentShadow": settings.get("agent_shadow", {}) or {},
+                "agentDefault": settings.get("agent_default", {}) or {},
+                "profileEvidence": settings.get("profile_evidence", {}) or {},
+                "embedding": settings.get("embedding", {}) or {},
+                "vectorStore": settings.get("vector_store", {}) or {},
+                "dbPath": str(db_path),
+                "dbExists": db_path.exists(),
+                "counts": {},
+                "sourceCounts": {},
+                "embeddingStatus": {},
+                "latestIngestRuns": [],
+                "latestTraces": [],
+                "activeManifests": [],
+                "latestEval": {},
+                "statusMode": "lightweight",
+            }
+        except Exception as exc:
+            return self.empty_rag_runtime_payload(status_error=str(exc), status_mode="lightweight")
+
+    def empty_rag_runtime_payload(self, *, status_error: str, status_mode: str) -> dict[str, Any]:
+        return {
+            "generatedAt": timestamp_now(),
+            "enabled": False,
+            "defaultProfile": "",
+            "fallbackToLegacy": True,
+            "traceEnabled": False,
+            "dbPath": "",
+            "dbExists": False,
+            "statusError": status_error,
+            "counts": {},
+            "sourceCounts": {},
+            "embeddingStatus": {},
+            "agentShadow": {},
+            "agentDefault": {},
+            "profileEvidence": {},
+            "embedding": {},
+            "vectorStore": {},
+            "latestEval": {},
+            "latestTraces": [],
+            "latestIngestRuns": [],
+            "activeManifests": [],
+            "statusMode": status_mode,
+        }

@@ -33,7 +33,6 @@ from common import (
     today_shanghai,
 )
 from execution_sync import build_execution_sync_payload, update_pending_confirmations
-from preflight_check import perform_preflight
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -448,6 +447,8 @@ def run_today_analysis(
                 )
                 _write_runtime(agent_home, report_date, runtime)
                 return paths.decision
+
+        from preflight_check import perform_preflight
 
         preflight = perform_preflight(agent_home, scope="desktop", probe_llm=not demo and not llm_mock)
         dump_json(paths.workspace / "preflight.json", preflight)
