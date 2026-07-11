@@ -1,7 +1,6 @@
 import { copilotResponseSchema } from "./schemas";
 import type { ApiEnvelope, CopilotRequest, CopilotResponse, FundDetailPayload, MemoryAction, Snapshot } from "./types";
-
-const API_BASE = import.meta.env.VITE_OKRA_API_BASE ?? "http://127.0.0.1:8765";
+import { getDesktopRuntimeConfig } from "./desktopRuntime";
 
 // Keep this module as the low-level HTTP boundary plus command-style mutations.
 // Page queries should prefer workbenchApi/workbenchQuery so payload validation stays centralized.
@@ -30,13 +29,30 @@ export class ApiError extends Error {
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
+  const runtime = await getDesktopRuntimeConfig();
+  if (!runtime.configured || !runtime.apiBase) {
+    throw new ApiError(0, "Remote API base is not configured. Set OKRA_REMOTE_API_BASE or VITE_OKRA_API_BASE.", {
+      mode: runtime.mode,
+    }, "api_base_not_configured");
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${runtime.apiBase}${path}`, {
+      ...init,
+      credentials: init?.credentials ?? "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    throw new ApiError(
+      0,
+      `${runtime.mode === "remote" ? "Remote" : "Local"} API is unavailable: ${runtime.diagnosticApiBase}`,
+      { mode: runtime.mode, apiBase: runtime.diagnosticApiBase, cause: error instanceof Error ? error.message : String(error) },
+      "api_unreachable"
+    );
+  }
   if (!response.ok) {
     const text = await response.text();
     try {

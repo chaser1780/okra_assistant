@@ -340,21 +340,21 @@ unset mode
 
 Implementation tasks:
 
-- [ ] Add a small mode helper in `frontend/src-tauri/src/lib.rs`.
-- [ ] Skip `spawn_api()` when mode is `remote`.
-- [ ] Make local API probe configurable only for local mode.
-- [ ] Add startup log lines that show mode and API base without leaking secrets.
-- [ ] In `frontend/src/lib/api.ts`, keep `VITE_OKRA_API_BASE` as the browser
+- [x] Add a small mode helper in `frontend/src-tauri/src/lib.rs`.
+- [x] Skip `spawn_api()` when mode is `remote`.
+- [x] Make local API probe configurable only for local mode.
+- [x] Add startup log lines that show mode and API base without leaking secrets.
+- [x] In `frontend/src/lib/api.ts`, keep `VITE_OKRA_API_BASE` as the browser
   build-time API base.
-- [ ] Add `.env.remote.example` under `frontend/`:
+- [x] Add `.env.remote.example` under `frontend/`:
 
 ```text
 VITE_OKRA_API_BASE=https://okra.example.com
 ```
 
-- [ ] Add a root-level remote launcher script:
+- [x] Add a root-level remote launcher script:
   `run_desktop_app_remote.ps1`.
-- [ ] Document both modes in `docs/modern_workbench.md` after implementation.
+- [x] Document both modes in `docs/modern_workbench.md` after implementation.
 
 Tests:
 
@@ -384,21 +384,21 @@ Goal: prevent a local-only API from becoming an unsafe internet API.
 
 Implementation tasks:
 
-- [ ] Add config/env:
-  - [ ] `OKRA_PUBLIC_BASE_URL`
-  - [ ] `OKRA_ALLOWED_ORIGINS`
-  - [ ] `OKRA_API_TOKEN`
-  - [ ] `OKRA_TRUST_CLOUDFLARE_ACCESS`
-  - [ ] `OKRA_DISABLE_REMOTE_MUTATIONS`
-- [ ] Split endpoint policy into:
-  - [ ] read endpoints
-  - [ ] mutation endpoints
-  - [ ] admin/debug endpoints
-- [ ] Require bearer token or verified Access identity for mutation endpoints.
-- [ ] Keep `/api/health` safe and non-sensitive.
-- [ ] Ensure error envelopes never leak local paths/secrets in production mode.
-- [ ] Add request/audit logging for mutation endpoints.
-- [ ] Add tests for forbidden origins and missing auth.
+- [x] Add config/env:
+  - [x] `OKRA_PUBLIC_BASE_URL`
+  - [x] `OKRA_ALLOWED_ORIGINS`
+  - [x] `OKRA_API_TOKEN`
+  - [x] `OKRA_TRUST_CLOUDFLARE_ACCESS`
+  - [x] `OKRA_DISABLE_REMOTE_MUTATIONS`
+- [x] Split endpoint policy into:
+  - [x] read endpoints
+  - [x] mutation endpoints
+  - [x] admin/debug endpoints
+- [x] Require bearer token or verified Access identity for mutation endpoints.
+- [x] Keep `/api/health` safe and non-sensitive.
+- [x] Ensure error envelopes never leak local paths/secrets in production mode.
+- [x] Add request/audit logging for mutation endpoints.
+- [x] Add tests for forbidden origins and missing auth.
 
 Suggested endpoint policy:
 
@@ -431,18 +431,18 @@ Goal: make the backend reproducible on a Linux VM.
 
 Files to add:
 
-- [ ] `deploy/systemd/okra-api.service`
-- [ ] `deploy/systemd/okra-daily.service`
-- [ ] `deploy/systemd/okra-daily.timer`
-- [ ] `deploy/systemd/okra-realtime.service`
-- [ ] `deploy/systemd/okra-realtime.timer`
-- [ ] `deploy/cloudflared/config.example.yml`
-- [ ] `deploy/caddy/Caddyfile.example`
-- [ ] `deploy/env/okra.env.example`
-- [ ] `deploy/scripts/bootstrap_ubuntu.sh`
-- [ ] `deploy/scripts/healthcheck.sh`
-- [ ] `deploy/scripts/backup_artifacts.sh`
-- [ ] `deploy/scripts/restore_artifacts.sh`
+- [x] `deploy/systemd/okra-api.service`
+- [x] `deploy/systemd/okra-daily.service`
+- [x] `deploy/systemd/okra-daily.timer`
+- [x] `deploy/systemd/okra-realtime.service`
+- [x] `deploy/systemd/okra-realtime.timer`
+- [x] `deploy/cloudflared/config.example.yml`
+- [x] `deploy/caddy/Caddyfile.example`
+- [x] `deploy/env/okra.env.example`
+- [x] `deploy/scripts/bootstrap_ubuntu.sh`
+- [x] `deploy/scripts/healthcheck.sh`
+- [x] `deploy/scripts/backup_artifacts.sh`
+- [x] `deploy/scripts/restore_artifacts.sh`
 
 `okra.env.example` should include placeholders only:
 
@@ -942,11 +942,11 @@ Acceptance:
 
 ### Immediate TODO
 
-- [ ] Create a branch for cloud migration work.
-- [ ] Add desktop dual-mode implementation.
-- [ ] Add remote launcher and frontend env example.
-- [ ] Add API remote-auth config and tests.
-- [ ] Add deploy examples under `deploy/`.
+- [x] Create a branch for cloud migration work.
+- [x] Add desktop dual-mode implementation.
+- [x] Add remote launcher and frontend env example.
+- [x] Add API remote-auth config and tests.
+- [x] Add deploy examples under `deploy/`.
 - [ ] Provision Oracle VM.
 - [ ] Deploy API to VM.
 - [ ] Configure Cloudflare Tunnel + Access.

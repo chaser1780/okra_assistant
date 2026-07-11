@@ -1,0 +1,26 @@
+{
+    admin 127.0.0.1:2019
+    auto_https off
+}
+
+:8080 {
+    bind 127.0.0.1
+
+    @api path /api/*
+    handle @api {
+        reverse_proxy 127.0.0.1:8765
+    }
+
+    handle {
+        root * /opt/okra_assistant/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+}

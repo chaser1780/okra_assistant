@@ -1,0 +1,23 @@
+[Unit]
+Description=OKRA scheduled daily analysis
+After=network-online.target okra-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=okra
+Group=okra
+WorkingDirectory=/opt/okra_assistant
+EnvironmentFile=/etc/okra/okra.env
+ExecCondition=/opt/okra_assistant/.venv/bin/python -c "import sys; from pathlib import Path; sys.path.insert(0, 'scripts'); from common import is_trading_day, today_shanghai; home = Path('/opt/okra_assistant'); raise SystemExit(0 if is_trading_day(home, today_shanghai()) else 1)"
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 75 /run/lock/okra-pipeline.lock /usr/bin/bash -c '/opt/okra_assistant/.venv/bin/python -B -X utf8 scripts/run_report_window.py --agent-home /opt/okra_assistant --mode intraday && exec /usr/bin/bash /opt/okra_assistant/deploy/scripts/healthcheck.sh --mode daily --agent-home /opt/okra_assistant'
+SuccessExitStatus=75
+TimeoutStartSec=4h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

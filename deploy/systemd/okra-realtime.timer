@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh OKRA realtime estimates during market hours
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09..14:00/10:00 Asia/Shanghai
+OnCalendar=Mon..Fri *-*-* 15:00:00 Asia/Shanghai
+Persistent=false
+RandomizedDelaySec=15
+AccuracySec=30s
+Unit=okra-realtime.service
+
+[Install]
+WantedBy=timers.target

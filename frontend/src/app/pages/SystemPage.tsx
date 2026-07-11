@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { fieldLabel, valueLabel } from "../../lib/display";
+import { buildDesktopRuntimeConfig, getDesktopRuntimeConfig } from "../../lib/desktopRuntime";
 import { ragRuntimeSchema } from "../../lib/schemas";
 import { runtimeStatusMeta } from "../../lib/todayAnalysis";
 import type { RagRuntimePayload, Tone } from "../../lib/types";
@@ -13,9 +15,23 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
   const latestTraces = Array.isArray(ragRuntime.latestTraces) ? ragRuntime.latestTraces : [];
   const failedAgents = Array.isArray(agentRuntime.failedAgents) ? agentRuntime.failedAgents : [];
   const degradedAgents = Array.isArray(agentRuntime.degradedAgents) ? agentRuntime.degradedAgents : [];
+  const [desktopRuntime, setDesktopRuntime] = useState(buildDesktopRuntimeConfig);
+
+  useEffect(() => {
+    void getDesktopRuntimeConfig().then(setDesktopRuntime);
+  }, []);
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card className="lg:col-span-2 p-4">
+        <SectionTitle title="桌面连接状态" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <StatusTile label="模式" value={desktopRuntime.mode === "remote" ? "远程" : "本地"} tone={desktopRuntime.mode === "remote" ? "accent" : "success"} />
+          <StatusTile label="API 目标" value={desktopRuntime.diagnosticApiBase} tone={desktopRuntime.configured ? "info" : "danger"} />
+          <StatusTile label="配置来源" value={desktopRuntime.source} tone={desktopRuntime.configured ? "success" : "warning"} />
+        </div>
+      </Card>
+
       <Card className="p-4 lg:col-span-2">
         <SectionTitle title="模型与主链路状态" />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">

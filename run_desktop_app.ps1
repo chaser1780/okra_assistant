@@ -15,6 +15,46 @@ if ($env:OKRA_DESKTOP_AUTO_REBUILD -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
     $script:autoRebuildWhenChanged = $true
 }
 
+$desktopMode = if ($env:OKRA_DESKTOP_MODE) { $env:OKRA_DESKTOP_MODE.Trim().ToLowerInvariant() } else { 'local' }
+if ($desktopMode -notin @('local', 'remote')) {
+    throw 'OKRA_DESKTOP_MODE must be local or remote.'
+}
+$env:OKRA_DESKTOP_MODE = $desktopMode
+$env:VITE_OKRA_DESKTOP_MODE = $desktopMode
+
+$localApiHost = if ($env:OKRA_LOCAL_API_HOST) { $env:OKRA_LOCAL_API_HOST.Trim() } else { '127.0.0.1' }
+$localApiPort = if ($env:OKRA_LOCAL_API_PORT) { $env:OKRA_LOCAL_API_PORT.Trim() } else { '8765' }
+if ($localApiPort -notmatch '^\d+$' -or [int]$localApiPort -lt 1 -or [int]$localApiPort -gt 65535) {
+    throw 'OKRA_LOCAL_API_PORT must be an integer between 1 and 65535.'
+}
+$localApiBase = "http://${localApiHost}:${localApiPort}"
+$remoteApiBase = ''
+if ($desktopMode -eq 'remote') {
+    $remoteApiBase = if ($env:OKRA_REMOTE_API_BASE) { $env:OKRA_REMOTE_API_BASE.Trim() } elseif ($env:VITE_OKRA_API_BASE) { $env:VITE_OKRA_API_BASE.Trim() } else { '' }
+    $parsedRemoteApiBase = $null
+    if (-not [Uri]::TryCreate($remoteApiBase, [UriKind]::Absolute, [ref]$parsedRemoteApiBase) -or $parsedRemoteApiBase.Scheme -notin @('http', 'https')) {
+        throw 'Remote mode requires an absolute HTTP(S) OKRA_REMOTE_API_BASE or VITE_OKRA_API_BASE.'
+    }
+    $env:OKRA_REMOTE_API_BASE = $remoteApiBase.TrimEnd('/')
+    $env:VITE_OKRA_API_BASE = $env:OKRA_REMOTE_API_BASE
+} else {
+    $env:OKRA_LOCAL_API_HOST = $localApiHost
+    $env:OKRA_LOCAL_API_PORT = $localApiPort
+    $env:OKRA_LOCAL_API_BASE = $localApiBase
+    $env:VITE_OKRA_API_BASE = $localApiBase
+}
+
+function Get-SafeApiBase {
+    param([string]$ApiBase)
+
+    $parsed = $null
+    if ([Uri]::TryCreate($ApiBase, [UriKind]::Absolute, [ref]$parsed)) {
+        $path = $parsed.AbsolutePath.TrimEnd('/')
+        return "$($parsed.Scheme)://$($parsed.Authority)$path"
+    }
+    return ($ApiBase -split '[?#]', 2)[0]
+}
+
 $agentHome = $PSScriptRoot
 $webApiPath = Join-Path $agentHome 'app\web_api.py'
 $frontendDir = Join-Path $agentHome 'frontend'
@@ -79,11 +119,16 @@ function Resolve-PythonCommand {
     throw "Unable to locate a usable Python interpreter. Set OKRA_PYTHON_EXE or project.toml [runtime].python_executable."
 }
 
-$pythonCommand = Resolve-PythonCommand -ProjectRoot $agentHome
-$env:OKRA_PYTHON_EXE = $pythonCommand.Exe
+$pythonCommand = $null
+if ($desktopMode -eq 'local') {
+    $pythonCommand = Resolve-PythonCommand -ProjectRoot $agentHome
+    $env:OKRA_PYTHON_EXE = $pythonCommand.Exe
+}
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $logPath = Join-Path $logDir ("desktop_" + $timestamp + ".log")
 $workbenchExe = Join-Path $frontendDir 'src-tauri\target\release\okra-workbench.exe'
+$diagnosticApiBase = Get-SafeApiBase (if ($desktopMode -eq 'remote') { $remoteApiBase } else { $localApiBase })
+"OKRA desktop mode=$desktopMode api_base=$diagnosticApiBase" | Tee-Object -FilePath $logPath
 
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $npmCommand) {
@@ -195,7 +240,7 @@ function Stop-ExistingDesktopHelpers {
 
 function Test-OkraApi {
     try {
-        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/api/health' -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri "$localApiBase/api/health" -UseBasicParsing -TimeoutSec 2
         if ($response.StatusCode -ne 200) {
             return $false
         }
@@ -222,8 +267,11 @@ function Wait-OkraApi {
 }
 
 function Start-ManagedOkraApi {
+    if ($desktopMode -ne 'local') {
+        throw 'Local OKRA API cannot be started in remote desktop mode.'
+    }
     Stop-ExistingDesktopHelpers
-    $apiArgs = @($pythonCommand.Prefix) + @('-B', '-X', 'utf8', $webApiPath, '--home', $agentHome)
+    $apiArgs = @($pythonCommand.Prefix) + @('-B', '-X', 'utf8', $webApiPath, '--home', $agentHome, '--host', $localApiHost, '--port', $localApiPort)
     $process = Start-Process -FilePath $pythonCommand.Exe -ArgumentList $apiArgs -WorkingDirectory $agentHome -WindowStyle Hidden -RedirectStandardOutput $apiLogPath -RedirectStandardError $apiErrPath -PassThru
     if (-not (Wait-OkraApi)) {
         "OKRA web API did not become healthy. See $apiErrPath" | Tee-Object -FilePath $logPath -Append
@@ -304,12 +352,21 @@ try {
 
         if ($frontendExit -eq 0) {
             if ($runningWorkbench -and -not $script:rebuildRequested) {
-                $apiProcess = Ensure-ApiForRunningWorkbench
-                "OKRA Workbench is already running (PID $($runningWorkbench.Id)); leaving the current window in place." | Tee-Object -FilePath $logPath -Append
-                Wait-Process -Id $runningWorkbench.Id
-                $frontendExit = 0
+                if ($desktopMode -eq 'remote') {
+                    "OKRA Workbench is already running (PID $($runningWorkbench.Id)). Close it before switching to remote mode." | Tee-Object -FilePath $logPath -Append
+                    $frontendExit = 1
+                } else {
+                    $apiProcess = Ensure-ApiForRunningWorkbench
+                    "OKRA Workbench is already running (PID $($runningWorkbench.Id)); leaving the current window in place." | Tee-Object -FilePath $logPath -Append
+                    Wait-Process -Id $runningWorkbench.Id
+                    $frontendExit = 0
+                }
             } elseif (Test-Path $workbenchExe) {
-                $apiProcess = Start-ManagedOkraApi
+                if ($desktopMode -eq 'local') {
+                    $apiProcess = Start-ManagedOkraApi
+                } else {
+                    "Remote mode selected; local Python backend will not be started." | Tee-Object -FilePath $logPath -Append
+                }
                 $appProcess = Start-Process -FilePath $workbenchExe -WorkingDirectory $agentHome -PassThru
                 Wait-Process -Id $appProcess.Id
                 $frontendExit = $appProcess.ExitCode
@@ -319,7 +376,11 @@ try {
             }
         }
     } else {
-        $apiProcess = Start-ManagedOkraApi
+        if ($desktopMode -eq 'local') {
+            $apiProcess = Start-ManagedOkraApi
+        } else {
+            "Remote mode selected; Vite will use $diagnosticApiBase without starting Python." | Tee-Object -FilePath $logPath -Append
+        }
         $frontendProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'dev') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendLogPath -RedirectStandardError $frontendErrPath -PassThru
         Start-Sleep -Seconds 3
         Start-Process 'http://127.0.0.1:5173'

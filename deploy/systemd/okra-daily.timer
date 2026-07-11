@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OKRA daily analysis during the configured market-day window
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 14:05:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=30
+AccuracySec=1min
+Unit=okra-daily.service
+
+[Install]
+WantedBy=timers.target

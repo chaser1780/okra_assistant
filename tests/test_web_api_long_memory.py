@@ -281,7 +281,143 @@ class WebApiLongMemoryTests(unittest.TestCase):
         payload = self._request_json("/api/health")
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["data"]["app"], "okra-assistant")
+        self.assertNotIn("home", payload["data"])
         self.assertEqual(payload["meta"]["page"], "health")
+
+    def test_remote_page_reads_require_cloudflare_access_identity(self):
+        remote_env = {
+            "OKRA_PUBLIC_BASE_URL": "https://okra.example.test",
+            "OKRA_ALLOWED_ORIGINS": "https://okra.example.test",
+            "OKRA_TRUST_CLOUDFLARE_ACCESS": "1",
+            "OKRA_API_TOKEN": "test-remote-token",
+        }
+        with patch.dict(os.environ, remote_env, clear=False):
+            with self.assertRaises(HTTPError) as ctx:
+                self._request_json("/api/today", headers={"Origin": "https://okra.example.test"})
+            self.assertEqual(401, ctx.exception.code)
+            denied = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual("cloudflare_access_required", denied["error"]["error_code"])
+
+            payload, headers = self._request_json_with_headers(
+                "/api/today",
+                headers={
+                    "Origin": "https://okra.example.test",
+                    "Cf-Access-Authenticated-User-Email": "user@example.test",
+                },
+            )
+            token_payload = self._request_json(
+                "/api/today",
+                headers={
+                    "Origin": "https://okra.example.test",
+                    "Authorization": "Bearer test-remote-token",
+                },
+            )
+        self.assertTrue(payload["ok"])
+        self.assertTrue(token_payload["ok"])
+        self.assertEqual("https://okra.example.test", headers.get("Access-Control-Allow-Origin"))
+
+    def test_remote_mutation_requires_access_and_bearer_token(self):
+        remote_env = {
+            "OKRA_PUBLIC_BASE_URL": "https://okra.example.test",
+            "OKRA_ALLOWED_ORIGINS": "https://okra.example.test",
+            "OKRA_TRUST_CLOUDFLARE_ACCESS": "1",
+            "OKRA_API_TOKEN": "test-remote-token",
+            "OKRA_DISABLE_REMOTE_MUTATIONS": "0",
+        }
+        access_headers = {
+            "Origin": "https://okra.example.test",
+            "Cf-Access-Jwt-Assertion": "test-access-assertion",
+        }
+        with patch.dict(os.environ, remote_env, clear=False):
+            with self.assertRaises(HTTPError) as ctx:
+                self._request_json("/api/run/realtime", method="POST", body={}, headers=access_headers)
+            self.assertEqual(401, ctx.exception.code)
+            denied = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual("bearer_token_required", denied["error"]["error_code"])
+
+            with patch.object(OkraWebApi, "run_task", return_value={"ok": True}):
+                payload = self._request_json(
+                    "/api/run/realtime",
+                    method="POST",
+                    body={},
+                    headers={**access_headers, "Authorization": "Bearer test-remote-token"},
+                )
+        self.assertTrue(payload["ok"])
+        audit_path = self.agent.root / "logs" / "cloud" / "mutation_audit.jsonl"
+        audit_lines = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(["denied", "allowed"], [item["decision"] for item in audit_lines])
+        self.assertNotIn("test-remote-token", audit_path.read_text(encoding="utf-8"))
+
+    def test_remote_mutations_can_be_disabled_even_with_valid_auth(self):
+        remote_env = {
+            "OKRA_PUBLIC_BASE_URL": "https://okra.example.test",
+            "OKRA_ALLOWED_ORIGINS": "https://okra.example.test",
+            "OKRA_TRUST_CLOUDFLARE_ACCESS": "1",
+            "OKRA_API_TOKEN": "test-remote-token",
+            "OKRA_DISABLE_REMOTE_MUTATIONS": "1",
+        }
+        with patch.dict(os.environ, remote_env, clear=False), self.assertRaises(HTTPError) as ctx:
+            self._request_json(
+                "/api/run/realtime",
+                method="POST",
+                body={},
+                headers={
+                    "Origin": "https://okra.example.test",
+                    "Cf-Access-Jwt-Assertion": "test-access-assertion",
+                    "Authorization": "Bearer test-remote-token",
+                },
+            )
+        self.assertEqual(403, ctx.exception.code)
+        body = json.loads(ctx.exception.read().decode("utf-8"))
+        self.assertEqual("remote_mutations_disabled", body["error"]["error_code"])
+
+    def test_remote_rag_admin_get_requires_bearer_token(self):
+        remote_env = {
+            "OKRA_PUBLIC_BASE_URL": "https://okra.example.test",
+            "OKRA_ALLOWED_ORIGINS": "https://okra.example.test",
+            "OKRA_TRUST_CLOUDFLARE_ACCESS": "1",
+            "OKRA_API_TOKEN": "test-remote-token",
+        }
+        access_headers = {
+            "Origin": "https://okra.example.test",
+            "Cf-Access-Jwt-Assertion": "test-access-assertion",
+        }
+        with patch.dict(os.environ, remote_env, clear=False):
+            with self.assertRaises(HTTPError) as ctx:
+                self._request_json("/api/rag/status", headers=access_headers)
+            self.assertEqual(401, ctx.exception.code)
+            denied = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual("bearer_token_required", denied["error"]["error_code"])
+
+            payload = self._request_json(
+                "/api/rag/status",
+                headers={**access_headers, "Authorization": "Bearer test-remote-token"},
+            )
+        self.assertTrue(payload["ok"])
+
+    def test_remote_internal_errors_do_not_leak_paths_or_tokens(self):
+        remote_env = {
+            "OKRA_PUBLIC_BASE_URL": "https://okra.example.test",
+            "OKRA_ALLOWED_ORIGINS": "https://okra.example.test",
+            "OKRA_API_TOKEN": "test-remote-token",
+        }
+        with patch.dict(os.environ, remote_env, clear=False), patch.object(
+            OkraWebApi,
+            "today_page",
+            side_effect=RuntimeError("C:/private/state.json test-remote-token"),
+        ), self.assertRaises(HTTPError) as ctx:
+            self._request_json(
+                "/api/today",
+                headers={
+                    "Origin": "https://okra.example.test",
+                    "Authorization": "Bearer test-remote-token",
+                },
+            )
+        self.assertEqual(500, ctx.exception.code)
+        body = json.loads(ctx.exception.read().decode("utf-8"))
+        self.assertEqual("Internal server error", body["error"]["error_message"])
+        self.assertNotIn("private", json.dumps(body))
+        self.assertNotIn("test-remote-token", json.dumps(body))
 
     def test_contract_handler_rejects_untrusted_post_origin(self):
         with self.assertRaises(HTTPError) as ctx:

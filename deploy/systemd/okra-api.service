@@ -1,0 +1,23 @@
+[Unit]
+Description=OKRA local API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=okra
+Group=okra
+WorkingDirectory=/opt/okra_assistant
+EnvironmentFile=/etc/okra/okra.env
+ExecStart=/opt/okra_assistant/.venv/bin/python -B -X utf8 app/web_api.py --home /opt/okra_assistant --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

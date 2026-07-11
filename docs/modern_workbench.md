@@ -1,6 +1,6 @@
 # OKRA Modern Workbench
 
-The current workbench is a React + Tauri desktop UI on top of the local Python backend in `app/web_api.py`.
+The current workbench is a React + Tauri desktop UI on top of the Python backend in `app/web_api.py`. Local mode remains the default; remote mode connects the same desktop UI to an explicitly configured cloud API.
 
 ## Start
 
@@ -18,6 +18,19 @@ The launcher is the current user-facing entrypoint. It:
 Primary local API:
 
 - `http://127.0.0.1:8765`
+
+Remote mode never starts the local Python backend:
+
+```powershell
+$env:OKRA_REMOTE_API_BASE="https://okra.example.com"
+.\run_desktop_app_remote.ps1
+```
+
+`OKRA_DESKTOP_MODE` defaults to `local`. In remote mode the API base comes from
+`OKRA_REMOTE_API_BASE` or `VITE_OKRA_API_BASE`; the System page shows the mode,
+sanitized API target, and configuration source. The frontend example is
+`frontend/.env.remote.example`. Do not put API tokens in Vite environment
+files because Vite values are compiled into browser assets.
 
 ## Frontend
 
@@ -51,11 +64,27 @@ Direct start:
 python -B -X utf8 .\app\web_api.py --home .
 ```
 
-The backend is intentionally local-only. Its default bind address is
-`127.0.0.1`, and startup rejects non-loopback values such as `0.0.0.0` or a
-LAN address. Browser-origin checks separately allow only the approved local
-React/Tauri origins. This contract is suitable for the desktop Workbench; it is
-not a remote-service authentication boundary.
+The backend remains loopback-only. Its default bind address is `127.0.0.1`, and
+startup rejects non-loopback values such as `0.0.0.0` or a LAN address. Cloud
+access must terminate through a local reverse proxy or Cloudflare Tunnel; the
+API port itself is never exposed publicly.
+
+When `OKRA_PUBLIC_BASE_URL`, `OKRA_API_TOKEN`, or
+`OKRA_TRUST_CLOUDFLARE_ACCESS` enables remote protection:
+
+- `OKRA_ALLOWED_ORIGINS` adds exact cloud origins; wildcards are ignored.
+- `/api/health` stays public and omits the local workspace path.
+- page reads accept a trusted Cloudflare Access identity or bearer token.
+- mutations and RAG admin/debug endpoints require the configured stronger
+  checks; when both Access trust and a token are configured, both are required.
+- `OKRA_DISABLE_REMOTE_MUTATIONS=1` rejects every remote mutation.
+- mutation authorization decisions are appended to
+  `logs/cloud/mutation_audit.jsonl` without payloads or credentials.
+- remote error envelopes redact local paths, tokens, and internal 500 details.
+
+`OKRA_TRUST_CLOUDFLARE_ACCESS=1` is valid only when the API remains behind the
+Tunnel/Access boundary and has no direct public inbound route. Deployment
+templates and dry-run-first scripts live under `deploy/`.
 
 ## Current API Contract Notes
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
+import os
 import re
 import sys
 import threading
@@ -62,6 +64,7 @@ ALLOWED_ORIGINS = {
     "tauri://localhost",
 }
 LOCAL_CORS_HOSTS = {"127.0.0.1", "localhost", "tauri.localhost"}
+REMOTE_ADMIN_GET_ENDPOINTS = {"/api/rag/status", "/api/rag/trace"}
 MAX_COPILOT_HISTORY_MESSAGES = 10
 COPILOT_RAG_PAGES = {"fundDetail", "execution"}
 
@@ -74,6 +77,71 @@ def is_loopback_host(value: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _env_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def remote_api_enabled() -> bool:
+    return bool(
+        str(os.environ.get("OKRA_PUBLIC_BASE_URL", "") or "").strip()
+        or str(os.environ.get("OKRA_API_TOKEN", "") or "").strip()
+        or _env_enabled("OKRA_TRUST_CLOUDFLARE_ACCESS")
+    )
+
+
+def configured_allowed_origins() -> set[str]:
+    configured: set[str] = set()
+    for item in str(os.environ.get("OKRA_ALLOWED_ORIGINS", "") or "").split(","):
+        value = item.strip().rstrip("/")
+        if not value or "*" in value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https", "tauri"} and parsed.netloc and not parsed.path:
+            configured.add(value)
+    return configured
+
+
+def _bearer_token_authorized(value: str | None) -> bool:
+    expected = str(os.environ.get("OKRA_API_TOKEN", "") or "").strip()
+    if not expected:
+        return False
+    scheme, separator, token = str(value or "").strip().partition(" ")
+    return separator == " " and scheme.lower() == "bearer" and hmac.compare_digest(token.strip(), expected)
+
+
+def _cloudflare_access_authorized(headers) -> bool:
+    if not _env_enabled("OKRA_TRUST_CLOUDFLARE_ACCESS"):
+        return False
+    return bool(
+        str(headers.get("Cf-Access-Jwt-Assertion", "") or "").strip()
+        or str(headers.get("Cf-Access-Authenticated-User-Email", "") or "").strip()
+    )
+
+
+def _sanitize_remote_error(message: str) -> str:
+    value = str(message or "")
+    token = str(os.environ.get("OKRA_API_TOKEN", "") or "").strip()
+    if token:
+        value = value.replace(token, "<redacted>")
+    value = re.sub(r"(?i)\b[a-z]:[\\/][^\s'\"]+", "<redacted-path>", value)
+    value = value.replace(str(ROOT_DIR), "<redacted-path>")
+    return value
+
+
+def _append_mutation_audit(api_home: Path, *, endpoint: str, decision: str, reason: str, origin: str) -> None:
+    path = api_home / "logs" / "cloud" / "mutation_audit.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": timestamp_now(),
+        "endpoint": endpoint,
+        "decision": decision,
+        "reason": reason,
+        "origin": origin,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 COPILOT_RAG_KEYWORDS = (
     "okra",
     "持仓",
@@ -189,10 +257,10 @@ class RequestBodyTooLargeError(ValueError):
 
 
 def is_allowed_origin(origin: str | None) -> bool:
-    value = str(origin or "").strip()
+    value = str(origin or "").strip().rstrip("/")
     if not value:
         return True
-    if value in ALLOWED_ORIGINS:
+    if value in ALLOWED_ORIGINS or value in configured_allowed_origins():
         return True
     parsed = urlparse(value)
     host = (parsed.hostname or "").lower()
@@ -761,6 +829,57 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _origin_allowed(self) -> bool:
         return is_allowed_origin(self.headers.get("Origin"))
 
+    def _write_mutation_audit(self, endpoint: str, decision: str, reason: str) -> None:
+        try:
+            _append_mutation_audit(
+                self.api.home,
+                endpoint=endpoint,
+                decision=decision,
+                reason=reason,
+                origin=str(self.headers.get("Origin", "") or ""),
+            )
+        except OSError:
+            return
+
+    def _remote_request_authorized(self, endpoint: str, method: str) -> bool:
+        if not remote_api_enabled() or endpoint == "/api/health":
+            return True
+        mutation = method == "POST"
+        admin = endpoint in REMOTE_ADMIN_GET_ENDPOINTS
+        access_required = _env_enabled("OKRA_TRUST_CLOUDFLARE_ACCESS")
+        access_ok = _cloudflare_access_authorized(self.headers)
+        token_configured = bool(str(os.environ.get("OKRA_API_TOKEN", "") or "").strip())
+        token_ok = _bearer_token_authorized(self.headers.get("Authorization"))
+
+        if mutation and _env_enabled("OKRA_DISABLE_REMOTE_MUTATIONS"):
+            self._write_mutation_audit(endpoint, "denied", "remote_mutations_disabled")
+            self._send_error(403, "remote_mutations_disabled", "Remote mutation endpoints are disabled")
+            return False
+        if mutation or admin:
+            if access_required and not access_ok:
+                if mutation:
+                    self._write_mutation_audit(endpoint, "denied", "cloudflare_access_required")
+                self._send_error(401, "cloudflare_access_required", "Cloudflare Access identity is required")
+                return False
+            if token_configured and not token_ok:
+                if mutation:
+                    self._write_mutation_audit(endpoint, "denied", "bearer_token_required")
+                self._send_error(401, "bearer_token_required", "A valid bearer token is required")
+                return False
+        elif (access_required or token_configured) and not (access_ok or token_ok):
+            code = "cloudflare_access_required" if access_required else "bearer_token_required"
+            message = "Cloudflare Access identity or a valid bearer token is required"
+            self._send_error(401, code, message)
+            return False
+        if not access_required and not token_configured:
+            if mutation:
+                self._write_mutation_audit(endpoint, "denied", "remote_auth_not_configured")
+            self._send_error(503, "remote_auth_not_configured", "Remote API authentication is not configured")
+            return False
+        if mutation:
+            self._write_mutation_audit(endpoint, "allowed", "authenticated")
+        return True
+
     def _read_json_payload(self) -> dict:
         raw_length = self.headers.get("Content-Length", "0") or "0"
         try:
@@ -787,7 +906,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", cors_origin)
         self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -933,11 +1053,16 @@ class ContractRequestHandler(RequestHandler):
         self._send_json(payload, status)
 
     def _send_error(self, status: int, code: str, message: str, *, details: dict | None = None, page: str | None = None) -> None:
+        safe_message = message
+        safe_details = details or {}
+        if remote_api_enabled():
+            safe_message = "Internal server error" if status >= 500 else _sanitize_remote_error(message)
+            safe_details = json.loads(_sanitize_remote_error(json.dumps(safe_details, ensure_ascii=False)))
         payload = model_dump_compat(
             ApiEnvelope(
                 ok=False,
                 data=None,
-                error=ApiError(error_code=code, error_message=message, details=details or {}),
+                error=ApiError(error_code=code, error_message=safe_message, details=safe_details),
                 meta=ApiMeta(page=page, generated_at=timestamp_now()),
             )
         )
@@ -949,6 +1074,11 @@ class ContractRequestHandler(RequestHandler):
         endpoint_path = parsed.path
         if endpoint_path.startswith("/api/workbench/"):
             endpoint_path = "/api/" + endpoint_path[len("/api/workbench/") :]
+        if not self._origin_allowed():
+            self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA API", details={"path": parsed.path})
+            return
+        if not self._remote_request_authorized(endpoint_path, "GET"):
+            return
         try:
             if endpoint_path == "/api/dates":
                 self._send_envelope(self.api.dates())
@@ -997,7 +1127,7 @@ class ContractRequestHandler(RequestHandler):
             elif endpoint_path == "/api/rag/trace":
                 self._send_envelope(self.api.rag_trace((query.get("id") or query.get("traceId") or [""])[0]), page="rag")
             elif endpoint_path == "/api/health":
-                self._send_envelope({"app": "okra-assistant", "version": "v1", "home": str(self.api.home)}, page="health")
+                self._send_envelope({"app": "okra-assistant", "version": "v1"}, page="health")
             else:
                 self._send_error(404, "not_found", f"Unknown GET endpoint: {parsed.path}", details={"path": parsed.path})
         except ValueError as exc:
@@ -1011,7 +1141,9 @@ class ContractRequestHandler(RequestHandler):
         if endpoint_path.startswith("/api/workbench/"):
             endpoint_path = "/api/" + endpoint_path[len("/api/workbench/") :]
         if not self._origin_allowed():
-            self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA local API", details={"path": parsed.path})
+            self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA API", details={"path": parsed.path})
+            return
+        if not self._remote_request_authorized(endpoint_path, "POST"):
             return
         try:
             payload = self._read_json_payload()
