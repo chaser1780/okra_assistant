@@ -55,6 +55,7 @@ class TodayPageDto(ContractModel):
     summary: dict[str, Any] = Field(default_factory=dict)
     todayAnalysis: dict[str, Any] = Field(default_factory=dict)
     dashboard: dict[str, Any] = Field(default_factory=dict)
+    research: dict[str, Any] = Field(default_factory=dict)
     dailyFirstOpen: dict[str, Any] = Field(default_factory=dict)
     portfolio: dict[str, Any] = Field(default_factory=dict)
     longMemory: dict[str, Any] = Field(default_factory=dict)
@@ -217,6 +218,102 @@ class ExecutionConversionRequestDto(MutationRequestModel):
     source: str | None = None
     platform: str | None = None
     user_note: str | None = None
+
+
+class ScreenshotFileDto(MutationRequestModel):
+    name: str = Field(default="screenshot.png", min_length=1, max_length=255)
+    data: str = Field(min_length=1)
+
+
+class ExecutionScreenshotParseRequestDto(MutationRequestModel):
+    import_id: str | None = Field(default=None, max_length=80)
+    snapshot_date: str | None = None
+    auto_parse: bool = True
+    files: list[ScreenshotFileDto] = Field(min_length=1, max_length=4)
+
+
+class ExecutionReconcileApplyRequestDto(MutationRequestModel):
+    reconcileId: str = Field(min_length=1, max_length=80)
+    previewSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expectedPortfolioStateSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dropMissing: bool = False
+    confirmReplace: str | None = None
+
+
+class RunTaskRequestDto(MutationRequestModel):
+    date: str | None = None
+    runDate: str | None = None
+    force: bool = False
+
+
+class LongMemoryActionRequestDto(MutationRequestModel):
+    memoryId: str = Field(min_length=1)
+    action: Literal["approve", "reject", "archive", "demote"]
+    note: str = ""
+
+
+class ExecutionReconcilePreviewRequestDto(MutationRequestModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    positions: list[dict[str, Any]] = Field(default_factory=list)
+    snapshotDate: str | None = None
+    snapshot_date: str | None = None
+    source: str = "manual_position_snapshot"
+
+
+class ExecutionConfirmationUpdateRequestDto(MutationRequestModel):
+    date: str | None = None
+    asOf: str | None = None
+
+
+class OpenUrlRequestDto(MutationRequestModel):
+    url: str = Field(min_length=1)
+
+
+class RagSearchRequestDto(MutationRequestModel):
+    query: str = Field(min_length=1)
+    date: str | None = None
+    selectedDate: str | None = None
+    fundCode: str | None = None
+    fundCodes: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    sourceKinds: list[str] = Field(default_factory=list)
+    topK: int = Field(default=8, ge=1, le=100)
+    tokenBudget: int = Field(default=6000, ge=1)
+    includeNegativeMemory: bool = False
+    includeExecution: bool = False
+    profile: str = "rag_admin"
+    intent: str = "rag_admin_search"
+    writeTrace: bool = True
+
+
+class RagEvalRequestDto(MutationRequestModel):
+    date: str | None = None
+    selectedDate: str | None = None
+    compareLegacy: bool = True
+    writeTrace: bool = True
+
+
+class RagReindexRequestDto(MutationRequestModel):
+    date: str | None = None
+    selectedDate: str | None = None
+    domain: str | list[str] | None = None
+    domains: list[str] = Field(default_factory=list)
+    write: bool = False
+    dryRun: bool = True
+    embed: bool = False
+    embeddingDryRun: bool = True
+    embedLimit: int | None = Field(default=None, ge=1)
+    confirmWrite: str | None = None
+
+
+class RagMaintenanceRequestDto(MutationRequestModel):
+    action: Literal["check_integrity", "vacuum", "rebuild", "purge_domain"]
+    domain: str = ""
+    date: str | None = None
+    selectedDate: str | None = None
+    embed: bool = False
+    embeddingDryRun: bool = True
+    confirm: str | None = None
 
 
 def model_dump_compat(model: BaseModel) -> dict[str, Any]:

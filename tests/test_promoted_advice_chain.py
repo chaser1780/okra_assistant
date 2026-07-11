@@ -25,6 +25,13 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.agent.cleanup()
 
     def write_inputs(self) -> None:
+        self.agent.write_json("config/benchmark_mappings.json", {"fund_benchmarks": {}})
+        for script_name in (
+            "action_debate_graph.py",
+            "build_action_ticket_shadow.py",
+            "build_layered_retrieval_pack.py",
+        ):
+            self.agent.write_text(f"scripts/{script_name}", f"# {script_name} test fixture\n")
         portfolio = {
             "portfolio_name": "test",
             "as_of_date": "2026-06-01",
@@ -139,6 +146,30 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertEqual(PROMOTED_MODE, validated["advice_mode"])
         self.assertEqual("action_debate_promoted", validated["decision_source"])
         self.assertTrue(validated["dca_actions"])
+        self.assertTrue((self.agent.root / "db" / "decisions" / "2026-06-01.json").exists())
+        capture = status["replay_snapshot_capture"]
+        self.assertEqual("captured", capture["status"])
+        self.assertFalse(capture["learning_eligible"])
+        self.assertTrue((self.agent.root / capture["manifest_candidate_path"]).exists())
+        candidate = json.loads((self.agent.root / capture["manifest_candidate_path"]).read_text(encoding="utf-8"))
+        self.assertEqual("blocked", candidate["dates"]["2026-06-01"]["mode"])
+
+    def test_snapshot_capture_failure_is_recorded_without_blocking_official_outputs(self) -> None:
+        self.write_inputs()
+        (self.agent.root / "config" / "benchmark_mappings.json").unlink()
+
+        status_path, status = run_chain(
+            self.agent.root,
+            "2026-06-01",
+            generated_at="2026-06-01T14:30:00+08:00",
+            debate_mode="deterministic",
+        )
+
+        self.assertTrue(status_path.exists())
+        self.assertTrue(status["summary"]["promoted_run_passed"])
+        self.assertEqual("failed", status["replay_snapshot_capture"]["status"])
+        self.assertEqual("FileNotFoundError", status["replay_snapshot_capture"]["error_type"])
+        self.assertTrue((self.agent.root / "db" / "validated_advice" / "2026-06-01.json").exists())
         self.assertTrue((self.agent.root / "db" / "decisions" / "2026-06-01.json").exists())
 
 

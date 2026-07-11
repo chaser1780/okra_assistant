@@ -17,7 +17,9 @@ from layered_context_models import (
     RetrievalPack,
     RetrievalPackArtifact,
     Visibility,
+    is_available_by_cutoff,
 )
+from long_memory_store import learning_lineage_is_trusted
 
 
 def retrieval_pack_path(agent_home: Path, report_date: str) -> Path:
@@ -426,7 +428,7 @@ def decision_history_from_ticket(ticket: dict[str, Any], report_date: str) -> li
     ]
 
 
-def memory_items(ticket: dict[str, Any], memory_export: dict[str, Any], report_date: str, generated_at: str) -> tuple[list[LayeredContextItem], list[LayeredContextItem], list[LayeredContextItem]]:
+def memory_items(ticket: dict[str, Any], memory_export: dict[str, Any], report_date: str, decision_cutoff: str) -> tuple[list[LayeredContextItem], list[LayeredContextItem], list[LayeredContextItem]]:
     fund_code = str(ticket.get("fund_code", "") or "")
     style = str(ticket.get("portfolio_bucket", "") or ticket.get("role", "") or "")
     adaptive: list[LayeredContextItem] = []
@@ -437,6 +439,8 @@ def memory_items(ticket: dict[str, Any], memory_export: dict[str, Any], report_d
             continue
         status = str(item.get("status", "") or "")
         if status in {"archived", "rejected"}:
+            continue
+        if not learning_lineage_is_trusted(item):
             continue
         metadata = item.get("metadata", {}) or {}
         learning_scope = str(item.get("learning_scope", "") or metadata.get("learning_scope", "") or "")
@@ -450,7 +454,9 @@ def memory_items(ticket: dict[str, Any], memory_export: dict[str, Any], report_d
         portfolio_match = str(item.get("domain", "")) == "portfolio"
         if not (fund_match or style_match or portfolio_match):
             continue
-        available = as_available_from(item, generated_at)
+        available = as_available_from(item, decision_cutoff)
+        if not is_available_by_cutoff(available, decision_cutoff):
+            continue
         as_of = str(item.get("valid_from") or item.get("updated_at") or item.get("created_at") or report_date)[:10]
         context_item = make_item(
             item_id=f"memory:{item.get('memory_id')}",
@@ -588,7 +594,7 @@ def build_pack_for_ticket(
     if p_fact is not None:
         canonical.insert(0, p_fact)
     canonical.extend(market_facts_from_context(ticket, context, report_date))
-    adaptive, similar, anti = memory_items(ticket, memory_export, report_date, generated_at)
+    adaptive, similar, anti = memory_items(ticket, memory_export, report_date, decision_cutoff)
     rag_items, rag_refs, rag_missing = rag_noncanonical_evidence(agent_home, ticket, report_date, enabled=use_rag)
     long_text = long_text_evidence_from_context(ticket, context, report_date)
     if rag_items:

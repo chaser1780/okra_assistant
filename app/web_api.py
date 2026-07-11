@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import sys
@@ -23,9 +24,20 @@ from api_contracts import (
     ApiError,
     ApiMeta,
     ExecutionConversionRequestDto,
+    ExecutionReconcileApplyRequestDto,
+    ExecutionReconcilePreviewRequestDto,
+    ExecutionScreenshotParseRequestDto,
     ExecutionTradeRequestDto,
+    ExecutionConfirmationUpdateRequestDto,
     FundDetailDto,
     IntelligencePageDto,
+    LongMemoryActionRequestDto,
+    OpenUrlRequestDto,
+    RagEvalRequestDto,
+    RagMaintenanceRequestDto,
+    RagReindexRequestDto,
+    RagSearchRequestDto,
+    RunTaskRequestDto,
     ShadowReviewPageDto,
     coerce_model,
     model_dump_compat,
@@ -39,6 +51,7 @@ from workbench_state import WorkbenchStateService
 
 
 DEFAULT_HOME = ROOT_DIR
+MAX_JSON_BODY_BYTES = 36 * 1024 * 1024
 ALLOWED_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
@@ -51,6 +64,16 @@ ALLOWED_ORIGINS = {
 LOCAL_CORS_HOSTS = {"127.0.0.1", "localhost", "tauri.localhost"}
 MAX_COPILOT_HISTORY_MESSAGES = 10
 COPILOT_RAG_PAGES = {"fundDetail", "execution"}
+
+
+def is_loopback_host(value: str) -> bool:
+    host = str(value or "").strip().lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 COPILOT_RAG_KEYWORDS = (
     "okra",
     "持仓",
@@ -161,6 +184,10 @@ COPILOT_CONTEXT_FOLLOWUP_KEYWORDS = (
 )
 
 
+class RequestBodyTooLargeError(ValueError):
+    pass
+
+
 def is_allowed_origin(origin: str | None) -> bool:
     value = str(origin or "").strip()
     if not value:
@@ -218,11 +245,13 @@ class OkraWebApi:
         snapshot = self.state_service.load_snapshot(selected)
         dashboard = _to_jsonable(self.state_service.build_dashboard_view_model(snapshot))
         today_analysis = self.page_service.today_analysis_payload(snapshot.state)
+        research = _to_jsonable(self.state_service.build_research_view_model(snapshot))
         payload = self.state_service.build_today_page_dto(
             snapshot,
             dashboard=dashboard,
             today_analysis=today_analysis,
             daily_first_open=_to_jsonable(today_analysis),
+            research=research,
         )
         payload["portfolio"] = self.page_service.portfolio_payload(snapshot.state)
         payload["longMemory"] = self.page_service.long_memory_payload()
@@ -409,6 +438,9 @@ class OkraWebApi:
         )
 
     def rag_reindex(self, payload: dict) -> dict:
+        if bool(payload.get("write", False)) and not bool(payload.get("dryRun", False)):
+            if str(payload.get("confirmWrite", "") or "").strip().upper() != "WRITE":
+                raise ValueError("confirmWrite=WRITE is required for a writing RAG reindex")
         args_list: list[str] = []
         selected = str(payload.get("date") or payload.get("selectedDate") or "").strip()
         if selected:
@@ -446,6 +478,8 @@ class OkraWebApi:
         if action == "vacuum":
             return rag_vacuum(self.home)
         if action == "rebuild":
+            if str(payload.get("confirm", "") or "").strip().upper() != "REBUILD":
+                raise ValueError("confirm=REBUILD is required for RAG rebuild")
             return rag_rebuild_domain(
                 self.home,
                 str(payload.get("domain", "") or ""),
@@ -454,6 +488,8 @@ class OkraWebApi:
                 embedding_dry_run=bool(payload.get("embeddingDryRun", True)),
             )
         if action == "purge_domain":
+            if str(payload.get("confirm", "") or "").strip().upper() != "PURGE":
+                raise ValueError("confirm=PURGE is required for RAG domain purge")
             return rag_purge_domain(self.home, str(payload.get("domain", "") or ""))
         raise ValueError("Unsupported RAG maintenance action")
 
@@ -725,6 +761,23 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _origin_allowed(self) -> bool:
         return is_allowed_origin(self.headers.get("Origin"))
 
+    def _read_json_payload(self) -> dict:
+        raw_length = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("Content-Length must be an integer") from exc
+        if length < 0:
+            raise ValueError("Content-Length must not be negative")
+        if length > MAX_JSON_BODY_BYTES:
+            raise RequestBodyTooLargeError(f"JSON request body exceeds {MAX_JSON_BODY_BYTES} bytes")
+        if not length:
+            return {}
+        payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("JSON request body must be an object")
+        return payload
+
     def _send_json(self, payload, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -805,15 +858,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         if not self._origin_allowed():
             self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA local API")
             return
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        payload = {}
-        if length:
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-            except json.JSONDecodeError as exc:
-                self._send_error(400, "invalid_json", str(exc))
-                return
         try:
+            payload = self._read_json_payload()
             if parsed.path == "/api/run/daily":
                 self._send_json(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif parsed.path == "/api/run/realtime":
@@ -846,6 +892,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.api.rag_maintenance(payload))
             else:
                 self._send_error(404, "not_found", f"Unsupported POST path: {parsed.path}")
+        except RequestBodyTooLargeError as exc:
+            self._send_error(413, "payload_too_large", str(exc))
+        except json.JSONDecodeError as exc:
+            self._send_error(400, "invalid_json", str(exc))
         except AlreadyRunningError as exc:
             runtime = exc.runtime
             self._send_error(
@@ -963,11 +1013,27 @@ class ContractRequestHandler(RequestHandler):
         if not self._origin_allowed():
             self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA local API", details={"path": parsed.path})
             return
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        payload = {}
         try:
-            if length:
-                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            payload = self._read_json_payload()
+            if endpoint_path in {"/api/run/daily", "/api/run/realtime"}:
+                payload = coerce_model(RunTaskRequestDto, payload)
+            elif endpoint_path == "/api/long-memory/action":
+                payload = coerce_model(LongMemoryActionRequestDto, payload)
+            elif endpoint_path == "/api/execution-sync/reconcile/preview":
+                payload = coerce_model(ExecutionReconcilePreviewRequestDto, payload)
+            elif endpoint_path == "/api/execution-sync/confirmation/update":
+                payload = coerce_model(ExecutionConfirmationUpdateRequestDto, payload)
+            elif endpoint_path == "/api/open-url":
+                payload = coerce_model(OpenUrlRequestDto, payload)
+            elif endpoint_path == "/api/rag/search":
+                payload = coerce_model(RagSearchRequestDto, payload)
+            elif endpoint_path == "/api/rag/reindex":
+                payload = coerce_model(RagReindexRequestDto, payload)
+            elif endpoint_path == "/api/rag/eval":
+                payload = coerce_model(RagEvalRequestDto, payload)
+            elif endpoint_path == "/api/rag/maintenance":
+                payload = coerce_model(RagMaintenanceRequestDto, payload)
+
             if endpoint_path == "/api/run/daily":
                 self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif endpoint_path == "/api/run/realtime":
@@ -981,11 +1047,11 @@ class ContractRequestHandler(RequestHandler):
             elif endpoint_path == "/api/execution-sync/conversion":
                 self._send_envelope(self.api.execution_conversion(coerce_model(ExecutionConversionRequestDto, payload)))
             elif endpoint_path == "/api/execution-sync/alipay-screenshot/parse":
-                self._send_envelope(self.api.execution_screenshot_parse(payload))
+                self._send_envelope(self.api.execution_screenshot_parse(coerce_model(ExecutionScreenshotParseRequestDto, payload)))
             elif endpoint_path == "/api/execution-sync/reconcile/preview":
                 self._send_envelope(self.api.execution_reconcile_preview(payload))
             elif endpoint_path == "/api/execution-sync/reconcile/apply":
-                self._send_envelope(self.api.execution_reconcile_apply(payload))
+                self._send_envelope(self.api.execution_reconcile_apply(coerce_model(ExecutionReconcileApplyRequestDto, payload)))
             elif endpoint_path == "/api/execution-sync/confirmation/update":
                 self._send_envelope(self.api.execution_confirmation_update(payload))
             elif endpoint_path == "/api/open-url":
@@ -1000,6 +1066,8 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.rag_maintenance(payload), page="rag")
             else:
                 self._send_error(404, "not_found", f"Unknown POST endpoint: {parsed.path}", details={"path": parsed.path})
+        except RequestBodyTooLargeError as exc:
+            self._send_error(413, "payload_too_large", str(exc), details={"path": parsed.path})
         except AlreadyRunningError as exc:
             runtime = exc.runtime
             self._send_error(
@@ -1028,6 +1096,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
+    if not is_loopback_host(args.host):
+        raise SystemExit("OKRA local API may only bind to a loopback host")
 
     handler = ContractRequestHandler
     handler.api = OkraWebApi(Path(args.home))

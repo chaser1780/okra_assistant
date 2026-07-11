@@ -5,10 +5,11 @@ import os
 import subprocess
 import sys
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from common import (
     analysis_quality_for_start,
@@ -37,6 +38,7 @@ from execution_sync import build_execution_sync_payload, update_pending_confirma
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MAX_AUTO_BACKFILL_CALENDAR_DAYS = 3
+TODAY_LOCK_SCHEMA_VERSION = "today_analysis_lock.v2"
 
 
 RUNTIME_STATUS = {
@@ -139,42 +141,100 @@ class AlreadyRunningError(RuntimeError):
         super().__init__(f"today_analysis already running for {report_date} ({run_id})")
 
 
-def acquire_today_lock(paths: OrchestratorPaths, run_id: str, *, pid: int | None = None) -> None:
-    if paths.lock.exists():
-        payload = load_json(paths.lock)
-        if isinstance(payload, dict):
-            lock_pid = payload.get("pid")
-            if process_exists(lock_pid):
-                raise AlreadyRunningError(
-                    {
-                        "runId": str(payload.get("runId", "") or ""),
-                        "reportDate": str(payload.get("reportDate", "") or ""),
-                        "startedAt": str(payload.get("startedAt", "") or ""),
-                        "currentStep": str(payload.get("currentStep", "") or ""),
-                        "currentAgent": str(payload.get("currentAgent", "") or ""),
-                        "status": "running",
-                        "pid": lock_pid,
-                    }
-                )
-    dump_json(
-        paths.lock,
-        {
-            "runId": run_id,
-            "reportDate": paths.workspace.name,
-            "pid": pid or os.getpid(),
-            "startedAt": timestamp_now(),
-            "currentStep": "preflight",
-            "currentAgent": "",
-        },
-    )
+@contextmanager
+def _today_lock_guard(paths: OrchestratorPaths) -> Iterator[None]:
+    guard_path = paths.lock.with_name(f"{paths.lock.name}.guard")
+    guard_path.parent.mkdir(parents=True, exist_ok=True)
+    with guard_path.open("a+b") as guard:
+        guard.seek(0, os.SEEK_END)
+        if guard.tell() == 0:
+            guard.write(b"\0")
+            guard.flush()
+        guard.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(guard.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                guard.seek(0)
+                msvcrt.locking(guard.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
 
 
-def release_today_lock(paths: OrchestratorPaths) -> None:
+def _load_today_lease(path: Path) -> dict[str, Any]:
     try:
+        payload = load_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _already_running_payload(lease: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runId": str(lease.get("runId", "") or ""),
+        "reportDate": str(lease.get("reportDate", "") or ""),
+        "startedAt": str(lease.get("startedAt", "") or ""),
+        "currentStep": str(lease.get("currentStep", "") or ""),
+        "currentAgent": str(lease.get("currentAgent", "") or ""),
+        "status": "running",
+        "pid": lease.get("pid"),
+    }
+
+
+def acquire_today_lock(paths: OrchestratorPaths, run_id: str, *, pid: int | None = None) -> dict[str, Any]:
+    lease = {
+        "schemaVersion": TODAY_LOCK_SCHEMA_VERSION,
+        "runId": run_id,
+        "reportDate": paths.workspace.name,
+        "pid": os.getpid() if pid is None else pid,
+        "ownerToken": uuid.uuid4().hex,
+        "startedAt": timestamp_now(),
+        "currentStep": "preflight",
+        "currentAgent": "",
+    }
+    encoded = (json.dumps(lease, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    paths.lock.parent.mkdir(parents=True, exist_ok=True)
+    with _today_lock_guard(paths):
         if paths.lock.exists():
-            paths.lock.unlink()
-    except OSError:
-        pass
+            existing = _load_today_lease(paths.lock)
+            if process_exists(existing.get("pid")):
+                raise AlreadyRunningError(_already_running_payload(existing))
+            quarantine = paths.lock.with_name(f"{paths.lock.name}.stale.{uuid.uuid4().hex}.json")
+            os.replace(paths.lock, quarantine)
+
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(paths.lock, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as lock_file:
+            lock_file.write(encoded)
+            lock_file.flush()
+            os.fsync(lock_file.fileno())
+    return lease
+
+
+def release_today_lock(paths: OrchestratorPaths, lease: dict[str, Any]) -> bool:
+    with _today_lock_guard(paths):
+        if not paths.lock.exists():
+            return False
+        current = _load_today_lease(paths.lock)
+        owns_lock = (
+            str(current.get("runId", "") or "") == str(lease.get("runId", "") or "")
+            and str(current.get("ownerToken", "") or "") == str(lease.get("ownerToken", "") or "")
+        )
+        if not owns_lock:
+            return False
+        paths.lock.unlink()
+        return True
 
 
 def _elapsed_seconds(started_at_text: str) -> int:
@@ -428,7 +488,7 @@ def run_today_analysis(
         "analysisQuality": run_meta["analysis_quality"],
         "memoryEligible": run_meta["memory_eligible"],
     }
-    acquire_today_lock(paths, run_meta["analysis_run_id"], pid=runtime["pid"])
+    lease = acquire_today_lock(paths, run_meta["analysis_run_id"], pid=runtime["pid"])
     try:
         _write_runtime(agent_home, report_date, runtime)
         if paths.decision.exists() and not force:
@@ -568,4 +628,4 @@ def run_today_analysis(
         _write_runtime(agent_home, report_date, runtime)
         raise
     finally:
-        release_today_lock(paths)
+        release_today_lock(paths, lease)

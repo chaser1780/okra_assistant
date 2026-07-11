@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from helpers import TempAgentHome
-from rag_config import ensure_rag_layout, is_rag_enabled, load_rag_config, rag_db_path, rag_index_dir, rag_profile_evidence_profile
+from rag_config import ensure_rag_layout, is_rag_enabled, load_rag_config, rag_agent_default_settings, rag_db_path, rag_index_dir, rag_profile_evidence_profile
 
 
 class RagConfigTests(unittest.TestCase):
@@ -63,6 +63,23 @@ enabled = true
 """,
         )
         self.assertTrue(rag_profile_evidence_profile(self.agent.root, "decision")["enabled"])
+
+    def test_agent_default_requires_global_rag_enable(self):
+        self.agent.write_text(
+            "config/rag.toml",
+            """[rag]
+enabled = false
+
+[rag.agent_default]
+enabled = true
+fallback_to_legacy = true
+""",
+        )
+
+        settings = rag_agent_default_settings(self.agent.root)
+
+        self.assertFalse(settings["enabled"])
+        self.assertTrue(settings["fallback_to_legacy"])
 
     def test_config_file_overrides_defaults_without_dropping_nested_values(self):
         self.agent.write_text(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from long_memory_store import approve_memory, build_execution_memory, build_fund
 from learning_memory import run_learning_sync
 import run_today_analysis as run_today_module
 from run_today_analysis import _pending_backfill_dates, run_pending_backfills, run_today_analysis, should_run_pending_backfills
-from today_orchestrator import AlreadyRunningError, get_active_runtime
+from today_orchestrator import AlreadyRunningError, _paths, acquire_today_lock, get_active_runtime, release_today_lock
 from run_long_memory_analysis import run_memory_cycle
 
 
@@ -26,6 +27,77 @@ class LongMemoryTests(unittest.TestCase):
 
     def tearDown(self):
         self.agent.cleanup()
+
+    def test_today_lock_allows_only_one_concurrent_owner(self):
+        paths = _paths(self.agent.root, "2026-05-08")
+        paths.workspace.mkdir(parents=True, exist_ok=True)
+        barrier = threading.Barrier(3)
+        release_gate = threading.Event()
+        results = []
+
+        def acquire(run_id: str) -> None:
+            barrier.wait()
+            try:
+                lease = acquire_today_lock(paths, run_id)
+            except AlreadyRunningError:
+                results.append((run_id, "already_running"))
+                release_gate.set()
+            except Exception as exc:
+                results.append((run_id, f"error:{exc}"))
+                release_gate.set()
+            else:
+                results.append((run_id, "acquired"))
+                release_gate.wait(timeout=2)
+                release_today_lock(paths, lease)
+
+        threads = [threading.Thread(target=acquire, args=(f"run-{index}",)) for index in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual([status for _, status in results].count("acquired"), 1)
+        self.assertEqual([status for _, status in results].count("already_running"), 1)
+
+    def test_today_lock_release_requires_matching_owner(self):
+        paths = _paths(self.agent.root, "2026-05-08")
+        lease = acquire_today_lock(paths, "owner-run")
+        try:
+            self.assertFalse(release_today_lock(paths, {**lease, "ownerToken": "not-the-owner"}))
+            self.assertTrue(paths.lock.exists())
+            self.assertTrue(release_today_lock(paths, lease))
+            self.assertFalse(paths.lock.exists())
+        finally:
+            if paths.lock.exists():
+                release_today_lock(paths, lease)
+
+    def test_today_lock_reclaims_dead_owner_lease(self):
+        paths = _paths(self.agent.root, "2026-05-08")
+        paths.workspace.mkdir(parents=True, exist_ok=True)
+        paths.lock.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "today_analysis_lock.v2",
+                    "runId": "dead-run",
+                    "reportDate": "2026-05-08",
+                    "pid": 999999999,
+                    "ownerToken": "dead-owner",
+                    "startedAt": "2026-05-08T09:00:00+08:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch("today_orchestrator.process_exists", return_value=False):
+            lease = acquire_today_lock(paths, "replacement-run")
+        try:
+            current = json.loads(paths.lock.read_text(encoding="utf-8"))
+            self.assertEqual(current["runId"], "replacement-run")
+            self.assertEqual(current["ownerToken"], lease["ownerToken"])
+            self.assertTrue(list(paths.workspace.glob(".today_analysis.lock.stale.*.json")))
+        finally:
+            release_today_lock(paths, lease)
 
     def test_fund_memory_uses_system_advice_reviews_not_trade_execution(self):
         self.agent.write_json(

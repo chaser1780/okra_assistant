@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +20,36 @@ class EvidenceAndReplayTests(unittest.TestCase):
 
     def tearDown(self):
         self.agent.cleanup()
+
+    def write_trusted_replay_manifest(self, report_date: str, *source_paths: Path) -> None:
+        sources = []
+        for index, path in enumerate(source_paths):
+            relative_path = path.relative_to(self.agent.root).as_posix()
+            sources.append(
+                {
+                    "kind": f"test_source_{index}",
+                    "role": "evaluation" if relative_path.startswith(("db/review_results/", "db/execution_reviews/")) else "decision",
+                    "path": relative_path,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            )
+        self.agent.write_json(
+            "config/historical_replay_trust.json",
+            {
+                "schema_version": "historical_replay_trust.v1",
+                "default_mode": "blocked",
+                "dates": {
+                    report_date: {
+                        "report_date": report_date,
+                        "mode": "trusted",
+                        "learning_eligible": True,
+                        "decision_cutoff": f"{report_date}T23:59:59+08:00",
+                        "sources": sources,
+                    }
+                },
+                "slices": {},
+            },
+        )
 
     def test_retrieve_agent_evidence_prefers_role_relevant_items(self):
         context = {
@@ -113,8 +145,8 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 },
             ],
         }
-        self.agent.write_json("db/portfolio_state/snapshots/2026-03-10.json", portfolio)
-        self.agent.write_json(
+        portfolio_path = self.agent.write_json("db/portfolio_state/snapshots/2026-03-10.json", portfolio)
+        advice_path = self.agent.write_json(
             "db/llm_advice/2026-03-10.json",
             {
                 "market_view": {"regime": "mixed", "summary": "replay", "key_drivers": []},
@@ -134,6 +166,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 ],
             },
         )
+        self.write_trusted_replay_manifest("2026-03-10", advice_path, portfolio_path)
         result = self.agent.run_script(
             "run_replay_experiment.py",
             "--start-date",
@@ -186,8 +219,8 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 },
             ],
         }
-        self.agent.write_json("db/portfolio_state/snapshots/2026-03-10.json", portfolio)
-        self.agent.write_json(
+        portfolio_path = self.agent.write_json("db/portfolio_state/snapshots/2026-03-10.json", portfolio)
+        advice_path = self.agent.write_json(
             "db/llm_advice/2026-03-10.json",
             {
                 "market_view": {"regime": "mixed", "summary": "replay", "key_drivers": []},
@@ -207,7 +240,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 ],
             },
         )
-        self.agent.write_json(
+        validated_path = self.agent.write_json(
             "db/validated_advice/2026-03-10.json",
             {
                 "report_date": "2026-03-10",
@@ -238,7 +271,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 "hold_actions": [],
             },
         )
-        self.agent.write_json(
+        review_path = self.agent.write_json(
             "db/review_results/2026-03-10_T1.json",
             {
                 "source": "advice",
@@ -262,6 +295,7 @@ class EvidenceAndReplayTests(unittest.TestCase):
                 ],
             },
         )
+        self.write_trusted_replay_manifest("2026-03-10", advice_path, portfolio_path, validated_path, review_path)
         result = self.agent.run_script(
             "run_replay_experiment.py",
             "--start-date",
@@ -281,6 +315,75 @@ class EvidenceAndReplayTests(unittest.TestCase):
         signal_rule = next(item for item in ledger["rules"] if item["rule_key"] == "require_signal_confirmation_before_add")
         self.assertGreaterEqual(signal_rule["replay_support_count"], 1)
         self.assertIn("unit_test_learning_replay", ledger["applied_replay_experiments"])
+
+    def test_replay_without_trust_entry_is_skipped(self):
+        self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {"market_view": {}, "cross_fund_observations": [], "fund_decisions": []},
+        )
+
+        result = self.agent.run_script(
+            "run_replay_experiment.py",
+            "--start-date",
+            "2026-03-10",
+            "--end-date",
+            "2026-03-10",
+            "--experiment-name",
+            "untrusted_replay",
+        )
+
+        summary_path = Path(result.stdout.strip().splitlines()[-1])
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        self.assertEqual(summary["daily_results"], [])
+        self.assertEqual(summary["skipped_dates"][0]["reason"], "historical_replay_not_trusted")
+
+    def test_write_learning_rejects_untrusted_batch_before_ledger_write(self):
+        trusted_advice = self.agent.write_json(
+            "db/llm_advice/2026-03-10.json",
+            {"market_view": {}, "cross_fund_observations": [], "fund_decisions": []},
+        )
+        self.agent.write_json(
+            "db/llm_advice/2026-03-11.json",
+            {"market_view": {}, "cross_fund_observations": [], "fund_decisions": []},
+        )
+        self.write_trusted_replay_manifest("2026-03-10", trusted_advice)
+        protected_paths = [
+            self.agent.write_text("db/long_memory/portfolio/learning_ledger.json", "ledger-before"),
+            self.agent.write_text("db/long_memory/exports/compat_review_memory.json", "compat-before"),
+            self.agent.write_text("db/long_memory/memory.sqlite", "memory-before"),
+            self.agent.write_text("db/long_memory/index.sqlite", "index-before"),
+        ]
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in protected_paths}
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.agent.run_script(
+                "run_replay_experiment.py",
+                "--start-date",
+                "2026-03-10",
+                "--end-date",
+                "2026-03-11",
+                "--experiment-name",
+                "blocked_learning_replay",
+                "--write-learning",
+            )
+
+        after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in protected_paths}
+        self.assertEqual(after, before)
+        self.assertTrue((self.agent.root / "db/replay_audits/blocked_learning_replay.json").exists())
+
+    def test_experiment_name_cannot_escape_replay_directory(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.agent.run_script(
+                "run_replay_experiment.py",
+                "--start-date",
+                "2026-03-10",
+                "--end-date",
+                "2026-03-10",
+                "--experiment-name",
+                "../../outside",
+            )
+
+        self.assertFalse((self.agent.root / "outside").exists())
 
 
 if __name__ == "__main__":

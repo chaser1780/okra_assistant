@@ -76,7 +76,7 @@ export function MetricCard({ title, value, body, tone = "neutral" }: { title: st
         <span className="text-xs font-bold text-slate-400">{title}</span>
         <Badge tone={tone}>{toneLabel[tone]}</Badge>
       </div>
-      <div className="metric-number text-2xl font-bold text-slate-50">{value}</div>
+      <div className="metric-number min-w-0 break-words text-2xl font-bold text-slate-50 [overflow-wrap:anywhere]">{value}</div>
       <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-400">{body}</p>
     </Card>
   );

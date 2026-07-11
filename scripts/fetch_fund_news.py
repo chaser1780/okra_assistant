@@ -26,9 +26,10 @@ import requests
 import win32crypt
 from bs4 import BeautifulSoup
 
-from common import dump_json, ensure_layout, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
-from multiagent_utils import call_json_agent
+from common import dump_json, ensure_layout, load_llm_config, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
+from multiagent_utils import call_json_agent, call_responses_text, parse_json_text
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
+from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_provider_payload, build_provider_result, build_source_health_item, normalize_provider_item, resolve_provider_chain
 
 EASTMONEY_NOTICE_API = "https://api.fund.eastmoney.com/f10/JJGG"
@@ -105,6 +106,61 @@ NEWS_CLASSIFICATION_SCHEMA = {
     "required": ["items"],
 }
 
+OPENAI_WEB_SEARCH_NEWS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "published_at": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "source_name": {"type": "string"},
+                    "fund_code": {"type": "string"},
+                    "fund_name": {"type": "string"},
+                    "query_keyword": {"type": "string"},
+                    "query_type": {"type": "string", "enum": ["direct", "theme", "market"]},
+                    "source_role": {"type": "string", "enum": ["fund_news", "theme_news", "market_news"]},
+                    "source_tier": {"type": "string"},
+                    "evidence_type": {"type": "string", "enum": ["fund_news", "theme_news", "market_news", "policy_news", "regulatory_notice"]},
+                    "sentiment_label": {"type": "string", "enum": ["positive", "neutral", "negative", "mixed"]},
+                    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "risk_tags": {"type": "array", "items": {"type": "string"}},
+                    "topic_tags": {"type": "array", "items": {"type": "string"}},
+                    "reason_short": {"type": "string"},
+                    "relevance_score": {"type": "number"},
+                },
+                "required": [
+                    "title",
+                    "url",
+                    "published_at",
+                    "summary",
+                    "source_name",
+                    "fund_code",
+                    "fund_name",
+                    "query_keyword",
+                    "query_type",
+                    "source_role",
+                    "source_tier",
+                    "evidence_type",
+                    "sentiment_label",
+                    "risk_level",
+                    "risk_tags",
+                    "topic_tags",
+                    "reason_short",
+                    "relevance_score",
+                ],
+            },
+        }
+    },
+    "required": ["items"],
+}
+
 
 def canonicalize_url(url: str) -> str:
     raw = str(url or "").strip()
@@ -158,22 +214,47 @@ def parse_article_timestamp(article_url: str) -> str | None:
 def parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    candidate = value
-    if candidate.endswith("Z"):
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if candidate.endswith(("Z", "z")):
         candidate = candidate[:-1] + "+00:00"
     if len(candidate) == 10:
         candidate = f"{candidate}T00:00:00+08:00"
     elif candidate.endswith("T00:00:00"):
         candidate = candidate + "+08:00"
-    return datetime.fromisoformat(candidate)
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=CN_TZ)
+    return parsed.astimezone(CN_TZ)
+
+
+def classify_news_time(published_at: str | None, report_date: str, lookback_hours: int) -> str:
+    published_dt = parse_iso_datetime(published_at)
+    if published_dt is None:
+        return "unknown"
+    report_end = datetime.fromisoformat(f"{report_date}T23:59:59+08:00")
+    if published_dt > report_end:
+        return "future"
+    if published_dt < report_end - timedelta(hours=lookback_hours):
+        return "stale"
+    return "fresh"
 
 
 def within_lookback(published_at: str | None, report_date: str, lookback_hours: int) -> bool:
-    published_dt = parse_iso_datetime(published_at)
-    if published_dt is None:
-        return True
-    report_end = datetime.fromisoformat(f"{report_date}T23:59:59+08:00")
-    return published_dt >= report_end - timedelta(hours=lookback_hours)
+    return classify_news_time(published_at, report_date, lookback_hours) == "fresh"
+
+
+def filter_news_items_by_report_date(items: list[dict], report_date: str, decision_cutoff: str = "") -> list[dict]:
+    return [
+        item
+        for item in items
+        if classify_news_time(str(item.get("published_at", "") or ""), report_date, 168) in {"fresh", "stale"}
+        and timestamp_not_after_cutoff(str(item.get("published_at", "") or ""), decision_cutoff)
+    ]
 
 
 def get_response_with_retry(session: requests.Session, url: str, *, timeout_seconds: int, max_attempts: int = 3, **kwargs) -> requests.Response:
@@ -266,7 +347,8 @@ def annotate_news_item(item: dict, fund: dict, provider_name: str, report_date: 
     source_name = str(item.get("source_name", "") or provider_name)
     category = str(fund.get("category", "") or "")
     evidence_type, source_role, source_tier, sentiment_score, novelty_score, virality_score, historical_significance, crowding_signal = derive_bucket_metadata(title, source_name, category, provider_name)
-    published_at = str(item.get("published_at", "") or f"{report_date}T00:00:00+08:00")
+    published_dt = parse_iso_datetime(str(item.get("published_at", "") or ""))
+    published_at = published_dt.isoformat(timespec="seconds") if published_dt else ""
     entity_id = str(item.get("code", "") or fund.get("code", ""))
     confidence = float(item.get("confidence", 0.0) or 0.0)
     if confidence <= 0:
@@ -659,11 +741,11 @@ def resolve_cookie_with_auto_sync(agent_home: Path, settings: dict, platform: st
     return cookie_value, {"source": source, "synced": synced, "probe_ok": probe_ok, "probe_detail": detail, "tried": tried}
 
 
-def parse_xueqiu_time(value) -> str:
+def parse_xueqiu_time(value) -> str | None:
     try:
         numeric = int(value)
     except (TypeError, ValueError):
-        return timestamp_now()
+        return None
     if numeric > 10_000_000_000:
         numeric = numeric / 1000
     return datetime.fromtimestamp(numeric, tz=CN_TZ).isoformat(timespec="seconds")
@@ -861,7 +943,12 @@ def compute_heat_metrics(items: list[dict]) -> None:
             topic_counter[str(keyword)] += 1
         source_counter[canonical_key].add(str(item.get("source_name", "") or item.get("provider", "")))
     scored: list[tuple[float, dict]] = []
-    now = max((parse_iso_datetime(str(item.get("published_at", "") or "")) for item in items), default=None)
+    published_times = [
+        parsed
+        for item in items
+        if (parsed := parse_iso_datetime(str(item.get("published_at", "") or ""))) is not None
+    ]
+    now = max(published_times, default=None)
     for item in items:
         canonical_key = str(item.get("canonical_url", "") or item.get("content_hash", "") or item.get("title", ""))
         topic_hits = sum(topic_counter[str(keyword)] for keyword in item.get("matched_keywords", []) or [])
@@ -949,7 +1036,7 @@ def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
 def parse_rss_datetime(value: str | None, report_date: str) -> str:
     candidate = str(value or "").strip()
     if not candidate:
-        return f"{report_date}T00:00:00+08:00"
+        return ""
     if re.match(r"^\d{4}-\d{2}-\d{2}(?:[T\s]|$)", candidate):
         parsed = parse_iso_datetime(candidate)
         if parsed is not None:
@@ -959,17 +1046,17 @@ def parse_rss_datetime(value: str | None, report_date: str) -> str:
             dt = datetime.strptime(candidate, fmt)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=CN_TZ)
-            return dt.isoformat(timespec="seconds")
+            return dt.astimezone(CN_TZ).isoformat(timespec="seconds")
         except ValueError:
             continue
     try:
         dt = parsedate_to_datetime(candidate)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=CN_TZ)
-        return dt.isoformat(timespec="seconds")
+        return dt.astimezone(CN_TZ).isoformat(timespec="seconds")
     except (TypeError, ValueError, IndexError):
         pass
-    return f"{report_date}T00:00:00+08:00"
+    return ""
 
 
 def fetch_xml_text(url: str, *, timeout_seconds: int) -> str:
@@ -1052,13 +1139,19 @@ def rss_feed_role(feed: dict, feed_name: str, query: dict) -> tuple[str, str, st
 def normalize_rss_news_item(raw_item: dict, query: dict, *, feed_name: str, provider_name: str, report_date: str, feed: dict | None = None) -> list[dict]:
     source_role, evidence_type, source_tier = rss_feed_role(feed or {}, feed_name, query)
     mapping_mode = "market_background" if source_role == "market_news" else ("direct_fund" if source_role == "fund_news" else "theme_match")
-    stale = not within_lookback(str(raw_item.get("published_at", "")), report_date, 96)
+    published_at = str(raw_item.get("published_at", "") or "")
+    time_status = classify_news_time(published_at, report_date, 96)
+    if time_status in {"future", "unknown"}:
+        return []
+    published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
+    stale = time_status == "stale"
     normalized = []
     for fund_code, fund_name in fund_names_for_query(query):
         normalized.append(
             normalize_provider_item(
                 {
                     **raw_item,
+                    "published_at": published_at,
                     "code": fund_code,
                     "name": fund_name,
                     "matched_keywords": [str(query.get("keyword", "") or "")],
@@ -1082,8 +1175,8 @@ def normalize_rss_news_item(raw_item: dict, query: dict, *, feed_name: str, prov
                 entity_type="fund",
                 source_url=str(raw_item.get("url", "")),
                 source_title=str(raw_item.get("title", "")),
-                as_of=str(raw_item.get("published_at", "")),
-                freshness_status="stale" if stale else "fresh",
+                as_of=published_at,
+                freshness_status=time_status,
                 stale=stale,
                 confidence=0.57,
                 source_role=source_role,
@@ -1199,7 +1292,7 @@ def parse_sse_general_announcements(html_text: str, feed_url: str, report_date: 
             continue
         seen.add(url)
         match = re.search(r"c_(\d{8})_", url)
-        published_at = f"{report_date}T00:00:00+08:00"
+        published_at = ""
         if match:
             date_text = match.group(1)
             published_at = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:8]}T00:00:00+08:00"
@@ -1228,7 +1321,7 @@ def parse_amac_notice_board(html_text: str, feed_url: str, report_date: str) -> 
         if url in seen:
             continue
         seen.add(url)
-        published_at = f"{report_date}T00:00:00+08:00"
+        published_at = ""
         match = re.search(r"/(20\d{2})(\d{2})/(?:t|P)20\d+", href)
         if match:
             published_at = f"{match.group(1)}-{match.group(2)}-01T00:00:00+08:00"
@@ -1272,7 +1365,7 @@ def parse_szse_report_json(json_text: str, feed_url: str, report_date: str) -> l
                 continue
             code = str(item.get("gsdm") or item.get("gkxx_gsdm") or item.get("xx_gsdm") or "").strip()
             company = str(item.get("gsjc") or item.get("gkxx_gsjc") or item.get("jc_gsjc") or "").strip()
-            event_date = str(item.get("fhrq") or item.get("gkxx_gdrq") or item.get("xx_fwrq") or report_date).strip()[:10]
+            event_date = str(item.get("fhrq") or item.get("gkxx_gdrq") or item.get("xx_fwrq") or "").strip()[:10]
             category = str(item.get("hjlb") or item.get("gkxx_jgcs") or item.get("xx_cflb") or tab_name or "监管信息").strip()
             explicit_title = extract_plain_text(str(item.get("xx_bt") or item.get("title") or ""))
             title = explicit_title or " ".join(part for part in (company, category) if part)
@@ -1287,7 +1380,7 @@ def parse_szse_report_json(json_text: str, feed_url: str, report_date: str) -> l
                 {
                     "title": title[:120],
                     "summary": " | ".join(part for part in (code, company, category, tab_name) if part)[:240] or title[:240],
-                    "published_at": f"{event_date or report_date}T00:00:00+08:00",
+                    "published_at": f"{event_date}T00:00:00+08:00" if event_date else "",
                     "url": url or feed_url,
                 }
             )
@@ -1317,7 +1410,7 @@ def parse_szse_notice_page(html_text: str, feed_url: str, report_date: str) -> l
         if url in seen:
             continue
         seen.add(url)
-        published_at = f"{report_date}T00:00:00+08:00"
+        published_at = ""
         match = re.search(r"(20\d{2})[-_/]?(\d{2})[-_/]?(\d{2})", href)
         if match:
             published_at = f"{match.group(1)}-{match.group(2)}-{match.group(3)}T00:00:00+08:00"
@@ -1332,11 +1425,15 @@ def parse_szse_notice_page(html_text: str, feed_url: str, report_date: str) -> l
     return rows
 
 
-def normalize_regulatory_item(raw_item: dict, *, provider_name: str, feed_name: str, report_date: str) -> dict:
+def normalize_regulatory_item(raw_item: dict, *, provider_name: str, feed_name: str, report_date: str) -> dict | None:
     title = str(raw_item.get("title", "") or "")
     summary = str(raw_item.get("summary", "") or title)
-    published_at = str(raw_item.get("published_at", "") or f"{report_date}T00:00:00+08:00")
-    stale = not within_lookback(published_at, report_date, 168)
+    published_at = str(raw_item.get("published_at", "") or "")
+    time_status = classify_news_time(published_at, report_date, 168)
+    if time_status in {"future", "unknown"}:
+        return None
+    published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
+    stale = time_status == "stale"
     impact = "negative" if any(keyword in title for keyword in HIGH_RISK_KEYWORDS) else "neutral"
     risk_level = "high" if any(keyword in title for keyword in HIGH_RISK_KEYWORDS) else "medium"
     return normalize_provider_item(
@@ -1377,7 +1474,7 @@ def normalize_regulatory_item(raw_item: dict, *, provider_name: str, feed_name: 
         source_url=str(raw_item.get("url", "") or ""),
         source_title=title,
         as_of=published_at,
-        freshness_status="stale" if stale else "fresh",
+        freshness_status=time_status,
         stale=stale,
         confidence=0.88,
         source_role="regulatory_news",
@@ -1428,8 +1525,10 @@ def fetch_regulatory_news(settings: dict, report_date: str) -> tuple[list[dict],
                     rows = []
             raw_item_count = len(rows)
             for raw_item in rows:
-                items.append(normalize_regulatory_item(raw_item, provider_name=provider_name, feed_name=feed_name, report_date=report_date))
-                normalized_count += 1
+                normalized = normalize_regulatory_item(raw_item, provider_name=provider_name, feed_name=feed_name, report_date=report_date)
+                if normalized is not None:
+                    items.append(normalized)
+                    normalized_count += 1
         except Exception as exc:
             errors.append(str(exc))
         status = "ok" if normalized_count > 0 and not errors else "warning"
@@ -1499,11 +1598,11 @@ def extract_xueqiu_status_items(payload: dict) -> list[dict]:
     return candidates
 
 
-def parse_douyin_time(value) -> str:
+def parse_douyin_time(value) -> str | None:
     try:
         numeric = int(value)
     except (TypeError, ValueError):
-        return timestamp_now()
+        return None
     return datetime.fromtimestamp(numeric, tz=CN_TZ).isoformat(timespec="seconds")
 
 
@@ -1548,18 +1647,15 @@ def extract_douyin_aweme_items(payload: dict) -> list[dict]:
     return items
 
 
-def parse_eastmoney_article_time(value: str | None) -> str:
+def parse_eastmoney_article_time(value: str | None) -> str | None:
     if not value:
-        return timestamp_now()
+        return None
     candidate = str(value).strip()
     try:
         return datetime.strptime(candidate, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ).isoformat(timespec="seconds")
     except ValueError:
-        try:
-            parsed = parse_iso_datetime(candidate)
-        except ValueError:
-            parsed = None
-        return parsed.isoformat(timespec="seconds") if parsed else timestamp_now()
+        parsed = parse_iso_datetime(candidate)
+        return parsed.isoformat(timespec="seconds") if parsed else None
 
 
 def extract_eastmoney_search_items(payload: dict) -> list[dict]:
@@ -1644,13 +1740,19 @@ def normalize_query_news_item(raw_item: dict, query: dict, *, source_role: str, 
     evidence_type = "market_news" if source_role == "market_news" else "theme_news"
     source_tier = "market_media" if source_role == "market_news" else "financial_media"
     mapping_mode = "market_background" if source_role == "market_news" else "theme_match"
+    published_at = str(raw_item.get("published_at", "") or "")
+    time_status = classify_news_time(published_at, report_date, 96)
+    if time_status in {"future", "unknown"}:
+        return []
+    published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
     normalized = []
-    stale = not within_lookback(str(raw_item.get("published_at", "")), report_date, 96)
+    stale = time_status == "stale"
     for fund_code, fund_name in fund_names_for_query(query):
         normalized.append(
             normalize_provider_item(
                 {
                     **raw_item,
+                    "published_at": published_at,
                     "code": fund_code,
                     "name": fund_name,
                     "matched_keywords": [keyword],
@@ -1674,8 +1776,8 @@ def normalize_query_news_item(raw_item: dict, query: dict, *, source_role: str, 
                 entity_type="fund",
                 source_url=str(raw_item.get("url", "")),
                 source_title=str(raw_item.get("title", "")),
-                as_of=str(raw_item.get("published_at", "")),
-                freshness_status="stale" if stale else "fresh",
+                as_of=published_at,
+                freshness_status=time_status,
                 stale=stale,
                 confidence=0.62 if query_matches_item(keyword, raw_item) else 0.45,
                 source_role=source_role,
@@ -1768,6 +1870,310 @@ def fetch_eastmoney_query_news(settings: dict, report_date: str, query_plan: dic
             "duplicate_item_count": dedup_stats["duplicate_item_count"],
             "dedup_drop_count": dedup_stats["dedup_drop_count"],
             "stale_item_count": sum(1 for item in items if bool(item.get("stale", False))),
+        },
+    )
+
+
+def _openai_web_search_queries(settings: dict, query_plan: dict) -> list[dict]:
+    provider_settings = settings.get("providers", {}).get("openai_web_search_news", {}) or {}
+    include_direct = bool(provider_settings.get("include_direct_queries", True))
+    query_buckets: list[tuple[str, list[dict]]] = []
+    if include_direct:
+        query_buckets.append(("fund_news", list(query_plan.get("direct_queries", []) or [])))
+    query_buckets.extend(
+        [
+            ("theme_news", list(query_plan.get("theme_queries", []) or [])),
+            ("market_news", list(query_plan.get("market_queries", []) or [])),
+        ]
+    )
+    max_queries = int(provider_settings.get("max_queries", 6) or 6)
+    per_bucket_limit = int(provider_settings.get("max_queries_per_bucket", max(1, max_queries // max(1, len(query_buckets)))) or 1)
+    selected: list[dict] = []
+    used_queries = 0
+    for source_role, queries in query_buckets:
+        used_bucket_queries = 0
+        for query in queries:
+            if used_queries >= max_queries or used_bucket_queries >= per_bucket_limit:
+                break
+            keyword = str(query.get("keyword", "") or "").strip()
+            if len(keyword) < 2:
+                continue
+            selected.append({**query, "_source_role": source_role})
+            used_queries += 1
+            used_bucket_queries += 1
+    return selected
+
+
+def _openai_web_search_tool_candidates(provider_settings: dict) -> list[str]:
+    configured = provider_settings.get("tool_types", provider_settings.get("tool_type", "web_search"))
+    if isinstance(configured, str):
+        values = [item.strip() for item in configured.split(",") if item.strip()]
+    else:
+        values = [str(item).strip() for item in configured or [] if str(item).strip()]
+    if not values:
+        values = ["web_search"]
+    for fallback in ("web_search", "web_search_preview"):
+        if fallback not in values:
+            values.append(fallback)
+    return values
+
+
+def build_openai_web_search_prompt(queries: list[dict], report_date: str, *, results_per_query: int, freshness_days: int) -> str:
+    rows = []
+    for query in queries:
+        rows.append(
+            {
+                "keyword": query.get("keyword", ""),
+                "query_type": query.get("query_type", ""),
+                "source_role": query.get("_source_role", ""),
+                "fund_codes": list(query.get("fund_codes", []) or []),
+                "fund_names": list(query.get("fund_names", []) or []),
+                "style_groups": list(query.get("style_groups", []) or []),
+                "theme_families": list(query.get("theme_families", []) or []),
+            }
+        )
+    return (
+        "Search the public web for current fund, theme, and market news relevant to this portfolio. "
+        "Return strict JSON only, matching the requested schema. Prefer reputable financial media, official fund/company pages, exchanges, regulators, and primary sources. "
+        "Avoid duplicated stories, low-quality clickbait, uncited claims, and stale pages. "
+        f"Report date: {report_date}. Prefer items within {freshness_days} days. "
+        f"Return at most {results_per_query} items per query, mapped to the provided fund_codes. "
+        "For market-wide news, map it to all relevant fund_codes in the query. "
+        "Use source_role=fund_news for direct fund items, theme_news for sector/theme items, and market_news for macro/index/currency/global items. "
+        "Use evidence_type=policy_news only for policy or regulator-driven items, and regulatory_notice only for official enforcement/notice pages.\n"
+        + json.dumps({"queries": rows}, ensure_ascii=False)
+    )
+
+
+def build_openai_web_search_payload(config: dict, provider_settings: dict, queries: list[dict], report_date: str, tool_type: str) -> dict:
+    results_per_query = int(provider_settings.get("results_per_query", 2) or 2)
+    freshness_days = int(provider_settings.get("freshness_days", 7) or 7)
+    model = str(provider_settings.get("model", "") or config.get("model", "") or "")
+    payload = {
+        "model": model,
+        "stream": True,
+        "store": False,
+        "tools": [{"type": tool_type}],
+        "reasoning": {"effort": str(provider_settings.get("reasoning_effort", "low") or "low")},
+        "input": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "You are a conservative financial news retrieval assistant. "
+                            "Use web search for retrieval, then output only JSON. "
+                            "Do not invent URLs, dates, sources, or fund mappings."
+                        ),
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_openai_web_search_prompt(
+                            queries,
+                            report_date,
+                            results_per_query=results_per_query,
+                            freshness_days=freshness_days,
+                        ),
+                    }
+                ],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "openai_web_search_news",
+                "schema": OPENAI_WEB_SEARCH_NEWS_SCHEMA,
+                "strict": True,
+            },
+            "verbosity": "low",
+        },
+    }
+    if provider_settings.get("max_output_tokens") is not None:
+        payload["max_output_tokens"] = int(provider_settings.get("max_output_tokens") or 0)
+    if provider_settings.get("temperature") is not None:
+        payload["temperature"] = float(provider_settings.get("temperature") or 0.0)
+    return payload
+
+
+def parse_openai_web_search_output(output_text: str) -> list[dict]:
+    parsed = parse_json_text(output_text)
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    if isinstance(parsed, dict):
+        return [item for item in parsed.get("items", []) or [] if isinstance(item, dict)]
+    return []
+
+
+def normalize_openai_web_search_item(raw_item: dict, *, report_date: str, citation_urls: set[str] | None = None) -> dict | None:
+    title = extract_plain_text(str(raw_item.get("title", "") or ""))[:120]
+    url = str(raw_item.get("url", "") or "").strip()
+    fund_code = str(raw_item.get("fund_code", "") or raw_item.get("code", "") or "").strip()
+    if not title or not url or not fund_code:
+        return None
+    canonical_url = canonical_citation_url(url)
+    if citation_urls is not None and canonical_url not in citation_urls:
+        return None
+    fund_name = str(raw_item.get("fund_name", "") or raw_item.get("name", "") or fund_code)
+    published_at = str(raw_item.get("published_at", "") or "")
+    time_status = classify_news_time(published_at, report_date, 168)
+    if time_status in {"future", "unknown"}:
+        return None
+    published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
+    summary = extract_plain_text(str(raw_item.get("summary", "") or title))[:280]
+    source_role = str(raw_item.get("source_role", "") or "theme_news")
+    if source_role not in {"fund_news", "theme_news", "market_news"}:
+        source_role = "theme_news"
+    evidence_type = str(raw_item.get("evidence_type", "") or ("market_news" if source_role == "market_news" else "theme_news"))
+    if evidence_type not in {"fund_news", "theme_news", "market_news", "policy_news", "regulatory_notice"}:
+        evidence_type = "market_news" if source_role == "market_news" else "theme_news"
+    source_tier = str(raw_item.get("source_tier", "") or ("market_media" if source_role == "market_news" else "financial_media"))
+    query_type = str(raw_item.get("query_type", "") or "")
+    mapping_mode = "market_background" if source_role == "market_news" else ("direct_fund" if source_role == "fund_news" else "theme_match")
+    stale = time_status == "stale"
+    sentiment_label = str(raw_item.get("sentiment_label", "") or "neutral")
+    risk_level = str(raw_item.get("risk_level", "") or "low")
+    impact = impact_from_classification(sentiment_label, risk_level)
+    return normalize_provider_item(
+        {
+            "code": fund_code,
+            "name": fund_name,
+            "title": title,
+            "summary": summary,
+            "published_at": published_at,
+            "source_name": str(raw_item.get("source_name", "") or urllib.parse.urlparse(url).netloc or "openai_web_search"),
+            "url": url,
+            "matched_keywords": [str(raw_item.get("query_keyword", "") or "").strip()] if raw_item.get("query_keyword") else [],
+            "source_role": source_role,
+            "source_tier": source_tier,
+            "mapping_mode": mapping_mode,
+            "evidence_type": evidence_type,
+            "query_type": query_type,
+            "sentiment_label": sentiment_label,
+            "risk_level": risk_level,
+            "risk_tags": list(raw_item.get("risk_tags", []) or []),
+            "topic_tags": list(raw_item.get("topic_tags", []) or []),
+            "sentiment_score": -0.45 if sentiment_label == "negative" else (0.35 if sentiment_label == "positive" else 0.0),
+            "novelty_score": 0.76,
+            "virality_score": 0.22,
+            "historical_significance": 0.55 if evidence_type in {"policy_news", "regulatory_notice", "market_news"} else 0.25,
+            "crowding_signal": "neutral",
+            "classification_status": "web_search_structured",
+            "citation_verified": citation_urls is not None,
+            "classifier": "openai_web_search",
+            "classifier_version": CLASSIFIER_VERSION,
+            "is_policy_signal": evidence_type in {"policy_news", "regulatory_notice"},
+            "is_hype_signal": False,
+            "reason_short": str(raw_item.get("reason_short", "") or "openai web search"),
+            "impact": impact,
+            "relevance_score": max(0.0, min(1.0, float(raw_item.get("relevance_score", 0.62) or 0.62))),
+        },
+        provider_name="openai_web_search",
+        entity_id=fund_code,
+        entity_type="fund",
+        source_url=url,
+        source_title=title,
+        as_of=published_at,
+        freshness_status=time_status,
+        stale=stale,
+        confidence=max(0.0, min(1.0, float(raw_item.get("relevance_score", 0.62) or 0.62))),
+        source_role=source_role,
+        source_tier=source_tier,
+        mapping_mode=mapping_mode,
+        evidence_type=evidence_type,
+    )
+
+
+def fetch_openai_web_search_news(agent_home: Path, settings: dict, report_date: str, query_plan: dict) -> tuple[list[dict], dict]:
+    provider_settings = settings.get("providers", {}).get("openai_web_search_news", {}) or {}
+    if not bool(provider_settings.get("enabled", False)):
+        return [], build_source_health_item(
+            source_key="openai_web_search:openai_web_search",
+            source_role="theme_news",
+            provider="openai_web_search",
+            configured=False,
+            status="disabled",
+            notes=["openai web search provider disabled"],
+        )
+    queries = _openai_web_search_queries(settings, query_plan)
+    if not queries:
+        return [], build_source_health_item(
+            source_key="openai_web_search:openai_web_search",
+            source_role="theme_news",
+            provider="openai_web_search",
+            configured=True,
+            status="warning",
+            notes=["no eligible web search queries"],
+            warning_count=1,
+        )
+    timeout_seconds = int(provider_settings.get("timeout_seconds", 90) or 90)
+    max_attempts = int(provider_settings.get("max_attempts", 1) or 1)
+    errors: list[str] = []
+    raw_rows: list[dict] = []
+    citation_urls: set[str] = set()
+    selected_tool = ""
+    config = load_llm_config(agent_home)
+    for tool_type in _openai_web_search_tool_candidates(provider_settings):
+        payload = build_openai_web_search_payload(config, provider_settings, queries, report_date, tool_type)
+        try:
+            response = call_responses_text(
+                config,
+                payload,
+                request_kind="openai_web_search_news",
+                max_attempts=max_attempts,
+                agent_home=agent_home,
+                timeout=(10, timeout_seconds),
+            )
+            raw_rows = parse_openai_web_search_output(str(response.get("output_text", "") or ""))
+            citation_urls = extract_web_search_citation_urls(response)
+            selected_tool = tool_type
+            break
+        except Exception as exc:
+            errors.append(f"{tool_type}: {exc}")
+    items = []
+    for raw_item in raw_rows:
+        normalized = normalize_openai_web_search_item(raw_item, report_date=report_date, citation_urls=citation_urls)
+        if normalized:
+            items.append(normalized)
+    dedup_window_hours = int(provider_settings.get("dedup_window_hours", 12) or 12)
+    items, dedup_stats = dedupe_news_items(items, dedup_window_hours=dedup_window_hours)
+    status = "ok" if items and not errors else ("warning" if errors or not items else "ok")
+    notes = [
+        f"queries_used={len(queries)}",
+        f"raw_item_count={len(raw_rows)}",
+        f"mapped_item_count={dedup_stats['mapped_item_count']}",
+        f"unique_item_count={dedup_stats['unique_item_count']}",
+        f"selected_tool={selected_tool or 'none'}",
+        f"citation_url_count={len(citation_urls)}",
+        f"unverified_item_count={max(0, len(raw_rows) - len(items))}",
+        *errors[:4],
+    ]
+    return items, build_source_health_item(
+        source_key="openai_web_search:openai_web_search",
+        source_role="theme_news",
+        provider="openai_web_search",
+        items=items,
+        configured=True,
+        status=status,
+        notes=notes,
+        error_count=len(errors),
+        warning_count=1 if status == "warning" else 0,
+        metrics={
+            "queries_used": len(queries),
+            "raw_item_count": len(raw_rows),
+            "mapped_item_count": dedup_stats["mapped_item_count"],
+            "unique_item_count": dedup_stats["unique_item_count"],
+            "duplicate_item_count": dedup_stats["duplicate_item_count"],
+            "dedup_drop_count": dedup_stats["dedup_drop_count"],
+            "stale_item_count": sum(1 for item in items if bool(item.get("stale", False))),
+            "selected_tool": selected_tool,
+            "citation_url_count": len(citation_urls),
+            "unverified_item_count": max(0, len(raw_rows) - len(items)),
         },
     )
 
@@ -1957,11 +2363,17 @@ def fetch_xueqiu_items(agent_home: Path, settings: dict, report_date: str, queri
             payload = response.json()
             extracted = extract_xueqiu_status_items(payload)
             for raw_item in extracted[:results_per_keyword]:
+                published_at = str(raw_item.get("published_at", "") or "")
+                time_status = classify_news_time(published_at, report_date, int(sentiment_settings.get("lookback_hours", 48) or 48))
+                if time_status in {"future", "unknown"}:
+                    continue
+                published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
                 for fund_code, fund_name in zip(query["fund_codes"], query["fund_names"] or query["fund_codes"]):
                     items.append(
                         normalize_provider_item(
                             {
                                 **raw_item,
+                                "published_at": published_at,
                                 "code": fund_code,
                                 "name": fund_name,
                                 "matched_keywords": [query["keyword"]],
@@ -1979,9 +2391,9 @@ def fetch_xueqiu_items(agent_home: Path, settings: dict, report_date: str, queri
                             entity_type="fund",
                             source_url=str(raw_item.get("url", "")),
                             source_title=str(raw_item.get("title", "")),
-                            as_of=str(raw_item.get("published_at", "")),
-                            freshness_status="fresh",
-                            stale=not within_lookback(str(raw_item.get("published_at", "")), report_date, int(sentiment_settings.get("lookback_hours", 48) or 48)),
+                            as_of=published_at,
+                            freshness_status=time_status,
+                            stale=time_status == "stale",
                             confidence=0.66,
                             source_role="sentiment_news",
                             source_tier="social_post",
@@ -2066,11 +2478,17 @@ def fetch_douyin_items(agent_home: Path, settings: dict, report_date: str, queri
             if not extracted and (payload.get("search_nil_info", {}) or {}).get("search_nil_type") == "verify_check":
                 errors.append(f"douyin verify_check keyword={query['keyword']}")
             for raw_item in extracted[:results_per_keyword]:
+                published_at = str(raw_item.get("published_at", "") or "")
+                time_status = classify_news_time(published_at, report_date, int(sentiment_settings.get("lookback_hours", 48) or 48))
+                if time_status in {"future", "unknown"}:
+                    continue
+                published_at = parse_iso_datetime(published_at).isoformat(timespec="seconds")
                 for fund_code, fund_name in zip(query["fund_codes"], query["fund_names"] or query["fund_codes"]):
                     items.append(
                         normalize_provider_item(
                             {
                                 **raw_item,
+                                "published_at": published_at,
                                 "code": fund_code,
                                 "name": fund_name,
                                 "matched_keywords": [query["keyword"]],
@@ -2089,9 +2507,9 @@ def fetch_douyin_items(agent_home: Path, settings: dict, report_date: str, queri
                             entity_type="fund",
                             source_url=str(raw_item.get("url", "")),
                             source_title=str(raw_item.get("title", "")),
-                            as_of=str(raw_item.get("published_at", "")),
-                            freshness_status="fresh",
-                            stale=not within_lookback(str(raw_item.get("published_at", "")), report_date, int(sentiment_settings.get("lookback_hours", 48) or 48)),
+                            as_of=published_at,
+                            freshness_status=time_status,
+                            stale=time_status == "stale",
                             confidence=0.64,
                             source_role="sentiment_news",
                             source_tier="social_short_video",
@@ -2140,6 +2558,7 @@ def main() -> None:
     parser.add_argument("--date", help="Report date in YYYY-MM-DD format.")
     parser.add_argument("--provider", help="Override the configured news provider name.")
     parser.add_argument("--demo", action="store_true", help="Write deterministic mock data.")
+    parser.add_argument("--decision-cutoff", default="", help="Optional timezone-aware cutoff; same-day news after it is excluded.")
     args = parser.parse_args()
 
     agent_home = resolve_agent_home(args.agent_home)
@@ -2194,6 +2613,14 @@ def main() -> None:
         regulatory_items, regulatory_health = fetch_regulatory_news(settings, report_date)
         items.extend(regulatory_items)
         source_health.extend(regulatory_health)
+        web_search_items, web_search_health = fetch_openai_web_search_news(agent_home, settings, report_date, query_plan)
+        items.extend(web_search_items)
+        source_health.append(web_search_health)
+    if args.decision_cutoff:
+        cutoff = parse_iso_datetime(args.decision_cutoff)
+        if cutoff is None or cutoff.tzinfo is None or cutoff.date().isoformat() != report_date:
+            raise SystemExit("--decision-cutoff must be a timezone-aware timestamp on the report date")
+    items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
     dedup_window_hours = int((settings.get("providers", {}).get("query_news", {}) or {}).get("dedup_window_hours", 12) or 12)
     items, dedup_stats = dedupe_news_items(items, dedup_window_hours=dedup_window_hours)
     items, classification_summary = classify_news_with_llm(agent_home, settings, items)
@@ -2235,6 +2662,7 @@ def main() -> None:
     else:
         source_health.extend(disabled_social_source_health(provider) for provider in sentiment_provider_chain if provider in {"xueqiu_web", "douyin_web"})
 
+    items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
     global_dedup_summary = news_dedup_summary(items, dedup_window_hours=dedup_window_hours)
     items.sort(key=lambda item: item.get("published_at", ""), reverse=True)
     payload = build_provider_payload(

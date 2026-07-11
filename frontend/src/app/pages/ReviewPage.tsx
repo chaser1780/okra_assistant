@@ -26,6 +26,7 @@ export function ReviewPage({
   const [tab, setTab] = useState<TabKey>("pending");
   const [noteById, setNoteById] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState("");
+  const trust = review.trust;
   const tabRecords = useMemo(() => {
     if (tab === "pending") return longMemory.pending;
     return longMemory[tab];
@@ -42,14 +43,33 @@ export function ReviewPage({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <section className="flex flex-wrap items-center justify-between gap-3 border-y border-slate-800 bg-slate-950/40 px-4 py-3">
+        <div>
+          <div className="text-sm font-bold text-slate-100">学习可信状态</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {trust?.latestReplayAuditPath || trust?.manifestPath || "尚无历史回放信任清单"}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={trust?.mode === "trusted" ? "success" : trust?.mode === "structural_only" ? "warning" : "danger"}>
+            {trust?.mode || "blocked"}
+          </Badge>
+          <Badge tone={trust?.learningEligible ? "info" : "neutral"}>
+            {trust?.learningEligible ? "可进入学习候选" : "不可学习"}
+          </Badge>
+          <Badge tone={trust?.trustedForLearning ? "success" : "warning"}>
+            {trust?.trustedForLearning ? "审计通过" : "尚未通过审计"}
+          </Badge>
+        </div>
+      </section>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {review.metrics.map((metric) => (
           <MetricCard key={metric.title} {...metric} />
         ))}
       </div>
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-3 p-4">
+        <Card className="col-span-12 p-4 xl:col-span-3">
           <SectionTitle title="长期记忆总览" meta={longMemory.updatedAt} />
           <div className="space-y-2">
             <CountLine label="基金画像" value={longMemory.counts.fund ?? 0} />
@@ -60,15 +80,15 @@ export function ReviewPage({
           </div>
         </Card>
 
-        <Card className="col-span-9 p-4">
-          <div className="mb-4 flex items-center justify-between gap-4">
+        <Card className="col-span-12 p-4 xl:col-span-9">
+          <div className="mb-4 flex flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-center">
             <SectionTitle title="长期记忆中心" meta="本地 SQLite/JSON 为真实源；全文检索和向量仅作为索引层" />
-            <div className="flex rounded-md border border-slate-800 bg-slate-950 p-1">
+            <div className="grid w-full grid-cols-2 rounded-md border border-slate-800 bg-slate-950 p-1 sm:w-auto sm:grid-cols-4">
               {tabs.map((item) => (
                 <button
                   key={item.key}
                   onClick={() => setTab(item.key)}
-                  className={`h-8 rounded px-3 text-xs font-bold transition ${
+                  className={`h-8 min-w-0 rounded px-2 text-xs font-bold transition sm:px-3 ${
                     tab === item.key ? "bg-cyan-500/20 text-cyan-100" : "text-slate-500 hover:text-slate-200"
                   }`}
                 >
@@ -102,7 +122,7 @@ export function ReviewPage({
       </section>
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-4 p-4">
+        <Card className="col-span-12 p-4 md:col-span-4">
           <SectionTitle title="旧复盘摘要" meta={review.meta} />
           <ul className="space-y-2 text-sm leading-6 text-slate-400">
             {lines(review.summary_text).slice(0, 10).map((item) => (
@@ -110,7 +130,7 @@ export function ReviewPage({
             ))}
           </ul>
         </Card>
-        <Card className="col-span-4 p-4">
+        <Card className="col-span-12 p-4 md:col-span-4">
           <SectionTitle title="兼容永久规则" />
           <ul className="space-y-2 text-sm leading-6 text-slate-400">
             {(review.core_lines.length ? review.core_lines : ["暂无兼容规则"]).map((item) => (
@@ -118,7 +138,7 @@ export function ReviewPage({
             ))}
           </ul>
         </Card>
-        <Card className="col-span-4 p-4">
+        <Card className="col-span-12 p-4 md:col-span-4">
           <SectionTitle title="重放学习" />
           <ul className="space-y-2 text-sm leading-6 text-slate-400">
             {(review.replay_lines.length ? review.replay_lines : ["暂无重放实验"]).map((item) => (
@@ -164,7 +184,7 @@ function MemoryCard({
   const canApprove = canApprovePermanent(record);
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-slate-100">{memoryTitle(record.title)}</h3>
@@ -179,7 +199,7 @@ function MemoryCard({
             </p>
           ) : null}
         </div>
-        <div className="metric-number shrink-0 text-right text-xs text-slate-500">
+        <div className="metric-number shrink-0 text-left text-xs text-slate-500 sm:text-right">
           <div>置信度 {(Number(record.confidence || 0) * 100).toFixed(0)}%</div>
           <div>
             支持 {record.support_count} / 反例 {record.contradiction_count}

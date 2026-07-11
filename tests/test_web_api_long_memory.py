@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from http.server import ThreadingHTTPServer
 
-from app.web_api import ContractRequestHandler, OkraWebApi, cors_origin_value, is_allowed_origin
+import app.web_api as web_api_module
+from app.web_api import ContractRequestHandler, OkraWebApi, cors_origin_value, is_allowed_origin, is_loopback_host
 from app.web_api_services import ExecutionController, TaskController
 from helpers import TempAgentHome
 from long_memory_store import stable_memory_id, upsert_memory_record
@@ -215,6 +216,45 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertEqual(result["record"]["status"], "permanent")
         self.assertEqual(result["record"]["approved_by"], "user")
 
+    def test_learning_derived_memory_requires_trusted_lineage_for_approval(self):
+        memory_id = stable_memory_id("portfolio", "replay_rule", "Replay rule", "portfolio_policy_memory")
+        upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_id": memory_id,
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "replay_rule",
+                "title": "Replay rule",
+                "text": "Derived from replay evidence.",
+                "status": "strategic",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "legacy-replay"},
+            },
+        )
+        api = OkraWebApi(self.agent.root)
+
+        with self.assertRaises(ValueError):
+            api.long_memory_action({"memoryId": memory_id, "action": "approve"})
+
+        trusted_id = stable_memory_id("portfolio", "trusted_replay_rule", "Trusted replay rule", "portfolio_policy_memory")
+        upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_id": trusted_id,
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "trusted_replay_rule",
+                "title": "Trusted replay rule",
+                "text": "Derived from a trusted replay.",
+                "status": "strategic",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "trusted-replay", "learning_trust_status": "trusted"},
+            },
+        )
+        result = api.long_memory_action({"memoryId": trusted_id, "action": "approve"})
+        self.assertEqual("permanent", result["record"]["status"])
+
     def test_contract_handler_wraps_page_payload_in_envelope(self):
         payload = self._request_json("/api/today")
         self.assertTrue(payload["ok"])
@@ -229,6 +269,13 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertIn("dashboard", payload)
         self.assertNotIn("ok", payload)
         self.assertNotIn("data", payload)
+
+    def test_local_api_rejects_non_loopback_bind_targets(self):
+        self.assertTrue(is_loopback_host("127.0.0.1"))
+        self.assertTrue(is_loopback_host("::1"))
+        self.assertTrue(is_loopback_host("localhost"))
+        self.assertFalse(is_loopback_host("0.0.0.0"))
+        self.assertFalse(is_loopback_host("192.168.1.10"))
 
     def test_health_endpoint_identifies_okra_api(self):
         payload = self._request_json("/api/health")
@@ -362,14 +409,25 @@ class WebApiLongMemoryTests(unittest.TestCase):
 
     def test_reconcile_replace_requires_explicit_confirmation(self):
         controller = ExecutionController(self.agent.root)
-        preview = {"apply_ready": True, "matched_items": []}
-        with patch("app.web_api_services.apply_reconciliation", return_value={"ok": True}) as apply:
+        request = {
+            "reconcileId": "reconcile-1",
+            "previewSha256": "1" * 64,
+            "expectedPortfolioStateSha256": "2" * 64,
+            "dropMissing": True,
+        }
+        with patch("app.web_api_services.apply_saved_reconciliation", return_value={"ok": True}) as apply:
             with self.assertRaises(ValueError):
-                controller.execution_reconcile_apply({"preview": preview, "dropMissing": True})
-            result = controller.execution_reconcile_apply({"preview": preview, "dropMissing": True, "confirmReplace": "REPLACE"})
+                controller.execution_reconcile_apply(request)
+            result = controller.execution_reconcile_apply({**request, "confirmReplace": "REPLACE"})
 
         self.assertTrue(result["ok"])
-        apply.assert_called_once_with(self.agent.root, preview, drop_missing=True)
+        apply.assert_called_once_with(
+            self.agent.root,
+            "reconcile-1",
+            preview_sha256="1" * 64,
+            expected_portfolio_state_sha256="2" * 64,
+            drop_missing=True,
+        )
 
     def test_source_path_alone_does_not_make_manual_payload_shadow(self):
         controller = ExecutionController(self.agent.root)
@@ -469,6 +527,63 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertEqual(body["error"]["error_code"], "not_found")
         self.assertIn("Unknown GET endpoint", body["error"]["error_message"])
         self.assertTrue(str(body["meta"]["generated_at"]).startswith("20"))
+
+    def test_contract_handler_rejects_oversized_json_body(self):
+        with patch.object(web_api_module, "MAX_JSON_BODY_BYTES", 32):
+            with self.assertRaises(HTTPError) as ctx:
+                self._request_json(
+                    "/api/execution-sync/alipay-screenshot/parse",
+                    method="POST",
+                    body={"files": [{"name": "page.jpg", "data": "x" * 64}]},
+                )
+        self.assertEqual(ctx.exception.code, 413)
+        body = json.loads(ctx.exception.read().decode("utf-8"))
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["error"]["error_code"], "payload_too_large")
+
+    def test_screenshot_contract_rejects_empty_files_and_extra_fields(self):
+        invalid_payloads = [
+            {"files": []},
+            {"files": [{"name": "page.jpg", "data": "aW1hZ2U="}], "unexpected": True},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(HTTPError) as ctx:
+                self._request_json(
+                    "/api/execution-sync/alipay-screenshot/parse",
+                    method="POST",
+                    body=payload,
+                )
+            self.assertEqual(ctx.exception.code, 400)
+            body = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual(body["error"]["error_code"], "bad_request")
+
+    def test_mutation_contracts_reject_unknown_fields(self):
+        requests = [
+            ("/api/run/daily", {"unexpected": True}),
+            ("/api/long-memory/action", {"memoryId": "memory-1", "action": "reject", "unexpected": True}),
+            ("/api/execution-sync/reconcile/preview", {"unexpected": True}),
+            (
+                "/api/execution-sync/reconcile/apply",
+                {
+                    "reconcileId": "reconcile-1",
+                    "previewSha256": "a" * 64,
+                    "expectedPortfolioStateSha256": "b" * 64,
+                    "unexpected": True,
+                },
+            ),
+            ("/api/execution-sync/confirmation/update", {"unexpected": True}),
+            ("/api/open-url", {"url": "https://example.test", "unexpected": True}),
+            ("/api/rag/search", {"query": "test", "unexpected": True}),
+            ("/api/rag/reindex", {"unexpected": True}),
+            ("/api/rag/eval", {"unexpected": True}),
+            ("/api/rag/maintenance", {"action": "check_integrity", "unexpected": True}),
+        ]
+        for path, payload in requests:
+            with self.subTest(path=path), self.assertRaises(HTTPError) as ctx:
+                self._request_json(path, method="POST", body=payload)
+            self.assertEqual(ctx.exception.code, 400)
+            body = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual(body["error"]["error_code"], "bad_request")
 
     def _request_json(self, path: str, *, method: str = "GET", body: dict | None = None, headers: dict[str, str] | None = None) -> dict:
         payload, _ = self._request_json_with_headers(path, method=method, body=body, headers=headers)

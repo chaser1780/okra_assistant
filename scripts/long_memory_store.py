@@ -163,10 +163,31 @@ def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+def learning_lineage_is_trusted(record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata", {}) if isinstance(record.get("metadata"), dict) else {}
+    source = str(record.get("source", "") or "").strip()
+    evidence_kinds = {
+        str(item.get("kind", "") or "")
+        for item in (record.get("evidence_refs", []) or [])
+        if isinstance(item, dict)
+    }
+    learning_derived = bool(
+        source in {"replay_experiment", "outcome_event", "adaptive_policy", "strategy_skill"}
+        or metadata.get("experiment_id")
+        or metadata.get("source_outcome_id")
+        or evidence_kinds & {"replay_summary", "outcome_event", "adaptive_policy", "strategy_skill"}
+    )
+    if learning_derived and str(metadata.get("learning_trust_status", "") or "") != "trusted":
+        return False
+    return True
+
+
 def can_promote_to_permanent(record: dict[str, Any]) -> bool:
     domain = str(record.get("domain", "") or "").strip()
     memory_type = str(record.get("memory_type", "") or "").strip()
     if domain == "fund" or memory_type == "fund_profile_memory":
+        return False
+    if not learning_lineage_is_trusted(record):
         return False
     return domain in PERMANENT_ELIGIBLE_DOMAINS or memory_type in PERMANENT_ELIGIBLE_MEMORY_TYPES
 

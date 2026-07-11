@@ -1,4 +1,12 @@
-import type { Snapshot, SystemPayload, TodayAnalysisPayload, TodayAnalysisRuntimePayload, TodayAnalysisSystemPayload } from "./types";
+import type { Snapshot, SystemPayload, TodayAnalysisPayload, TodayAnalysisRuntimePayload, TodayAnalysisSystemPayload, Tone } from "./types";
+
+export type RuntimeStatusKind = "idle" | "running" | "success" | "degraded" | "failed" | "stale" | "unknown";
+
+export type RuntimeStatusMeta = {
+  kind: RuntimeStatusKind;
+  label: string;
+  tone: Tone;
+};
 
 export function getTodayAnalysis(snapshot: Pick<Snapshot, "todayAnalysis" | "dailyFirstOpen">): TodayAnalysisPayload {
   return snapshot.todayAnalysis ?? snapshot.dailyFirstOpen;
@@ -30,6 +38,17 @@ export function isTodayAnalysisRunComplete(runtime: TodayAnalysisRuntimePayload 
     return Boolean(runtime.resultReady) && String(runtime.resultRunId ?? "") === runId;
   }
   return true;
+}
+
+export function runtimeStatusMeta(value: unknown): RuntimeStatusMeta {
+  const status = String(value ?? "").trim().toLowerCase();
+  if (["running", "in_progress", "started"].includes(status)) return { kind: "running", label: "运行中", tone: "accent" };
+  if (["ok", "success", "completed", "complete", "ready"].includes(status)) return { kind: "success", label: "成功", tone: "success" };
+  if (["degraded", "partial", "retryable_failure", "warning"].includes(status)) return { kind: "degraded", label: "降级", tone: "warning" };
+  if (["failed", "failure", "error", "blocking_failure"].includes(status)) return { kind: "failed", label: "失败", tone: "danger" };
+  if (["stale", "expired"].includes(status)) return { kind: "stale", label: "已过期", tone: "warning" };
+  if (["idle", "pending", "not_run", "not_started"].includes(status)) return { kind: "idle", label: "未运行", tone: "neutral" };
+  return { kind: "unknown", label: status || "未知", tone: "neutral" };
 }
 
 export function pickAnalysisValue(...values: unknown[]): unknown {

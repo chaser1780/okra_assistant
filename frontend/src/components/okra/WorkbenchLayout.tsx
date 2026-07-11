@@ -2,7 +2,7 @@ import { Activity, BarChart3, BrainCircuit, Gauge, Newspaper, PlayCircle, Receip
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import type { SystemPayload } from "../../lib/types";
-import { getTodayAnalysisSystem } from "../../lib/todayAnalysis";
+import { getTodayAnalysisRuntime, getTodayAnalysisSystem, runtimeStatusMeta } from "../../lib/todayAnalysis";
 import { Button } from "../ui";
 import { CopilotPanel } from "./CopilotPanel";
 
@@ -27,6 +27,10 @@ export function WorkbenchLayout({
   onDateChange,
   onRunDaily,
   onRunRealtime,
+  autoRunToday,
+  onAutoRunTodayChange,
+  dailyRunLabel,
+  dailyRunTarget,
   system,
   systemRunning,
   dailyRunning,
@@ -39,6 +43,10 @@ export function WorkbenchLayout({
   onDateChange: (date: string) => void;
   onRunDaily: () => void;
   onRunRealtime: () => void;
+  autoRunToday: boolean;
+  onAutoRunTodayChange: (enabled: boolean) => void;
+  dailyRunLabel: string;
+  dailyRunTarget: string;
   system?: SystemPayload;
   systemRunning?: boolean;
   dailyRunning?: boolean;
@@ -49,7 +57,24 @@ export function WorkbenchLayout({
   const context = `当前页面：${label}。查看日期：${selectedDate || "暂无"}`;
   const todayAnalysis = getTodayAnalysisSystem(system);
   const hasRunToday = Boolean(todayAnalysis?.hasRunToday ?? todayAnalysis?.todayDecisionExists);
-  const todayRunLabel = dailyRunning ? "运行中" : hasRunToday ? `已运行${todayAnalysis?.runTime ? ` · ${todayAnalysis.runTime}` : ""}` : "今日未跑";
+  const runtime = getTodayAnalysisRuntime(system);
+  const rawRuntimeMeta = runtimeStatusMeta(dailyRunning ? "running" : runtime?.status);
+  const runtimeMeta = hasRunToday && ["idle", "unknown"].includes(rawRuntimeMeta.kind)
+    ? runtimeStatusMeta("success")
+    : !hasRunToday && rawRuntimeMeta.kind === "unknown"
+      ? runtimeStatusMeta("idle")
+      : rawRuntimeMeta;
+  const todayRunLabel = `${hasRunToday && runtimeMeta.kind === "success" ? "已运行" : runtimeMeta.label}${todayAnalysis?.runTime ? ` · ${todayAnalysis.runTime}` : ""}`;
+  const todayRunColor =
+    runtimeMeta.tone === "danger"
+      ? "text-rose-300"
+      : runtimeMeta.tone === "warning"
+        ? "text-amber-300"
+        : runtimeMeta.tone === "success"
+          ? "text-emerald-300"
+          : runtimeMeta.tone === "accent"
+            ? "text-cyan-300"
+            : "text-slate-400";
   const selectedDateQuery = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
 
   return (
@@ -86,31 +111,41 @@ export function WorkbenchLayout({
             </div>
             <div className="mt-2 flex items-center justify-between gap-3">
               <span className="text-xs font-bold text-slate-400">今日分析</span>
-              <span className={`text-right text-xs font-bold ${dailyRunning ? "text-cyan-300" : hasRunToday ? "text-emerald-300" : "text-amber-300"}`}>
+              <span className={`text-right text-xs font-bold ${todayRunColor}`}>
                 {todayRunLabel}
               </span>
             </div>
           </div>
-          <select
-            value={selectedDate}
-            onChange={(event) => onDateChange(event.target.value)}
-            className="h-9 w-full rounded-md border border-slate-800 bg-slate-950 px-2 text-sm text-slate-200"
-          >
-            {dates.map((date) => (
-              <option key={date} value={date}>
-                {date}
-              </option>
-            ))}
-          </select>
-          <div className="grid grid-cols-2 gap-2">
+          <label className="min-w-0">
+            <span className="mb-1 block text-xs font-semibold text-slate-500">查看日期</span>
+            <select
+              value={selectedDate}
+              onChange={(event) => onDateChange(event.target.value)}
+              className="h-9 w-full rounded-md border border-slate-800 bg-slate-950 px-2 text-sm text-slate-200"
+            >
+              {dates.map((date) => (
+                <option key={date} value={date}>
+                  {date}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+            分析目标：<span className="font-semibold text-slate-200">{dailyRunTarget}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
             <Button variant="secondary" className="gap-2" onClick={onRunDaily}>
               <PlayCircle className="h-4 w-4" />
-              今日分析
+              {dailyRunLabel}
             </Button>
             <Button variant="primary" onClick={onRunRealtime}>
-              实时刷新
+              刷新今日实时
             </Button>
           </div>
+          <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+            <input type="checkbox" checked={autoRunToday} onChange={(event) => onAutoRunTodayChange(event.target.checked)} />
+            自动运行今日分析
+          </label>
         </div>
       </aside>
       <main className="w-full min-w-0 flex-1 overflow-auto overflow-x-hidden p-3 xl:p-5">{children}</main>

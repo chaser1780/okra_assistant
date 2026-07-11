@@ -77,6 +77,22 @@ results_per_query = 3
 dedup_window_hours = 12
 source_role = "theme_news"
 
+[providers.openai_web_search_news]
+enabled = true
+provider = "openai_web_search"
+timeout_seconds = 90
+max_attempts = 1
+include_direct_queries = true
+max_queries = 6
+max_queries_per_bucket = 3
+results_per_query = 2
+freshness_days = 7
+dedup_window_hours = 12
+tool_types = ["web_search", "web_search_preview"]
+reasoning_effort = "low"
+max_output_tokens = 6000
+source_role = "theme_news"
+
 [providers.news_classification]
 enabled = true
 mode = "llm_first"
@@ -356,6 +372,9 @@ class TempAgentHome:
             "db/agent_outputs",
             "db/agent_snapshots",
             "db/replay_experiments",
+            "db/replay_audits",
+            "db/learning_trust_audits",
+            "db/replay_snapshots",
             "db/portfolio_state",
             "db/portfolio_state/snapshots",
             "db/portfolio_state/events",

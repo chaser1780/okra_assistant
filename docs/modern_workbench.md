@@ -51,6 +51,12 @@ Direct start:
 python -B -X utf8 .\app\web_api.py --home .
 ```
 
+The backend is intentionally local-only. Its default bind address is
+`127.0.0.1`, and startup rejects non-loopback values such as `0.0.0.0` or a
+LAN address. Browser-origin checks separately allow only the approved local
+React/Tauri origins. This contract is suitable for the desktop Workbench; it is
+not a remote-service authentication boundary.
+
 ## Current API Contract Notes
 
 Current backend entrypoint is `app/web_api.py`, started through
@@ -137,6 +143,18 @@ Operational endpoints:
 - `POST /api/copilot/explain`
 - `POST /api/open-url`
 
+Reconciliation is a two-step server-bound contract:
+
+1. Preview writes a server-side artifact containing `reconcile_id`,
+   `preview_sha256`, and `portfolio_state_sha256`.
+2. Apply accepts only `reconcileId`, `previewSha256`,
+   `expectedPortfolioStateSha256`, `dropMissing`, and optional confirmation.
+3. Apply reloads the saved preview, verifies its digest, rejects a changed
+   portfolio state, and records an apply-request digest for idempotent replay.
+
+The client must never submit an arbitrary preview object as the apply source of
+truth.
+
 RAG admin/debug endpoints:
 
 - `GET /api/rag/status`
@@ -146,13 +164,67 @@ RAG admin/debug endpoints:
 - `POST /api/rag/eval`
 - `POST /api/rag/maintenance`
 
+### Current RAG Mode
+
+RAG is enabled for Copilot and default agent retrieval with legacy fallback.
+The production retrieval path currently ranks candidates with lexical text
+scoring after active-manifest and safety filters. It is therefore accurate to
+describe current RAG as operational lexical retrieval, not production vector
+retrieval.
+
+Vector capability remains gated:
+
+- `rag.embedding.enabled=false`
+- `rag.embedding.dry_run=true`
+- `rag.vector_store.backend="sqlite_mock"`
+- FAISS and Chroma are not enabled
+- profile-evidence and agent-shadow modes remain disabled by default
+- execution evidence remains excluded from ordinary retrieval
+
+Embedding/vector code and tests exist, but enabling a real backend requires a
+separate measured gray release. UI labels and operational reports must not
+claim semantic/vector retrieval while these defaults remain in place.
+
+### Replay And Learning Trust
+
+Historical replay and derived learning are fail-closed:
+
+- `config/historical_replay_trust.json` is the source-controlled trust list.
+- Normal replay accepts only `trusted` dates; `structural_only` requires an
+  explicit diagnostic opt-in and can never write learning.
+- Replay audits are written under `db/replay_audits/`.
+- The promoted chain attempts to capture immutable exact-byte inputs under
+  `db/replay_snapshots/<report-date>__<cutoff-hash>/`. Capture failure is recorded and remains
+  ineligible; a successful generated manifest candidate still remains
+  `blocked` and `learning_eligible=false` until separately reviewed.
+- Learning lineage audits are written under `db/learning_trust_audits/` and
+  classify outcomes, policy events, policies, and skills as `trusted`,
+  `legacy_untrusted`, or `blocked`.
+- Strategy skills remain visible for diagnosis, but only `trusted` skills may
+  produce usage candidates. Long-memory learning-derived writes use the same
+  fail-closed trust requirement.
+
+The Review page exposes the selected date's manifest mode, learning
+eligibility, replay audit path, and latest learning audit summary. Missing
+manifest or audit evidence renders as blocked; the UI does not promote trust.
+
 ### DTO And Frontend Validation
 
 Backend API-facing DTOs live in `app/api_contracts.py`. They use Pydantic
-models with `extra="allow"`, so page payloads can evolve without breaking older
-clients. Frontend runtime schemas live in `frontend/src/lib/schemas.ts` and use
-`.passthrough()` for page payloads. Stable top-level page keys are enforced,
-while nested analytical artifacts remain flexible.
+models. Read/page contracts retain `extra="allow"` so analytical payloads can
+evolve without breaking older clients. Mutation request DTOs inherit
+`MutationRequestModel` with `extra="forbid"`; unknown top-level command fields
+fail validation instead of being silently accepted. Frontend runtime schemas
+live in `frontend/src/lib/schemas.ts` and use `.passthrough()` for page payloads.
+Stable top-level page keys are enforced, while nested analytical artifacts
+remain flexible.
+
+Strict mutation DTO coverage includes run commands, execution trade and
+conversion, screenshot parsing, reconciliation preview/apply, confirmation
+updates, long-memory actions, RAG search/reindex/eval/maintenance, and
+open-url. Copilot explain is query-like and still accepts its flexible request
+shape. Some DTOs intentionally retain flexible nested analytical rows, but
+their top-level command envelope is strict.
 
 Current page DTO top-level keys:
 
@@ -202,6 +274,8 @@ missing:
 - Duplicate today-analysis runs return `409 already_running` with `runId`,
   `reportDate`, `startedAt`, `currentStep`, and `currentAgent`.
 - Untrusted POST origins return `403 forbidden_origin`.
+- Non-loopback bind targets are rejected at startup before the HTTP server is
+  created.
 - Unexpected exceptions return `500 internal_error`.
 
 CORS allows local React/Tauri origins including `127.0.0.1`, `localhost`, and
@@ -222,12 +296,15 @@ CORS allows local React/Tauri origins including `127.0.0.1`, `localhost`, and
   `ExecutionPagePayload` and schema only require `selectedDate`,
   `executionSync`, and `portfolio`. This should remain additive unless the
   execution page starts rendering runtime diagnostics.
-- `app/api_contracts.py` request DTOs currently validate only execution
-  trade/conversion command payloads. Other command endpoints still accept
-  flexible dictionaries.
-- RAG config currently has `rag.enabled=true` and `rag.agent_default.enabled=true`,
-  while `rag.agent_shadow.enabled=false`. Shadow review UI must not infer that
-  agent shadow is active from global RAG alone.
+- Mutation DTO strictness is top-level. Reconciliation preview rows and other
+  nested analytical structures remain flexible where their source formats are
+  intentionally heterogeneous.
+- `rag.enabled=true` and `rag.agent_default.enabled=true` mean lexical RAG is
+  live. They do not mean embedding, a production vector store, profile
+  evidence, or agent shadow is active.
+- A captured replay snapshot is evidence, not trust approval. Generated
+  candidates remain blocked until the source-controlled manifest is explicitly
+  updated after review.
 
 ## Shadow Review Contract
 
@@ -271,3 +348,8 @@ Real operations must not directly update:
 - fund profile learning
 - market regime learning
 - system advice accuracy labels
+
+Learning-derived memory, policy, and strategy-skill consumers additionally
+require trusted replay lineage. Historical or structurally replayable evidence
+may remain visible for audit, but it must not influence learning or skill usage
+without a `trusted` learning audit.

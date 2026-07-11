@@ -23,7 +23,7 @@ export type DashboardPayload = {
 export type PortfolioItem = {
   fundCode: string;
   fundName: string;
-  amount: number;
+  amount: number | null;
   amountText: string;
   weight: number | string;
   weightText: string;
@@ -31,45 +31,45 @@ export type PortfolioItem = {
   action: string;
   role: string;
   styleGroup: string;
-  holdingPnl: number;
+  holdingPnl: number | null;
   holdingPnlText: string;
-  holdingReturnPct: number;
+  holdingReturnPct: number | null;
   holdingReturnPctText: string;
   officialDailyPnl: number | null;
   officialDailyPnlText: string;
   officialDailyPnlDate: string;
   officialDailyPnlStatus: string;
   officialDailyPnlReason: string;
-  costBasis: number;
+  costBasis: number | null;
   costBasisText: string;
-  holdingUnits: number;
-  lastNav: number;
+  holdingUnits: number | null;
+  lastNav: number | null;
   lastNavDate: string;
   allowTrade: boolean;
-  fixedDailyBuyAmount: number;
+  fixedDailyBuyAmount: number | null;
   allowExtraBuys: boolean;
 };
 
 export type ChartPoint = {
   date: string;
-  value: number;
+  value: number | null;
 };
 
 export type AllocationRow = {
   name: string;
-  value: number;
+  value: number | null;
   valueText: string;
-  weight: number;
+  weight: number | null;
   weightText: string;
 };
 
 export type PortfolioPayload = {
   asOfDate: string;
-  totalValue: number;
+  totalValue: number | null;
   totalValueText: string;
-  cash: number;
+  cash: number | null;
   cashText: string;
-  holdingPnl: number;
+  holdingPnl: number | null;
   holdingPnlText: string;
   styleAllocation: AllocationRow[];
   roleAllocation: AllocationRow[];
@@ -171,10 +171,80 @@ export type ResearchSentimentDigest = Record<string, unknown> & {
   derived_sentiment?: ResearchSentimentBlock;
 };
 
+export type FundResearchCard = {
+  ticketId: string;
+  fundCode: string;
+  fundName: string;
+  selectedDate: string;
+  section: string;
+  strategyBucket: string;
+  action: string;
+  actionLabel: string;
+  amount: number | null;
+  amountText: string;
+  priority: number;
+  confidence: number;
+  confidenceText: string;
+  thesis: string;
+  evidence: string[];
+  risks: string[];
+  agentSupport: string[];
+  sourceSignalIds: string[];
+  opposingSignalIds: string[];
+  policyRuleHits: string[];
+  constraintHits: string[];
+  consensusText: string;
+  hasConflict: boolean;
+  isActionable: boolean;
+  portfolio: Record<string, unknown> & {
+    currentValue?: number;
+    currentValueText?: string;
+    holdingPnl?: number;
+    holdingPnlText?: string;
+    holdingReturnPct?: number;
+    holdingReturnPctText?: string;
+    role?: string;
+    styleGroup?: string;
+    allowTrade?: boolean;
+    fixedDailyBuyAmount?: number;
+  };
+  market: Record<string, unknown> & {
+    dayChangePct?: number | null;
+    dayChangePctText?: string;
+    estimateChangePct?: number | null;
+    estimateChangePctText?: string;
+    proxyChangePct?: number | null;
+    proxyChangePctText?: string;
+    officialNav?: number | string;
+    officialNavDate?: string;
+    estimateTime?: string;
+    quoteFreshness?: string;
+    estimateFreshness?: string;
+    proxyFreshness?: string;
+  };
+  news: Record<string, unknown> & {
+    items?: ResearchDigestEntry[];
+    riskItems?: ResearchDigestEntry[];
+    count?: number;
+    riskCount?: number;
+    topTitle?: string;
+    topRiskTitle?: string;
+  };
+  profile: Record<string, unknown> & {
+    manager?: string;
+    company?: string;
+    category?: string;
+    riskLevel?: string;
+    benchmark?: string;
+  };
+  evidenceRefs: Record<string, unknown>[];
+};
+
 export type ResearchPayload = {
   meta: string;
   metrics: Metric[];
   rows: Record<string, unknown>[];
+  fund_cards: FundResearchCard[];
   source_health?: ResearchSourceHealthPayload;
   news_digest?: ResearchNewsDigest;
   sentiment_digest?: ResearchSentimentDigest;
@@ -236,6 +306,19 @@ export type ReviewPayload = {
   market_memory_lines?: string[];
   execution_memory_lines?: string[];
   pending_memory_lines?: string[];
+  trust?: {
+    reportDate: string;
+    manifestPath: string;
+    manifestExists: boolean;
+    mode: string;
+    learningEligible: boolean;
+    trustedForLearning: boolean;
+    reasonCodes: string[];
+    latestReplayAudit?: Record<string, unknown>;
+    latestReplayAuditPath?: string;
+    latestLearningAuditSummary?: Record<string, unknown>;
+    latestLearningAuditPath?: string;
+  };
 };
 
 export type ShadowReviewStatus = "missing" | "not_run" | "running" | "ready" | "partial" | "degraded" | "failed";
@@ -495,7 +578,7 @@ export type ApiEnvelope<T> = {
 };
 
 export type ShellPayload = Pick<Snapshot, "selectedDate" | "dates" | "summary" | "system">;
-export type TodayPagePayload = Pick<Snapshot, "selectedDate" | "dashboard" | "portfolio" | "longMemory" | "todayAnalysis" | "dailyFirstOpen" | "system">;
+export type TodayPagePayload = Pick<Snapshot, "selectedDate" | "dashboard" | "portfolio" | "research" | "longMemory" | "todayAnalysis" | "dailyFirstOpen" | "system">;
 export type PortfolioPagePayload = Pick<Snapshot, "selectedDate" | "portfolio">;
 export type ExecutionPagePayload = Pick<Snapshot, "selectedDate" | "executionSync" | "portfolio">;
 export type ResearchPagePayload = Pick<Snapshot, "selectedDate" | "research">;
@@ -567,7 +650,7 @@ export type CopilotResponse = {
 export type TradeMarker = {
   date: string;
   action: string;
-  amount: number;
+  amount: number | null;
   amountText: string;
   fundCode: string;
   fundName: string;

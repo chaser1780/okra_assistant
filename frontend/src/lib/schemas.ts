@@ -4,6 +4,11 @@ const toneSchema = z.enum(["neutral", "accent", "success", "warning", "danger", 
 
 const unknownRecordSchema = z.record(z.string(), z.unknown());
 const numberRecordSchema = z.record(z.string(), z.coerce.number().catch(0)).catch({});
+const financialNumberSchema = z.preprocess((value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}, z.number().nullable());
 const apiErrorSchema = z.object({
   error_code: z.string(),
   error_message: z.string(),
@@ -17,7 +22,7 @@ const apiMetaSchema = z.object({
   generated_at: z.string().nullable().optional(),
   version: z.string().optional()
 }).passthrough();
-const chartPointSchema = z.object({ date: z.string(), value: z.number().catch(0) }).passthrough();
+const chartPointSchema = z.object({ date: z.string(), value: financialNumberSchema }).passthrough();
 const metricSchema = z.object({
   title: z.string(),
   value: z.string(),
@@ -28,7 +33,7 @@ const metricSchema = z.object({
 const portfolioItemSchema = z.object({
   fundCode: z.string(),
   fundName: z.string(),
-  amount: z.number().catch(0),
+  amount: financialNumberSchema,
   amountText: z.string(),
   weight: z.union([z.number(), z.string()]),
   weightText: z.string(),
@@ -36,30 +41,30 @@ const portfolioItemSchema = z.object({
   action: z.string(),
   role: z.string(),
   styleGroup: z.string(),
-  holdingPnl: z.number().catch(0),
+  holdingPnl: financialNumberSchema,
   holdingPnlText: z.string(),
-  holdingReturnPct: z.number().catch(0),
+  holdingReturnPct: financialNumberSchema,
   holdingReturnPctText: z.string(),
-  officialDailyPnl: z.number().nullable().catch(null),
+  officialDailyPnl: financialNumberSchema,
   officialDailyPnlText: z.string().catch("暂无"),
   officialDailyPnlDate: z.string().catch(""),
   officialDailyPnlStatus: z.string().catch(""),
   officialDailyPnlReason: z.string().catch(""),
-  costBasis: z.number().catch(0),
+  costBasis: financialNumberSchema,
   costBasisText: z.string(),
-  holdingUnits: z.number().catch(0),
-  lastNav: z.number().catch(0),
+  holdingUnits: financialNumberSchema,
+  lastNav: financialNumberSchema,
   lastNavDate: z.string(),
   allowTrade: z.boolean().catch(false),
-  fixedDailyBuyAmount: z.number().catch(0),
+  fixedDailyBuyAmount: financialNumberSchema,
   allowExtraBuys: z.boolean().catch(false)
 }).passthrough();
 
 const allocationRowSchema = z.object({
   name: z.string(),
-  value: z.number().catch(0),
+  value: financialNumberSchema,
   valueText: z.string(),
-  weight: z.number().catch(0),
+  weight: financialNumberSchema,
   weightText: z.string()
 }).passthrough();
 
@@ -78,11 +83,11 @@ export const dashboardSchema = z.object({
 
 export const portfolioSchema = z.object({
   asOfDate: z.string(),
-  totalValue: z.number().catch(0),
+  totalValue: financialNumberSchema,
   totalValueText: z.string(),
-  cash: z.number().catch(0),
+  cash: financialNumberSchema,
   cashText: z.string(),
-  holdingPnl: z.number().catch(0),
+  holdingPnl: financialNumberSchema,
   holdingPnlText: z.string(),
   styleAllocation: z.array(allocationRowSchema),
   roleAllocation: z.array(allocationRowSchema),
@@ -99,7 +104,40 @@ export const portfolioSchema = z.object({
 export const researchSchema = z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
-  rows: z.array(unknownRecordSchema)
+  rows: z.array(unknownRecordSchema),
+  fund_cards: z.array(
+    z.object({
+      ticketId: z.string().catch(""),
+      fundCode: z.string().catch(""),
+      fundName: z.string().catch(""),
+      selectedDate: z.string().catch(""),
+      section: z.string().catch(""),
+      strategyBucket: z.string().catch(""),
+      action: z.string().catch("hold"),
+      actionLabel: z.string().catch("观察"),
+      amount: financialNumberSchema,
+      amountText: z.string().catch("不可用"),
+      priority: z.number().catch(0),
+      confidence: z.number().catch(0),
+      confidenceText: z.string().catch("暂无"),
+      thesis: z.string().catch("暂无建议理由"),
+      evidence: z.array(z.string()).catch([]),
+      risks: z.array(z.string()).catch([]),
+      agentSupport: z.array(z.string()).catch([]),
+      sourceSignalIds: z.array(z.string()).catch([]),
+      opposingSignalIds: z.array(z.string()).catch([]),
+      policyRuleHits: z.array(z.string()).catch([]),
+      constraintHits: z.array(z.string()).catch([]),
+      consensusText: z.string().catch("暂无"),
+      hasConflict: z.boolean().catch(false),
+      isActionable: z.boolean().catch(false),
+      portfolio: unknownRecordSchema.catch({}),
+      market: unknownRecordSchema.catch({}),
+      news: unknownRecordSchema.catch({}),
+      profile: unknownRecordSchema.catch({}),
+      evidenceRefs: z.array(unknownRecordSchema).catch([])
+    }).passthrough()
+  ).catch([])
 }).passthrough();
 
 export const realtimeSchema = z.object({
@@ -120,7 +158,20 @@ export const reviewSchema = z.object({
   fund_memory_lines: z.array(z.string()).optional(),
   market_memory_lines: z.array(z.string()).optional(),
   execution_memory_lines: z.array(z.string()).optional(),
-  pending_memory_lines: z.array(z.string()).optional()
+  pending_memory_lines: z.array(z.string()).optional(),
+  trust: z.object({
+    reportDate: z.string().catch(""),
+    manifestPath: z.string().catch(""),
+    manifestExists: z.boolean().catch(false),
+    mode: z.string().catch("blocked"),
+    learningEligible: z.boolean().catch(false),
+    trustedForLearning: z.boolean().catch(false),
+    reasonCodes: z.array(z.string()).catch([]),
+    latestReplayAudit: unknownRecordSchema.optional(),
+    latestReplayAuditPath: z.string().optional(),
+    latestLearningAuditSummary: unknownRecordSchema.optional(),
+    latestLearningAuditPath: z.string().optional()
+  }).passthrough().optional()
 }).passthrough();
 
 const longMemoryRecordSchema = z.object({
@@ -206,7 +257,7 @@ const fundHistorySchema = z.object({
 const tradeMarkerSchema = z.object({
   date: z.string(),
   action: z.string(),
-  amount: z.number().catch(0),
+  amount: financialNumberSchema,
   amountText: z.string(),
   fundCode: z.string(),
   fundName: z.string(),
@@ -314,6 +365,12 @@ export const todayPageSchema = z.object({
   selectedDate: z.string(),
   dashboard: dashboardSchema,
   portfolio: portfolioSchema,
+  research: researchSchema.catch({
+    meta: "",
+    metrics: [],
+    rows: [],
+    fund_cards: []
+  }),
   longMemory: longMemorySchema,
   todayAnalysis: dailyFirstOpenSchema.optional(),
   dailyFirstOpen: dailyFirstOpenSchema,

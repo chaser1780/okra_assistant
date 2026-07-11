@@ -13,7 +13,7 @@ from typing import Any
 
 from common import timestamp_now
 from execution_sync import (
-    apply_reconciliation,
+    apply_saved_reconciliation,
     build_execution_sync_payload,
     parse_alipay_screenshot_upload,
     preview_reconciliation,
@@ -275,17 +275,23 @@ class ExecutionController:
 
     def execution_reconcile_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution reconcile apply")
-        preview = payload.get("preview") or payload
-        if isinstance(preview, dict):
-            _reject_shadow_mutation_payload(preview, endpoint="execution reconcile apply")
-        else:
-            raise ValueError("preview is required")
+        reconcile_id = str(payload.get("reconcileId") or payload.get("reconcile_id") or "").strip()
+        preview_sha256 = str(payload.get("previewSha256") or payload.get("preview_sha256") or "").strip()
+        portfolio_sha256 = str(payload.get("expectedPortfolioStateSha256") or payload.get("expected_portfolio_state_sha256") or "").strip()
+        if not reconcile_id or not preview_sha256 or not portfolio_sha256:
+            raise ValueError("reconcileId, previewSha256, and expectedPortfolioStateSha256 are required")
         drop_missing = bool(payload.get("dropMissing") or payload.get("drop_missing"))
         if drop_missing and str(payload.get("confirmReplace") or payload.get("confirm_replace") or "").strip().upper() != "REPLACE":
             raise ValueError("confirmReplace=REPLACE is required when replacing all positions.")
-        if preview.get("apply_ready") is False and preview.get("unmatched_detected"):
-            raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
-        return _to_jsonable(apply_reconciliation(self.home, preview, drop_missing=drop_missing))
+        return _to_jsonable(
+            apply_saved_reconciliation(
+                self.home,
+                reconcile_id,
+                preview_sha256=preview_sha256,
+                expected_portfolio_state_sha256=portfolio_sha256,
+                drop_missing=drop_missing,
+            )
+        )
 
     def execution_confirmation_update(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution confirmation update")

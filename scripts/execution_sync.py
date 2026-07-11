@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import hashlib
 import json
+import re
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -22,7 +25,7 @@ from common import (
     timestamp_now,
     validated_advice_path,
 )
-from portfolio_state import _save_portfolio_state_unlocked, portfolio_state_hash, upsert_execution_status
+from portfolio_state import _save_portfolio_state_unlocked, portfolio_state_event_path, portfolio_state_hash, upsert_execution_status
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
 from update_portfolio_from_trade import apply_trade
 
@@ -47,8 +50,23 @@ def parsed_import_path(agent_home: Path, import_id: str) -> Path:
     return execution_sync_dir(agent_home) / "imports" / "parsed" / f"{import_id}.json"
 
 
+def reconciliation_applied_path(agent_home: Path, reconcile_id: str) -> Path:
+    return execution_sync_dir(agent_home) / "reconciliation_applied" / f"{reconcile_id}.json"
+
+
 def alipay_screenshot_dir(agent_home: Path) -> Path:
     return execution_sync_dir(agent_home) / "imports" / "alipay_screenshots"
+
+
+SETTLEMENT_JOURNAL_SCHEMA_VERSION = "settlement_journal.v2"
+MAX_SCREENSHOT_FILES = 4
+MAX_SCREENSHOT_FILE_BYTES = 10 * 1024 * 1024
+MAX_SCREENSHOT_TOTAL_BYTES = 24 * 1024 * 1024
+IMPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def settlement_journal_path(agent_home: Path, idempotency_key: str) -> Path:
+    return execution_sync_dir(agent_home) / "settlement_journal" / settlement_event_path(agent_home, idempotency_key).name
 
 
 def _money(value: Any) -> float:
@@ -101,7 +119,12 @@ def load_pending_confirmations(agent_home: Path) -> dict[str, Any]:
 
 
 def _write_pending_confirmations(agent_home: Path, items: list[dict[str, Any]]) -> Path:
-    active = [item for item in items if item.get("status") not in {"settled", "canceled", "failed"}]
+    active = [
+        item
+        for item in items
+        if item.get("status") not in {"canceled", "failed"}
+        and (item.get("status") != "settled" or not item.get("portfolio_applied_at"))
+    ]
     active.sort(key=lambda item: (item.get("confirm_date", ""), item.get("settlement_date", ""), item.get("trade_id", item.get("conversion_id", ""))))
     return dump_json(pending_confirmations_path(agent_home), {"updated_at": timestamp_now(), "items": active})
 
@@ -119,6 +142,47 @@ def _append_actual_trade(agent_home: Path, trade_date: str, item: dict[str, Any]
     payload["updated_at"] = timestamp_now()
     payload["items"] = items
     return dump_json(path, payload)
+
+
+def _record_identity_digest(item: dict[str, Any]) -> str:
+    stable = {
+        key: item.get(key)
+        for key in (
+            "trade_id", "conversion_id", "trade_date", "trade_time", "operation_type",
+            "fund_code", "fund_name", "amount", "units", "nav", "fee",
+            "out_fund_code", "out_fund_name", "out_amount", "out_units", "out_nav",
+            "in_fund_code", "in_fund_name", "in_amount", "in_units", "in_nav",
+            "status", "linked_suggestion_id", "linked_advice_date", "source", "platform", "user_note",
+        )
+    }
+    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _find_record_by_trade_id(agent_home: Path, trade_id: str) -> tuple[dict[str, Any], Path] | None:
+    if not trade_id:
+        return None
+    for path in sorted(actual_trade_dir(agent_home).glob("*.json")):
+        payload = load_json(path)
+        for item in payload.get("items", []) or []:
+            if str(item.get("trade_id", "") or "") == trade_id:
+                return dict(item), path
+    return None
+
+
+def _existing_record_result(agent_home: Path, item: dict[str, Any], *, result_key: str) -> dict[str, Any] | None:
+    existing = _find_record_by_trade_id(agent_home, str(item.get("trade_id", "") or ""))
+    if existing is None:
+        return None
+    existing_item, path = existing
+    if _record_identity_digest(existing_item) != _record_identity_digest(item):
+        raise ValueError("trade_id already exists with a different execution payload")
+    return {
+        "ok": True,
+        result_key: existing_item,
+        "path": project_relative_path(agent_home, path),
+        "idempotent_replay": True,
+    }
 
 
 def _update_actual_trade_record(agent_home: Path, item: dict[str, Any]) -> Path | None:
@@ -163,6 +227,92 @@ def settlement_idempotency_key(trade: dict[str, Any]) -> str:
 
 def settlement_event_exists(agent_home: Path, trade: dict[str, Any]) -> bool:
     return settlement_event_path(agent_home, settlement_idempotency_key(trade)).exists()
+
+
+def _settlement_trade_digest(trade: dict[str, Any]) -> str:
+    stable_fields = {
+        key: trade.get(key)
+        for key in (
+            "trade_id",
+            "conversion_id",
+            "trade_date",
+            "confirm_date",
+            "settlement_date",
+            "operation_type",
+            "fund_code",
+            "amount",
+            "units",
+            "nav",
+            "out_fund_code",
+            "out_amount",
+            "out_units",
+            "out_nav",
+            "in_fund_code",
+            "in_amount",
+            "in_units",
+            "in_nav",
+        )
+    }
+    encoded = json.dumps(stable_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_settlement_journal(agent_home: Path, idempotency_key: str) -> dict[str, Any]:
+    path = settlement_journal_path(agent_home, idempotency_key)
+    if not path.exists():
+        return {}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_settlement_journal(agent_home: Path, idempotency_key: str, payload: dict[str, Any]) -> Path:
+    journal = dict(payload)
+    journal["schema_version"] = SETTLEMENT_JOURNAL_SCHEMA_VERSION
+    journal["idempotency_key"] = idempotency_key
+    journal["updated_at"] = timestamp_now()
+    return dump_json(settlement_journal_path(agent_home, idempotency_key), journal)
+
+
+def _applied_settlement_ids(portfolio: dict[str, Any]) -> set[str]:
+    metadata = portfolio.get("state_metadata", {}) or {}
+    return {str(item) for item in (metadata.get("applied_settlement_ids", []) or []) if str(item)}
+
+
+def _portfolio_settlement_event_path(agent_home: Path, trade: dict[str, Any], idempotency_key: str) -> Path:
+    event_date = str(trade.get("settlement_date") or trade.get("confirm_date") or trade.get("trade_date") or resolve_date())
+    return portfolio_state_event_path(agent_home, event_date, "actual_trade_settlement", idempotency_key)
+
+
+def _portfolio_has_settlement(agent_home: Path, portfolio: dict[str, Any], trade: dict[str, Any], idempotency_key: str) -> bool:
+    metadata = portfolio.get("state_metadata", {}) or {}
+    if idempotency_key in _applied_settlement_ids(portfolio):
+        return True
+    if metadata.get("event_type") == "actual_trade_settlement" and str(metadata.get("event_id", "")) == idempotency_key:
+        return True
+    return _portfolio_settlement_event_path(agent_home, trade, idempotency_key).exists()
+
+
+def _recovered_settlement_payload(
+    agent_home: Path,
+    trade: dict[str, Any],
+    portfolio: dict[str, Any],
+    idempotency_key: str,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = portfolio.get("state_metadata", {}) or {}
+    return {
+        "event_type": "actual_trade_settlement",
+        "trade_id": trade.get("trade_id", ""),
+        "conversion_id": trade.get("conversion_id", ""),
+        "idempotency_key": idempotency_key,
+        "before_state_hash": journal.get("before_state_hash", metadata.get("before_state_hash", "")),
+        "after_state_hash": journal.get("after_state_hash", metadata.get("after_state_hash", portfolio_state_hash(portfolio))),
+        "current_path": project_relative_path(agent_home, agent_home / "db" / "portfolio_state" / "current.json"),
+        "snapshot_path": str(metadata.get("latest_snapshot_path", "") or ""),
+        "source_path": str(trade.get("source_path", "")),
+        "created_at": str(journal.get("created_at", "") or timestamp_now()),
+        "recovered_at": timestamp_now(),
+    }
 
 
 def match_suggestion(agent_home: Path, advice_date: str, fund_code: str, operation_type: str, suggestion_id: str = "") -> dict[str, Any] | None:
@@ -271,6 +421,9 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "lifecycle": lifecycle,
     }
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
+    existing = _existing_record_result(agent_home, item, result_key="trade")
+    if existing is not None:
+        return existing
     path = _append_actual_trade(agent_home, trade_date, item)
     persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
@@ -353,6 +506,9 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "lifecycle": {"out": out_lifecycle, "in": in_lifecycle},
         "execution_deviation": {"type": "conversion_substitute", "label": "转换替代执行", "affects_advice_accuracy": False},
     }
+    existing = _existing_record_result(agent_home, item, result_key="conversion")
+    if existing is not None:
+        return existing
     path = _append_actual_trade(agent_home, trade_date, item)
     persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
@@ -388,10 +544,14 @@ def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None =
             if not entry.get("portfolio_applied_at") and not settlement_event_exists(agent_home, entry):
                 try:
                     result = apply_settled_trade_to_portfolio(agent_home, entry)
+                    if not result.get("ok", False):
+                        raise RuntimeError(str(result.get("reason", "settlement did not update portfolio")))
                     entry["portfolio_applied_at"] = timestamp_now()
                     entry["portfolio_applied_as_of"] = as_of_date
                     entry["portfolio_settlement_event_path"] = result.get("settlement_event_path", "")
-                    applied += 1
+                    entry.pop("portfolio_apply_error", None)
+                    if not result.get("skipped", False):
+                        applied += 1
                 except Exception as exc:
                     entry["portfolio_apply_error"] = str(exc)
                     apply_errors.append({"trade_id": entry.get("trade_id", ""), "error": str(exc)})
@@ -451,14 +611,85 @@ def preview_reconciliation(agent_home: Path, actual_positions: list[dict[str, An
         "platform": "alipay",
         "snapshot_date": snapshot_date,
         "generated_at": timestamp_now(),
+        "portfolio_state_sha256": portfolio_state_hash(portfolio),
         "matched_items": matched,
         "new_items": new_items,
         "missing_items": missing,
         "apply_ready": bool(matched or new_items),
         "warnings": ["应用前请确认本次来源就是你的真实仓位。", "截图或手动快照只会在确认应用后覆盖组合状态。"],
     }
+    preview["preview_sha256"] = reconciliation_preview_digest(preview)
     dump_json(parsed_import_path(agent_home, preview["reconcile_id"]), preview)
     return preview
+
+
+def reconciliation_preview_digest(preview: dict[str, Any]) -> str:
+    stable = {key: value for key, value in preview.items() if key != "preview_sha256"}
+    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def apply_saved_reconciliation(
+    agent_home: Path,
+    reconcile_id: str,
+    *,
+    preview_sha256: str,
+    expected_portfolio_state_sha256: str,
+    drop_missing: bool = False,
+) -> dict[str, Any]:
+    if not IMPORT_ID_PATTERN.fullmatch(str(reconcile_id or "")):
+        raise ValueError("reconcile_id must contain only letters, numbers, underscores, or hyphens")
+    path = parsed_import_path(agent_home, reconcile_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Reconciliation preview not found: {reconcile_id}")
+    preview = load_json(path)
+    if not isinstance(preview, dict) or str(preview.get("reconcile_id", "") or "") != reconcile_id:
+        raise ValueError("Stored reconciliation preview is invalid")
+    stored_digest = str(preview.get("preview_sha256", "") or "")
+    actual_digest = reconciliation_preview_digest(preview)
+    if not preview_sha256 or preview_sha256 != stored_digest or stored_digest != actual_digest:
+        raise ValueError("Reconciliation preview hash mismatch")
+    expected_state = str(preview.get("portfolio_state_sha256", "") or "")
+    if not expected_portfolio_state_sha256 or expected_portfolio_state_sha256 != expected_state:
+        raise ValueError("Expected portfolio state hash does not match reconciliation preview")
+    request_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "reconcile_id": reconcile_id,
+                "preview_sha256": preview_sha256,
+                "portfolio_state_sha256": expected_portfolio_state_sha256,
+                "drop_missing": bool(drop_missing),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    applied_path = reconciliation_applied_path(agent_home, reconcile_id)
+    if applied_path.exists():
+        applied = load_json(applied_path)
+        if str(applied.get("request_sha256", "") or "") != request_digest:
+            raise ValueError("Reconciliation id was already applied with a different request")
+        result = dict(applied.get("result", {}) or {})
+        result["idempotent_replay"] = True
+        return result
+    current_state = portfolio_state_hash(load_portfolio(agent_home))
+    if current_state != expected_state:
+        raise ValueError("Portfolio state changed after reconciliation preview; generate a new preview")
+    result = apply_reconciliation(agent_home, preview, drop_missing=drop_missing)
+    result["reconcile_id"] = reconcile_id
+    result["preview_sha256"] = preview_sha256
+    result["idempotent_replay"] = False
+    dump_json(
+        applied_path,
+        {
+            "schema_version": "reconciliation_apply.v1",
+            "reconcile_id": reconcile_id,
+            "request_sha256": request_digest,
+            "applied_at": timestamp_now(),
+            "result": result,
+        },
+    )
+    return result
 
 
 def _position_row_from_preview(row: dict[str, Any]) -> dict[str, Any]:
@@ -605,20 +836,57 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
 
 def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     import_id = str(payload.get("import_id") or _new_id("alipay"))
+    if not IMPORT_ID_PATTERN.fullmatch(import_id):
+        raise ValueError("import_id must contain only letters, numbers, underscores, or hyphens")
     files = payload.get("files", []) or []
-    saved: list[str] = []
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_SCREENSHOT_FILES:
+        raise ValueError(f"files must contain between 1 and {MAX_SCREENSHOT_FILES} screenshots")
+    decoded_files: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    max_encoded_chars = ((MAX_SCREENSHOT_FILE_BYTES + 2) // 3) * 4
     for index, item in enumerate(files, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"files[{index - 1}] must be an object")
         name = str(item.get("name") or f"screenshot_{index}.png")
-        safe_name = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in name)
-        raw = str(item.get("data") or "")
-        if "," in raw:
-            raw = raw.split(",", 1)[1]
-        target = alipay_screenshot_dir(agent_home) / import_id / safe_name
-        target.parent.mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in Path(name).name)
+        if not safe_name or safe_name in {".", ".."}:
+            safe_name = f"screenshot_{index}.png"
+        raw = item.get("data")
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(f"files[{index - 1}].data must be non-empty base64")
+        if raw.startswith("data:"):
+            marker = ";base64,"
+            if marker not in raw:
+                raise ValueError(f"files[{index - 1}].data must be a base64 data URL")
+            raw = raw.split(marker, 1)[1]
+        elif "," in raw:
+            raise ValueError(f"files[{index - 1}].data has an invalid data URL")
+        if len(raw) > max_encoded_chars:
+            raise ValueError(f"files[{index - 1}] exceeds {MAX_SCREENSHOT_FILE_BYTES} decoded bytes")
         try:
-            target.write_bytes(base64.b64decode(raw))
-        except Exception:
-            target.write_text(str(item.get("data") or ""), encoding="utf-8")
+            decoded = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"files[{index - 1}].data is not valid base64") from exc
+        if len(decoded) > MAX_SCREENSHOT_FILE_BYTES:
+            raise ValueError(f"files[{index - 1}] exceeds {MAX_SCREENSHOT_FILE_BYTES} decoded bytes")
+        total_bytes += len(decoded)
+        if total_bytes > MAX_SCREENSHOT_TOTAL_BYTES:
+            raise ValueError(f"screenshot payload exceeds {MAX_SCREENSHOT_TOTAL_BYTES} decoded bytes")
+        decoded_files.append((safe_name, decoded))
+
+    target_dir = (alipay_screenshot_dir(agent_home) / import_id).resolve()
+    screenshot_root = alipay_screenshot_dir(agent_home).resolve()
+    try:
+        target_dir.relative_to(screenshot_root)
+    except ValueError as exc:
+        raise ValueError("screenshot import path must stay under the import directory") from exc
+    saved: list[str] = []
+    absolute_paths: list[Path] = []
+    for safe_name, decoded in decoded_files:
+        target = target_dir / safe_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(decoded)
+        absolute_paths.append(target)
         saved.append(project_relative_path(agent_home, target))
     preview = {
         "import_id": import_id,
@@ -642,7 +910,7 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
         try:
             from sync_portfolio_from_screenshots import build_sync_preview, call_screenshot_vision
 
-            image_paths = [Path(path) for path in saved]
+            image_paths = absolute_paths
             extracted = call_screenshot_vision(agent_home, image_paths, "alipay")
             recognized = build_sync_preview(
                 agent_home,
@@ -703,10 +971,39 @@ def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) ->
 def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:
     idempotency_key = settlement_idempotency_key(trade)
     event_path = settlement_event_path(agent_home, idempotency_key)
-    if trade.get("portfolio_applied_at") or event_path.exists():
-        return {"ok": True, "skipped": True, "reason": "settlement_already_applied", "settlement_event_path": project_relative_path(agent_home, event_path)}
+    journal = _load_settlement_journal(agent_home, idempotency_key)
+    trade_digest = _settlement_trade_digest(trade)
+    if journal and str(journal.get("trade_digest", "")) not in {"", trade_digest}:
+        _write_settlement_journal(agent_home, idempotency_key, {**journal, "status": "conflict", "last_error": "settlement idempotency key reused with different trade payload"})
+        raise RuntimeError("settlement idempotency key was reused with a different trade payload")
     portfolio = load_portfolio(agent_home)
+    if trade.get("portfolio_applied_at") or event_path.exists() or _portfolio_has_settlement(agent_home, portfolio, trade, idempotency_key):
+        if not event_path.exists():
+            dump_json(event_path, _recovered_settlement_payload(agent_home, trade, portfolio, idempotency_key, journal))
+        _write_settlement_journal(
+            agent_home,
+            idempotency_key,
+            {
+                **journal,
+                "status": "completed",
+                "trade_digest": trade_digest,
+                "after_state_hash": journal.get("after_state_hash", portfolio_state_hash(portfolio)),
+                "completed_at": timestamp_now(),
+                "recovered": True,
+            },
+        )
+        return {"ok": True, "skipped": True, "reason": "settlement_already_applied", "settlement_event_path": project_relative_path(agent_home, event_path)}
     before_hash = portfolio_state_hash(portfolio)
+    journal = {
+        **journal,
+        "status": "prepared",
+        "trade_digest": trade_digest,
+        "trade_id": trade.get("trade_id", ""),
+        "conversion_id": trade.get("conversion_id", ""),
+        "before_state_hash": before_hash,
+        "created_at": str(journal.get("created_at", "") or timestamp_now()),
+    }
+    _write_settlement_journal(agent_home, idempotency_key, journal)
     operation = str(trade.get("operation_type", ""))
     if operation == "convert":
         portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", _money(trade.get("out_amount")), trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"))
@@ -717,6 +1014,7 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
         portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
     else:
         return {"ok": False, "reason": f"operation {operation} does not update portfolio automatically"}
+    portfolio.setdefault("state_metadata", {})["applied_settlement_ids"] = sorted(_applied_settlement_ids(portfolio) | {idempotency_key})
     after_hash = portfolio_state_hash(portfolio)
     settlement_payload = {
         "event_type": "actual_trade_settlement",
@@ -727,6 +1025,7 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
         "after_state_hash": after_hash,
         "created_at": timestamp_now(),
     }
+    _write_settlement_journal(agent_home, idempotency_key, {**journal, "after_state_hash": after_hash})
     current_path, snapshot_path = _save_portfolio_state_unlocked(
         agent_home,
         portfolio,
@@ -744,7 +1043,32 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
             "source_path": str(trade.get("source_path", "")),
         }
     )
+    _write_settlement_journal(
+        agent_home,
+        idempotency_key,
+        {
+            **journal,
+            "status": "portfolio_applied",
+            "after_state_hash": after_hash,
+            "current_path": project_relative_path(agent_home, current_path),
+            "snapshot_path": project_relative_path(agent_home, snapshot_path),
+            "portfolio_applied_at": timestamp_now(),
+        },
+    )
     dump_json(event_path, settlement_payload)
+    _write_settlement_journal(
+        agent_home,
+        idempotency_key,
+        {
+            **journal,
+            "status": "completed",
+            "after_state_hash": after_hash,
+            "current_path": project_relative_path(agent_home, current_path),
+            "snapshot_path": project_relative_path(agent_home, snapshot_path),
+            "portfolio_applied_at": timestamp_now(),
+            "completed_at": timestamp_now(),
+        },
+    )
     return {
         "ok": True,
         "current_path": project_relative_path(agent_home, current_path),

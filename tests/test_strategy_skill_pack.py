@@ -114,10 +114,25 @@ class StrategySkillPackTests(unittest.TestCase):
             },
         )
 
+    def write_trusted_skill_audit(self) -> None:
+        registry = json.loads((self.agent.root / "db/strategy_skills/registry.json").read_text(encoding="utf-8"))
+        self.agent.write_json(
+            "db/learning_trust_audits/latest.json",
+            {
+                "schema_version": "learning_trust_audit.v1",
+                "skills": [
+                    {"skill_id": item["skill_id"], "trust_status": "trusted", "reason_codes": []}
+                    for item in registry.get("entries", [])
+                ],
+                "summary": {},
+            },
+        )
+
     def test_builder_writes_pack_and_non_mutating_usage_candidates(self) -> None:
         self.write_policy_store()
         self.write_action_tickets()
         run_curator(self.agent.root, generated_at=GENERATED_AT)
+        self.write_trusted_skill_audit()
 
         pack_path, usage_path, pack, usage = run_builder(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
 
@@ -131,6 +146,16 @@ class StrategySkillPackTests(unittest.TestCase):
         self.assertEqual(1, usage["summary"]["usage_candidate_count"])
         self.assertEqual(0, usage["summary"]["applied_to_ticket_file_count"])
         self.assertFalse(usage["usage"][0]["applied_to_ticket_file"])
+
+    def test_untrusted_skill_remains_visible_but_is_not_used(self) -> None:
+        self.write_policy_store()
+        self.write_action_tickets()
+        run_curator(self.agent.root, generated_at=GENERATED_AT)
+
+        _pack_path, _usage_path, pack, usage = run_builder(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+
+        self.assertEqual("blocked", pack["candidate_skills"][0]["learning_trust_status"])
+        self.assertEqual(0, usage["summary"]["usage_candidate_count"])
 
     def test_usage_artifact_without_ticket_file_stays_empty(self) -> None:
         self.write_policy_store()
@@ -155,6 +180,7 @@ class StrategySkillPackTests(unittest.TestCase):
         self.write_policy_store()
         self.write_action_tickets()
         run_curator(self.agent.root, generated_at=GENERATED_AT)
+        self.write_trusted_skill_audit()
 
         completed = self.agent.run_script("build_strategy_skill_pack.py", "--date", REPORT_DATE, "--generated-at", GENERATED_AT)
 

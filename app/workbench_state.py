@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 import sys
@@ -108,6 +109,7 @@ class ResearchViewModel:
     meta: str
     metrics: list[MetricViewModel]
     rows: list[dict[str, Any]]
+    fund_cards: list[dict[str, Any]]
     aggregate: dict[str, Any]
     realtime_map: dict[str, dict[str, Any]]
     review_map: dict[str, dict[str, Any]]
@@ -148,6 +150,7 @@ class ReviewViewModel:
     execution_memory_lines: list[str]
     pending_memory_lines: list[str]
     pending_memory_items: list[dict[str, Any]]
+    trust: dict[str, Any]
     dates: list[str]
     selected_date: str
 
@@ -343,6 +346,7 @@ class WorkbenchStateService:
             meta=meta,
             metrics=metrics,
             rows=rows,
+            fund_cards=_build_fund_research_cards(rows, llm_context, snapshot.selected_date),
             aggregate=aggregate,
             realtime_map=realtime_map,
             review_map=review_map,
@@ -398,6 +402,7 @@ class WorkbenchStateService:
         long_memory = state.get("long_memory", {}) or {}
         long_memory_items = list(long_memory.get("items", []) or [])
         pending_items = list((state.get("long_memory_pending", {}) or {}).get("items", []) or [])
+        trust = _learning_trust_summary(self.home, snapshot.selected_date)
         cycle = state.get("learning_cycle", {}) or {}
         ledger = state.get("memory_ledger", {}) or {}
         replay_items = list(state.get("replay_experiments", []) or [])
@@ -441,6 +446,7 @@ class WorkbenchStateService:
             execution_memory_lines=_memory_lines(long_memory_items, "execution"),
             pending_memory_lines=_memory_lines(pending_items, ""),
             pending_memory_items=pending_items,
+            trust=trust,
             dates=snapshot.dates,
             selected_date=snapshot.selected_date,
         )
@@ -481,6 +487,7 @@ def _build_today_page_dto(
     dashboard: dict[str, Any],
     today_analysis: dict[str, Any],
     daily_first_open: dict[str, Any],
+    research: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return coerce_model(
         TodayPageDto,
@@ -489,6 +496,7 @@ def _build_today_page_dto(
             "summary": snapshot.summary,
             "todayAnalysis": today_analysis,
             "dashboard": dashboard,
+            "research": research or {},
             "dailyFirstOpen": daily_first_open,
         },
     )
@@ -606,6 +614,57 @@ WorkbenchStateService.build_system_page_dto = _build_system_page_dto
 DesktopStateService = WorkbenchStateService
 
 
+def _learning_trust_summary(home: Path, selected_date: str) -> dict[str, Any]:
+    manifest_path = home / "config" / "historical_replay_trust.json"
+    manifest = _read_json_object(manifest_path)
+    dates = manifest.get("dates", {}) if isinstance(manifest.get("dates"), dict) else {}
+    entry = dates.get(selected_date, {}) if isinstance(dates.get(selected_date), dict) else {}
+    mode = str(entry.get("mode", manifest.get("default_mode", "blocked")) or "blocked")
+    learning_eligible = entry.get("learning_eligible") is True
+    latest_replay: dict[str, Any] = {}
+    replay_audit_path = ""
+    replay_dir = home / "db" / "replay_audits"
+    for path in sorted(replay_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True) if replay_dir.exists() else []:
+        payload = _read_json_object(path)
+        date_audits = payload.get("date_audits", []) if isinstance(payload.get("date_audits"), list) else []
+        match = next((item for item in date_audits if isinstance(item, dict) and item.get("replay_key") == selected_date), None)
+        if match is not None:
+            latest_replay = match
+            replay_audit_path = path.relative_to(home).as_posix()
+            break
+    learning_audit: dict[str, Any] = {}
+    learning_audit_path = ""
+    learning_dir = home / "db" / "learning_trust_audits"
+    if learning_dir.exists():
+        paths = sorted(learning_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        if paths:
+            learning_audit_path = paths[0].relative_to(home).as_posix()
+            learning_audit = _read_json_object(paths[0])
+    return {
+        "reportDate": selected_date,
+        "manifestPath": manifest_path.relative_to(home).as_posix(),
+        "manifestExists": manifest_path.exists(),
+        "mode": mode,
+        "learningEligible": learning_eligible,
+        "trustedForLearning": bool(mode == "trusted" and learning_eligible and latest_replay.get("allowed_for_learning") is True),
+        "reasonCodes": list(entry.get("reason_codes", []) or []),
+        "latestReplayAudit": latest_replay,
+        "latestReplayAuditPath": replay_audit_path,
+        "latestLearningAuditSummary": learning_audit.get("summary", {}) if isinstance(learning_audit.get("summary"), dict) else {},
+        "latestLearningAuditPath": learning_audit_path,
+    }
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _summarize_state_clean(state: dict[str, Any]) -> dict[str, Any]:
     validated = state.get("validated", {}) or {}
     aggregate = state.get("aggregate", {}) or {}
@@ -695,3 +754,214 @@ def _memory_lines(items: list[dict[str, Any]], domain: str) -> list[str]:
         f"{item.get('title', '')} | {item.get('status', '')} | 置信度 {item.get('confidence', 0)}"
         for item in rows[:12]
     ]
+
+
+def _build_fund_research_cards(rows: list[dict[str, Any]], llm_context: dict[str, Any], selected_date: str) -> list[dict[str, Any]]:
+    funds = {
+        str(item.get("fund_code", "") or ""): item
+        for item in (llm_context.get("funds", []) or [])
+        if isinstance(item, dict) and str(item.get("fund_code", "") or "")
+    }
+    row_map = {
+        str(item.get("fund_code", "") or ""): item
+        for item in rows
+        if isinstance(item, dict) and str(item.get("fund_code", "") or "")
+    }
+    ordered_codes: list[str] = []
+    for row in rows:
+        code = str(row.get("fund_code", "") or "")
+        if code and code not in ordered_codes:
+            ordered_codes.append(code)
+    for code, fund in sorted(funds.items(), key=lambda pair: float(pair[1].get("current_value", 0.0) or 0.0), reverse=True):
+        if code not in ordered_codes:
+            ordered_codes.append(code)
+
+    cards = [_build_single_fund_research_card(code, row_map.get(code, {}), funds.get(code, {}), selected_date) for code in ordered_codes]
+    cards.sort(
+        key=lambda item: (
+            0 if item.get("isActionable") else 1,
+            -float(item.get("priority", 0.0) or 0.0),
+            -float(item.get("portfolio", {}).get("currentValue", 0.0) or 0.0),
+            str(item.get("fundCode", "")),
+        )
+    )
+    return cards
+
+
+def _build_single_fund_research_card(fund_code: str, row: dict[str, Any], fund: dict[str, Any], selected_date: str) -> dict[str, Any]:
+    quote = fund.get("quote", {}) or {}
+    intraday_proxy = fund.get("intraday_proxy", {}) or {}
+    estimated_nav = fund.get("estimated_nav", {}) or {}
+    profile = fund.get("fund_profile", {}) or {}
+    recent_news = [dict(item) for item in (fund.get("recent_news", []) or []) if isinstance(item, dict)]
+    risk_news = [
+        item
+        for item in recent_news
+        if str(item.get("risk_level", "") or "").lower() in {"high", "medium"}
+        or str(item.get("impact", "") or "").lower() == "negative"
+        or str(item.get("sentiment_label", "") or "").lower() == "negative"
+    ]
+    action = str(row.get("validated_action") or ("scheduled_dca" if fund.get("fixed_daily_buy_amount") else "hold") or "hold")
+    amount = row.get("validated_amount")
+    if amount in (None, "") and action == "scheduled_dca":
+        amount = fund.get("fixed_daily_buy_amount", 0.0)
+    amount = _safe_number(amount)
+    confidence = _safe_number(row.get("confidence"), default=0.0)
+    fund_name = str(row.get("fund_name") or fund.get("fund_name") or profile.get("fund_name") or quote.get("name") or fund_code)
+    evidence = _list_text(row.get("evidence"))[:8]
+    risks = _list_text(row.get("risks"))[:8]
+    if not evidence:
+        evidence = _default_evidence_lines(fund, quote, intraday_proxy, estimated_nav)
+    if not risks:
+        risks = _default_risk_lines(row, fund, quote, intraday_proxy, estimated_nav, risk_news)
+
+    day_change = _safe_number(quote.get("day_change_pct"), default=None)
+    estimate_change = _safe_number(estimated_nav.get("estimate_change_pct"), default=None)
+    proxy_change = _safe_number(intraday_proxy.get("change_pct"), default=None)
+    return {
+        "ticketId": str(row.get("suggestion_id") or f"{selected_date}:{fund_code}:{action}"),
+        "fundCode": fund_code,
+        "fundName": fund_name,
+        "selectedDate": selected_date,
+        "section": str(row.get("_section") or "holding"),
+        "strategyBucket": str(row.get("strategy_bucket") or fund.get("strategy_bucket") or ""),
+        "action": action,
+        "actionLabel": _action_label(action),
+        "amount": amount,
+        "amountText": _format_money(amount) if amount else "0.00",
+        "priority": _safe_number(row.get("priority"), default=0.0),
+        "confidence": confidence,
+        "confidenceText": f"{confidence:.2f}" if confidence else "暂无",
+        "thesis": str(row.get("thesis") or row.get("reason") or _default_thesis(action, fund_name, fund)),
+        "evidence": evidence,
+        "risks": risks,
+        "agentSupport": _list_text(row.get("agent_support")),
+        "sourceSignalIds": _list_text(row.get("source_signal_ids"))[:6],
+        "opposingSignalIds": _list_text(row.get("opposing_signal_ids"))[:6],
+        "policyRuleHits": _list_text(row.get("policy_rule_hits"))[:6],
+        "constraintHits": _list_text(row.get("constraint_hits"))[:6],
+        "consensusText": str(row.get("_consensus_text") or "暂无"),
+        "hasConflict": bool(row.get("_has_conflict", False)),
+        "isActionable": bool(row.get("_is_actionable", action not in {"hold", "not_applicable"})),
+        "portfolio": {
+            "currentValue": _safe_number(fund.get("current_value"), default=0.0),
+            "currentValueText": _format_money(fund.get("current_value")),
+            "holdingPnl": _safe_number(fund.get("holding_pnl"), default=0.0),
+            "holdingPnlText": _format_money(fund.get("holding_pnl")),
+            "holdingReturnPct": _safe_number(fund.get("holding_return_pct"), default=0.0),
+            "holdingReturnPctText": _format_percent(fund.get("holding_return_pct")),
+            "role": str(fund.get("role") or ""),
+            "styleGroup": str(fund.get("style_group") or ""),
+            "allowTrade": bool(fund.get("allow_trade", True)),
+            "fixedDailyBuyAmount": _safe_number(fund.get("fixed_daily_buy_amount"), default=0.0),
+        },
+        "market": {
+            "dayChangePct": day_change,
+            "dayChangePctText": _format_percent(day_change),
+            "estimateChangePct": estimate_change,
+            "estimateChangePctText": _format_percent(estimate_change),
+            "proxyChangePct": proxy_change,
+            "proxyChangePctText": _format_percent(proxy_change),
+            "officialNav": quote.get("nav") or estimated_nav.get("official_nav"),
+            "officialNavDate": quote.get("as_of_date") or estimated_nav.get("official_nav_date") or "",
+            "estimateTime": estimated_nav.get("estimate_time") or "",
+            "quoteFreshness": quote.get("freshness_label") or quote.get("freshness_status") or "",
+            "estimateFreshness": estimated_nav.get("estimate_freshness_label") or estimated_nav.get("estimate_freshness_status") or "",
+            "proxyFreshness": intraday_proxy.get("freshness_label") or intraday_proxy.get("freshness_status") or "",
+        },
+        "news": {
+            "items": recent_news[:5],
+            "riskItems": risk_news[:4],
+            "count": len(recent_news),
+            "riskCount": len(risk_news),
+            "topTitle": str((recent_news[0] or {}).get("title") or "") if recent_news else "",
+            "topRiskTitle": str((risk_news[0] or {}).get("title") or "") if risk_news else "",
+        },
+        "profile": {
+            "manager": profile.get("fund_manager") or "",
+            "company": profile.get("management_company") or "",
+            "category": profile.get("category") or profile.get("fund_type") or "",
+            "riskLevel": profile.get("risk_level") or "",
+            "benchmark": profile.get("benchmark") or quote.get("benchmark") or "",
+        },
+        "evidenceRefs": list(fund.get("evidence_refs", []) or [])[:8],
+    }
+
+
+def _list_text(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [line.strip(" -*") for line in value.splitlines() if line.strip(" -*")]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _safe_number(value: Any, default: float | None = 0.0) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_money(value: Any) -> str:
+    numeric = _safe_number(value, 0.0) or 0.0
+    return f"{numeric:,.2f}"
+
+
+def _format_percent(value: Any) -> str:
+    numeric = _safe_number(value, None)
+    if numeric is None:
+        return "暂无"
+    return f"{numeric:+.2f}%"
+
+
+def _default_evidence_lines(
+    fund: dict[str, Any],
+    quote: dict[str, Any],
+    intraday_proxy: dict[str, Any],
+    estimated_nav: dict[str, Any],
+) -> list[str]:
+    lines: list[str] = []
+    if quote:
+        lines.append(f"官方净值涨跌 {quote.get('day_change_pct', '暂无')}%，日期 {quote.get('as_of_date', '暂无')}。")
+    if estimated_nav:
+        lines.append(f"估算净值涨跌 {estimated_nav.get('estimate_change_pct', '暂无')}%，置信度 {estimated_nav.get('confidence', '暂无')}。")
+    if intraday_proxy:
+        lines.append(f"代理标的涨跌 {intraday_proxy.get('change_pct', '暂无')}%，状态 {intraday_proxy.get('freshness_label') or intraday_proxy.get('freshness_status') or '暂无'}。")
+    if fund.get("fixed_daily_buy_amount"):
+        lines.append(f"该基金有固定每日定投 {fund.get('fixed_daily_buy_amount')}。")
+    return lines or ["暂无结构化证据，请先运行今日分析。"]
+
+
+def _default_risk_lines(
+    row: dict[str, Any],
+    fund: dict[str, Any],
+    quote: dict[str, Any],
+    intraday_proxy: dict[str, Any],
+    estimated_nav: dict[str, Any],
+    risk_news: list[dict[str, Any]],
+) -> list[str]:
+    lines: list[str] = []
+    if risk_news:
+        lines.append(f"新闻风险 {len(risk_news)} 条：{risk_news[0].get('title', '暂无标题')}")
+    if quote.get("freshness_is_delayed") or estimated_nav.get("stale") or intraday_proxy.get("stale"):
+        lines.append("存在行情、估值或代理数据新鲜度风险。")
+    if fund.get("allow_trade") is False:
+        lines.append("该基金当前标记为固定持有或不可交易。")
+    if bool(row.get("_has_conflict")):
+        lines.append("多 Agent 对该基金存在分歧，需要人工确认。")
+    return lines or ["暂无突出风险，但仍需结合交易时点和资金约束确认。"]
+
+
+def _default_thesis(action: str, fund_name: str, fund: dict[str, Any]) -> str:
+    if action == "scheduled_dca":
+        return f"{fund_name} 按固定定投规则执行，避免把短期行情噪声过度放大。"
+    if action in {"buy", "add"}:
+        return f"{fund_name} 当前被标记为可执行动作，需结合实时估值、新闻风险和组合仓位确认。"
+    if action in {"sell", "reduce", "switch"}:
+        return f"{fund_name} 当前出现减仓或切换信号，执行前需确认费用、结算和替代标的。"
+    if fund.get("allow_trade") is False:
+        return f"{fund_name} 当前以固定持有为主，今日建议侧重观察和约束确认。"
+    return f"{fund_name} 今日以观察为主，重点看信号是否进一步确认。"

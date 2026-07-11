@@ -85,16 +85,23 @@ class AdaptivePolicyTests(unittest.TestCase):
             "blocked_reason": "missing_evaluation_quote_file" if status == "pending" else "",
             "official_nav_start": {"nav_date": BASE_DATE, "nav": 1.0} if status == "scored" else {},
             "official_nav_end": {"nav_date": "2026-03-11", "nav": 1.01} if status == "scored" else {},
-            "benchmark": {},
+            "benchmark": {"benchmark_id": "benchmark:test", "return_pct": 0.0},
             "actual_return_pct": 1.0 if status == "scored" else None,
-            "benchmark_return_pct": None,
-            "excess_return_pct": None,
+            "benchmark_return_pct": 0.0 if status == "scored" else None,
+            "excess_return_pct": 1.0 if status == "scored" else None,
             "no_action_baseline": {"baseline_type": "hold_cash", "return_pct": 0.0},
             "outcome_label": label,
             "diagnostic_label": f"{action}_{label}",
             "confidence": 0.6 if status == "scored" else 0.0,
             "cashflow_checks": {"cashflow_between_nav_dates": False, "units_trusted": True, "position_authoritative": True},
-            "decision_context": {"exposure_context": "increase_exposure", "learning_eligible": True},
+            "decision_context": {
+                "exposure_context": "increase_exposure",
+                "learning_eligible": True,
+                "learning_basis": "benchmark_excess_return",
+                "learning_signal_pct": 1.0,
+                "learning_label": "helped",
+                "learning_diagnostic_label": "increase_exposure_outperformed_benchmark",
+            },
             "learning_implications": [],
             "source_refs": [],
             "audit": {"builder": "test"},
@@ -190,7 +197,7 @@ class AdaptivePolicyTests(unittest.TestCase):
         self.assertTrue(store.non_executable)
         self.assertFalse(store.hard_block_allowed)
 
-    def test_active_promotion_requires_enough_support_or_user_approval(self) -> None:
+    def test_active_promotion_requires_user_approval_even_with_enough_support(self) -> None:
         policy_id = "policy:portfolio:growth_cluster:repeat_add:v1"
         for index in range(4):
             self.append_event(self.manual_event(f"support:{index}", policy_id, "support"))
@@ -200,7 +207,9 @@ class AdaptivePolicyTests(unittest.TestCase):
 
         self.append_event(self.manual_event("support:4", policy_id, "support"))
         store = materialize_policy_store(self.agent.root, generated_at=GENERATED_AT)
-        self.assertEqual("active", store.policies[0].status)
+        self.assertEqual("candidate", store.policies[0].status)
+        self.assertFalse(store.policies[0].promotion_rule["auto_activation_allowed"])
+        self.assertTrue(store.policies[0].promotion_rule["user_approval_required_for_active"])
 
         approved_policy_id = "policy:portfolio:growth_cluster:repeat_hold:v1"
         self.append_event(self.manual_event("support:approved", approved_policy_id, "support"))
@@ -227,9 +236,19 @@ class AdaptivePolicyTests(unittest.TestCase):
         self.assertEqual(3, store.summary["valid_event_count"])
 
     def test_pending_and_neutral_outcomes_do_not_create_policy_events(self) -> None:
+        neutral = self.outcome("F002", "neutral", index=2)
+        neutral["actual_return_pct"] = 0.0
+        neutral["excess_return_pct"] = 0.0
+        neutral["decision_context"].update(
+            {
+                "learning_signal_pct": 0.0,
+                "learning_label": "neutral",
+                "learning_diagnostic_label": "increase_exposure_matched_benchmark",
+            }
+        )
         outcomes = [
             self.outcome("F001", "not_scored", status="pending"),
-            self.outcome("F002", "neutral", index=2),
+            neutral,
         ]
         self.write_inputs(outcomes, [self.ticket("F001"), self.ticket("F002")])
 
@@ -247,6 +266,76 @@ class AdaptivePolicyTests(unittest.TestCase):
         _event_path, _store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
 
         self.assertEqual(0, updated)
+        self.assertEqual([], store.policies)
+
+    def test_positive_absolute_return_but_negative_excess_creates_contradiction(self) -> None:
+        outcome = self.outcome("F001", "helped")
+        outcome["benchmark_return_pct"] = 2.0
+        outcome["benchmark"]["return_pct"] = 2.0
+        outcome["excess_return_pct"] = -1.0
+        outcome["decision_context"].update(
+            {
+                "learning_signal_pct": -1.0,
+                "learning_label": "hurt",
+                "learning_diagnostic_label": "increase_exposure_underperformed_benchmark",
+            }
+        )
+        self.write_inputs([outcome], [self.ticket("F001")])
+
+        _event_path, _store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        event = json.loads(policy_event_log_path(self.agent.root).read_text(encoding="utf-8").strip())
+
+        self.assertEqual(1, updated)
+        self.assertEqual("contradict", event["event_type"])
+        self.assertEqual("hurt", event["outcome_label"])
+        self.assertEqual("increase_exposure_underperformed_benchmark", event["diagnostic_label"])
+        self.assertEqual("benchmark_excess_return", event["audit"]["learning_signal_basis"])
+        self.assertEqual(0, store.policies[0].support_count)
+        self.assertEqual(1, store.policies[0].contradiction_count)
+
+    def test_scored_outcome_without_benchmark_does_not_create_policy_event(self) -> None:
+        outcome = self.outcome("F001", "helped")
+        outcome["benchmark"] = {}
+        outcome["benchmark_return_pct"] = None
+        outcome["excess_return_pct"] = None
+        self.write_inputs([outcome], [self.ticket("F001")])
+
+        _event_path, _store_path, updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+
+        self.assertEqual(0, updated)
+        self.assertEqual([], store.policies)
+
+    def test_replay_removes_stale_absolute_event_when_outcome_becomes_ineligible(self) -> None:
+        outcome = self.outcome("F001", "helped")
+        outcome["decision_context"].update(
+            {
+                "learning_basis": "benchmark_excess_return",
+                "learning_signal_pct": 1.0,
+                "learning_label": "helped",
+                "learning_diagnostic_label": "increase_exposure_outperformed_benchmark",
+            }
+        )
+        self.write_inputs([outcome], [self.ticket("F001")])
+        run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+        self.assertTrue(policy_event_log_path(self.agent.root).read_text(encoding="utf-8").strip())
+
+        outcome["benchmark"] = {}
+        outcome["benchmark_return_pct"] = None
+        outcome["excess_return_pct"] = None
+        outcome["decision_context"].update(
+            {
+                "learning_eligible": False,
+                "learning_signal_pct": None,
+                "learning_label": "neutral",
+                "learning_diagnostic_label": "missing_benchmark_return",
+                "learning_blocked_reason": "missing_benchmark_return",
+            }
+        )
+        self.write_inputs([outcome], [self.ticket("F001")])
+
+        _event_path, _store_path, _updated, store = run_updater(self.agent.root, BASE_DATE, ["T+1"], generated_at=GENERATED_AT)
+
+        self.assertEqual("", policy_event_log_path(self.agent.root).read_text(encoding="utf-8"))
         self.assertEqual([], store.policies)
 
     def test_policy_cap_per_scope_is_enforced(self) -> None:

@@ -1,35 +1,28 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { ResearchDigestBreakdown, ResearchDigestEntry, ResearchPayload, ResearchSentimentBlock, Tone } from "../../lib/types";
-import { text } from "../../lib/format";
-import { actionLabel } from "../../lib/display";
-import { Activity, ArrowRight, Newspaper, RadioTower } from "lucide-react";
-import { Badge, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import type { FundResearchCard, ResearchDigestBreakdown, ResearchDigestEntry, ResearchPayload, ResearchSentimentBlock, Tone } from "../../lib/types";
+import { asNullableNumber, asNumber, text } from "../../lib/format";
+import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
+import { Activity, ArrowRight, FileText, Newspaper, RadioTower, Search, ShieldAlert } from "lucide-react";
+import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
 export function ResearchPage({ research, onOpenFundDetail }: { research: ResearchPayload; onOpenFundDetail?: (fundCode: string) => void }) {
   const [query, setQuery] = useState("");
-  const rows = useMemo(() => {
+  const [selectedTicketId, setSelectedTicketId] = useState("");
+  const cards = useMemo(() => {
+    const source = research.fund_cards?.length ? research.fund_cards : research.rows.map(rowToFundCard);
     const needle = query.trim().toLowerCase();
-    if (!needle) return research.rows;
-    return research.rows.filter((row) => JSON.stringify(row).toLowerCase().includes(needle));
-  }, [query, research.rows]);
-
-  function fundCodeValue(row: Record<string, unknown>) {
-    return text(row.fund_code ?? row.fundCode, "");
-  }
-
-  function fundNameValue(row: Record<string, unknown>) {
-    return text(row.fund_name ?? row.fundName, fundCodeValue(row));
-  }
-
-  function openFundDetail(row: Record<string, unknown>) {
-    const code = fundCodeValue(row);
-    if (code && onOpenFundDetail) onOpenFundDetail(code);
-  }
+    if (!needle) return source;
+    return source.filter((card) => JSON.stringify(card).toLowerCase().includes(needle));
+  }, [query, research.fund_cards, research.rows]);
+  const selectedCard = useMemo(() => {
+    if (!cards.length) return null;
+    return cards.find((card) => card.ticketId === selectedTicketId) ?? cards[0];
+  }, [cards, selectedTicketId]);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {research.metrics.map((metric) => (
           <MetricCard key={metric.title} {...metric} />
         ))}
@@ -39,87 +32,274 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
         <NewsDigestPanel digest={research.news_digest} eventRisks={research.event_risks} />
         <SentimentDigestPanel digest={research.sentiment_digest} />
       </div>
-      <Card className="p-4">
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <SectionTitle title="基金研究表" meta={research.meta} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索基金、动作、理由"
-            className="h-9 w-72 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm text-slate-100 outline-none focus:border-cyan-700"
-          />
-        </div>
-        {rows.length ? (
-          <div className="overflow-hidden rounded-md border border-slate-800">
-            <table className="w-full border-collapse text-sm">
-              <thead className="bg-slate-900 text-xs text-slate-500">
-                <tr>
-                  <th className="px-3 py-3 text-left">基金</th>
-                  <th className="px-3 py-3 text-left">动作</th>
-                  <th className="px-3 py-3 text-right">金额</th>
-                  <th className="px-3 py-3 text-left">共识</th>
-                  <th className="px-3 py-3 text-left">理由</th>
-                  <th className="px-3 py-3 text-right">详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, index) => (
-                  <tr
-                    key={`${fundCodeValue(row) || "row"}-${index}`}
-                    className={`border-t border-slate-800 text-slate-300 ${onOpenFundDetail ? "cursor-pointer hover:bg-slate-900/60" : ""}`}
-                    onClick={() => openFundDetail(row)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openFundDetail(row);
-                      }
-                    }}
-                    role={onOpenFundDetail ? "button" : undefined}
-                    tabIndex={onOpenFundDetail ? 0 : undefined}
-                  >
-                    <td className="px-3 py-3">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openFundDetail(row);
-                        }}
-                        className="w-full text-left"
-                      >
-                        <div className="font-semibold text-cyan-100 hover:text-cyan-200">{fundNameValue(row)}</div>
-                        <div className="text-xs text-slate-500">{fundCodeValue(row)}</div>
-                      </button>
-                    </td>
-                    <td className="px-3 py-3">
-                      <Badge tone={text(row.validated_action, "hold") === "hold" ? "neutral" : "accent"}>{actionLabel(row.validated_action)}</Badge>
-                    </td>
-                    <td className="metric-number px-3 py-3 text-right">{text(row.validated_amount, "0")}</td>
-                    <td className="px-3 py-3">
-                      <Badge tone={row._has_conflict ? "warning" : "success"}>{text(row._consensus_text, "暂无")}</Badge>
-                    </td>
-                    <td className="max-w-xl px-3 py-3 text-slate-400">{text(row.thesis || row.reason, "暂无理由")}</td>
-                    <td className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openFundDetail(row);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-cyan-200 hover:border-cyan-700 hover:bg-slate-900"
-                      >
-                        查看
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
+
+      <Card className="p-0">
+        <div className="grid min-h-[640px] grid-cols-1 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
+          <aside className="border-b border-slate-800 bg-slate-950/35 lg:border-b-0 lg:border-r">
+            <div className="border-b border-slate-800 p-4">
+              <SectionTitle title="基金 Ticket" meta={research.meta} />
+              <div className="flex h-9 items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm text-slate-400 focus-within:border-cyan-700">
+                <Search className="h-4 w-4 shrink-0" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="搜索基金、动作、风险"
+                  className="h-full min-w-0 flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600"
+                />
+              </div>
+            </div>
+            {cards.length ? (
+              <div className="max-h-[590px] overflow-y-auto p-2">
+                {cards.map((card) => (
+                  <TicketButton
+                    key={card.ticketId}
+                    card={card}
+                    selected={card.ticketId === selectedCard?.ticketId}
+                    onClick={() => setSelectedTicketId(card.ticketId)}
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState title="暂无研究建议" body="运行今日分析后，这里会显示加仓、定投和观察建议。" />
-        )}
+              </div>
+            ) : (
+              <div className="p-4">
+                <EmptyState title="暂无基金 Ticket" body="运行今日分析后，这里会按基金生成每日建议卡。" />
+              </div>
+            )}
+          </aside>
+
+          {selectedCard ? (
+            <FundTicketWorkspace card={selectedCard} onOpenFundDetail={onOpenFundDetail} />
+          ) : (
+            <div className="p-5">
+              <EmptyState title="暂无研究建议" body="运行今日分析后，这里会显示加仓、定投和观察建议。" />
+            </div>
+          )}
+        </div>
       </Card>
+    </div>
+  );
+}
+
+function TicketButton({ card, selected, onClick }: { card: FundResearchCard; selected: boolean; onClick: () => void }) {
+  const pnlTone = toneFromNumber(card.portfolio.holdingPnl);
+  const changeTone = toneFromNumber(card.market.estimateChangePct ?? card.market.dayChangePct ?? card.market.proxyChangePct);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`mb-2 w-full rounded-md border p-3 text-left transition ${
+        selected ? "border-cyan-500/60 bg-cyan-950/30" : "border-slate-800 bg-slate-950/50 hover:border-slate-700 hover:bg-slate-900/70"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-bold text-slate-100">{card.fundName}</div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+            <span className="metric-number">{card.fundCode}</span>
+            <span>{styleLabel(card.portfolio.styleGroup)}</span>
+          </div>
+        </div>
+        <Badge tone={actionTone(card.action)}>{card.actionLabel || actionLabel(card.action)}</Badge>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <TicketStat label="金额" value={card.amountText || "0.00"} />
+        <TicketStat label="收益" value={text(card.portfolio.holdingPnlText, "0.00")} tone={pnlTone} />
+        <TicketStat label="信号" value={text(card.market.estimateChangePctText, text(card.market.dayChangePctText, "暂无"))} tone={changeTone} />
+      </div>
+      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{card.thesis}</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {card.hasConflict ? <Badge tone="warning">分歧</Badge> : <Badge tone="success">{card.consensusText || "共识"}</Badge>}
+        {card.news.riskCount ? <Badge tone="danger">新闻风险 {card.news.riskCount}</Badge> : null}
+        {card.policyRuleHits.length ? <Badge tone="purple">规则 {card.policyRuleHits.length}</Badge> : null}
+      </div>
+    </button>
+  );
+}
+
+function TicketStat({ label, value, tone = "neutral" }: { label: string; value: string; tone?: Tone }) {
+  const toneClass =
+    tone === "success" ? "text-emerald-200" : tone === "danger" ? "text-rose-200" : tone === "warning" ? "text-amber-200" : "text-slate-200";
+  return (
+    <div className="rounded border border-slate-800 bg-slate-950/70 px-2 py-1.5">
+      <div className="text-[11px] text-slate-600">{label}</div>
+      <div className={`metric-number mt-1 truncate font-semibold ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function FundTicketWorkspace({ card, onOpenFundDetail }: { card: FundResearchCard; onOpenFundDetail?: (fundCode: string) => void }) {
+  return (
+    <main className="min-w-0">
+      <div className="border-b border-slate-800 bg-slate-950/20 px-5 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={actionTone(card.action)}>{card.actionLabel || actionLabel(card.action)}</Badge>
+              <Badge tone={card.hasConflict ? "warning" : "success"}>{card.consensusText || "暂无共识"}</Badge>
+              {card.news.riskCount ? <Badge tone="danger">新闻风险 {card.news.riskCount}</Badge> : null}
+              {card.portfolio.allowTrade === false ? <Badge tone="warning">不可交易</Badge> : null}
+            </div>
+            <h2 className="mt-3 truncate text-xl font-black text-slate-50">{card.fundName}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+              <span className="metric-number">{card.fundCode}</span>
+              <span>|</span>
+              <span>{roleLabel(card.portfolio.role)}</span>
+              <span>|</span>
+              <span>{styleLabel(card.portfolio.styleGroup)}</span>
+              <span>|</span>
+              <span>{card.selectedDate}</span>
+            </div>
+          </div>
+          {onOpenFundDetail ? (
+            <Button variant="primary" className="shrink-0 gap-2" onClick={() => onOpenFundDetail(card.fundCode)}>
+              完整详情
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 border-b border-slate-800 px-5 py-4 md:grid-cols-2 xl:grid-cols-4">
+        <SignalTile label="建议金额" value={card.amountText || "0.00"} helper={`优先级 ${card.priority || 0}`} />
+        <SignalTile
+          label="持仓盈亏"
+          value={text(card.portfolio.holdingPnlText, "0.00")}
+          helper={text(card.portfolio.holdingReturnPctText, "0.00%")}
+          tone={toneFromNumber(card.portfolio.holdingPnl)}
+        />
+        <SignalTile
+          label="估算涨跌"
+          value={text(card.market.estimateChangePctText, "暂无")}
+          helper={text(card.market.estimateFreshness, "估算数据")}
+          tone={toneFromNumber(card.market.estimateChangePct)}
+        />
+        <SignalTile
+          label="代理涨跌"
+          value={text(card.market.proxyChangePctText, "暂无")}
+          helper={text(card.market.proxyFreshness, "代理数据")}
+          tone={toneFromNumber(card.market.proxyChangePct)}
+        />
+      </div>
+
+      <div className="grid grid-cols-12 gap-4 p-5">
+        <section className="col-span-12 space-y-4 xl:col-span-7">
+          <Panel title="建议卡" icon={<FileText className="h-4 w-4" />}>
+            <p className="text-sm leading-7 text-slate-300">{card.thesis}</p>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <KeyValue label="动作" value={card.actionLabel || actionLabel(card.action)} />
+              <KeyValue label="置信度" value={card.confidenceText || "暂无"} />
+              <KeyValue label="组合市值" value={text(card.portfolio.currentValueText, "0.00")} />
+              <KeyValue label="官方净值" value={`${text(card.market.officialNav, "暂无")} ${card.market.officialNavDate ? `(${card.market.officialNavDate})` : ""}`} />
+            </div>
+          </Panel>
+
+          <Panel title="证据与风险" icon={<ShieldAlert className="h-4 w-4" />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <CompactList title="有效证据" items={card.evidence} empty="暂无结构化证据" />
+              <CompactList title="风险提示" items={card.risks} empty="暂无突出风险" />
+            </div>
+          </Panel>
+
+          <Panel title="规则和信号" icon={<Activity className="h-4 w-4" />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <CompactList title="策略规则" items={card.policyRuleHits} empty="暂无命中规则" code />
+              <CompactList title="硬约束" items={card.constraintHits} empty="暂无命中约束" code />
+              <CompactList title="支持信号" items={card.sourceSignalIds} empty="暂无支持信号" code />
+              <CompactList title="反向信号" items={card.opposingSignalIds} empty="暂无反向信号" code />
+            </div>
+          </Panel>
+        </section>
+
+        <aside className="col-span-12 space-y-4 xl:col-span-5">
+          <Panel title="市场信号" icon={<Activity className="h-4 w-4" />}>
+            <div className="space-y-2">
+              <KeyValue label="官方日涨跌" value={text(card.market.dayChangePctText, "暂无")} tone={toneFromNumber(card.market.dayChangePct)} />
+              <KeyValue label="估算日涨跌" value={text(card.market.estimateChangePctText, "暂无")} tone={toneFromNumber(card.market.estimateChangePct)} />
+              <KeyValue label="代理日涨跌" value={text(card.market.proxyChangePctText, "暂无")} tone={toneFromNumber(card.market.proxyChangePct)} />
+              <KeyValue label="估算时间" value={text(card.market.estimateTime, "暂无")} />
+            </div>
+          </Panel>
+
+          <Panel title="新闻风险" icon={<Newspaper className="h-4 w-4" />}>
+            <NewsList items={(card.news.riskItems?.length ? card.news.riskItems : card.news.items) ?? []} />
+          </Panel>
+
+          <Panel title="基金画像" icon={<RadioTower className="h-4 w-4" />}>
+            <div className="space-y-2">
+              <KeyValue label="基金经理" value={text(card.profile.manager, "暂无")} />
+              <KeyValue label="管理人" value={text(card.profile.company, "暂无")} />
+              <KeyValue label="分类" value={text(card.profile.category, "暂无")} />
+              <KeyValue label="基准" value={text(card.profile.benchmark, "暂无")} />
+            </div>
+          </Panel>
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+function SignalTile({ label, value, helper, tone = "neutral" }: { label: string; value: string; helper: string; tone?: Tone }) {
+  const color = tone === "success" ? "text-emerald-200" : tone === "danger" ? "text-rose-200" : tone === "warning" ? "text-amber-200" : "text-slate-100";
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/55 p-3">
+      <div className="text-xs font-bold text-slate-500">{label}</div>
+      <div className={`metric-number mt-2 truncate text-lg font-black ${color}`}>{value}</div>
+      <div className="mt-1 truncate text-xs text-slate-600">{helper}</div>
+    </div>
+  );
+}
+
+function Panel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <section className="rounded-md border border-slate-800 bg-slate-950/45 p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="text-cyan-300">{icon}</span>
+        <h3 className="text-sm font-bold text-slate-100">{title}</h3>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function KeyValue({ label, value, tone = "neutral" }: { label: string; value: string; tone?: Tone }) {
+  const color = tone === "success" ? "text-emerald-200" : tone === "danger" ? "text-rose-200" : tone === "warning" ? "text-amber-200" : "text-slate-200";
+  return (
+    <div className="flex items-start justify-between gap-3 rounded border border-slate-800 bg-slate-950/55 px-3 py-2 text-sm">
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <span className={`metric-number text-right font-semibold ${color}`}>{value}</span>
+    </div>
+  );
+}
+
+function CompactList({ title, items, empty, code = false }: { title: string; items: string[]; empty: string; code?: boolean }) {
+  const rows = items.length ? items : [empty];
+  return (
+    <div>
+      <div className="mb-2 text-sm font-bold text-slate-200">{title}</div>
+      <ul className="space-y-2 text-sm leading-6 text-slate-400">
+        {rows.slice(0, 6).map((item, index) => (
+          <li key={`${title}-${index}`} className={code ? "break-all font-mono text-xs text-slate-500" : ""}>
+            - {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function NewsList({ items }: { items: ResearchDigestEntry[] }) {
+  if (!items.length) return <p className="text-sm leading-6 text-slate-500">暂无直接关联新闻。</p>;
+  return (
+    <div className="space-y-3">
+      {items.slice(0, 4).map((item, index) => (
+        <div key={text(item.news_id ?? item.id, `news-${index}`)} className="rounded border border-slate-800 bg-slate-950/55 p-3">
+          <div className="line-clamp-2 text-sm font-semibold leading-6 text-slate-200">{text(item.title, "暂无标题")}</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Badge tone={newsTone(item)}>{text(item.risk_level ?? item.impact ?? item.sentiment_label, "news")}</Badge>
+            {item.heat_score !== undefined ? <Badge tone="info">热度 {text(item.heat_score, "0")}</Badge> : null}
+          </div>
+          <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{text(item.summary, "暂无摘要")}</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -169,11 +349,7 @@ function NewsDigestPanel({ digest, eventRisks }: { digest?: Record<string, unkno
           ? `来源分布 ${sourceBreakdown}`
           : `基金 ${text(byRole.fund_news, "0")} / 主题 ${text(byRole.theme_news, "0")} / 市场 ${text(byRole.market_news, "0")}`,
         queryBreakdown ? `查询命中 ${queryBreakdown}` : `事件风险 ${risks.length} 条`,
-        highlightHeat
-          ? `热点 ${newsHeadline(highlightHeat)}`
-          : highlightRisk
-            ? `风险 ${newsHeadline(highlightRisk)}`
-            : "暂无热点新闻摘要"
+        highlightHeat ? `热点 ${newsHeadline(highlightHeat)}` : highlightRisk ? `风险 ${newsHeadline(highlightRisk)}` : "暂无热点新闻摘要"
       ]}
     />
   );
@@ -218,11 +394,7 @@ function SentimentDigestPanel({ digest }: { digest?: Record<string, unknown> }) 
               : disabledSources.length
                 ? `默认停用 ${disabledSources.join(", ")}`
                 : "暂无有效情绪源",
-        health.length
-          ? `${providerName(health[0])}: ${text(health[0].status, "unknown")}`
-          : disabledSources.length
-            ? `停用来源 ${disabledSources.join(", ")}`
-            : ""
+        health.length ? `${providerName(health[0])}: ${text(health[0].status, "unknown")}` : disabledSources.length ? `停用来源 ${disabledSources.join(", ")}` : ""
       ]}
     />
   );
@@ -247,6 +419,71 @@ function InfoPanel({ icon, title, badge, rows }: { icon: ReactNode; title: strin
       </ul>
     </Card>
   );
+}
+
+function rowToFundCard(row: Record<string, unknown>): FundResearchCard {
+  const code = text(row.fund_code ?? row.fundCode, "");
+  const action = text(row.validated_action ?? row.action, "hold");
+  const amount = asNullableNumber(row.validated_amount);
+  return {
+    ticketId: text(row.suggestion_id, code || "ticket"),
+    fundCode: code,
+    fundName: text(row.fund_name ?? row.fundName, code),
+    selectedDate: "",
+    section: text(row._section, ""),
+    strategyBucket: text(row.strategy_bucket, ""),
+    action,
+    actionLabel: actionLabel(action),
+    amount,
+    amountText: amount === null ? "不可用" : amount.toFixed(2),
+    priority: asNumber(row.priority),
+    confidence: asNumber(row.confidence),
+    confidenceText: asNumber(row.confidence).toFixed(2),
+    thesis: text(row.thesis ?? row.reason, "暂无建议理由"),
+    evidence: normalizeStringArray(row.evidence),
+    risks: normalizeStringArray(row.risks),
+    agentSupport: normalizeStringArray(row.agent_support),
+    sourceSignalIds: normalizeStringArray(row.source_signal_ids),
+    opposingSignalIds: normalizeStringArray(row.opposing_signal_ids),
+    policyRuleHits: normalizeStringArray(row.policy_rule_hits),
+    constraintHits: normalizeStringArray(row.constraint_hits),
+    consensusText: text(row._consensus_text, "暂无"),
+    hasConflict: Boolean(row._has_conflict),
+    isActionable: action !== "hold" && action !== "not_applicable",
+    portfolio: {},
+    market: {},
+    news: { items: [], riskItems: [], count: 0, riskCount: 0 },
+    profile: {},
+    evidenceRefs: []
+  };
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string") return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function actionTone(action: string): Tone {
+  if (["buy", "add", "scheduled_dca", "planned_dca"].includes(action)) return "accent";
+  if (["sell", "reduce", "switch"].includes(action)) return "danger";
+  if (action === "locked" || action === "not_applicable") return "warning";
+  return "neutral";
+}
+
+function toneFromNumber(value: unknown): Tone {
+  const parsed = asNumber(value);
+  if (parsed > 0) return "success";
+  if (parsed < 0) return "danger";
+  return "neutral";
+}
+
+function newsTone(item: ResearchDigestEntry): Tone {
+  const value = text(item.risk_level ?? item.impact ?? item.sentiment_label, "").toLowerCase();
+  if (["high", "negative"].includes(value)) return "danger";
+  if (["medium", "mixed"].includes(value)) return "warning";
+  if (["positive", "low"].includes(value)) return "success";
+  return "neutral";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import unittest
@@ -9,7 +10,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from execution_sync import apply_reconciliation, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, update_pending_confirmations
+import execution_sync as execution_sync_module
+from execution_sync import apply_reconciliation, apply_saved_reconciliation, apply_settled_trade_to_portfolio, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, update_pending_confirmations
 from common import lock_path, project_path
 from helpers import TempAgentHome
 from long_memory_store import build_fund_memory
@@ -116,6 +118,24 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(len(pending["items"]), 1)
         self.assertFalse(lock_path(self.agent.root, "execution_sync").exists())
 
+    def test_trade_record_id_is_idempotent_and_conflicts_across_dates(self):
+        payload = {
+            "trade_id": "trade-stable-1",
+            "trade_date": "2026-05-04",
+            "fund_code": "017641",
+            "fund_name": "Index Fund",
+            "operation_type": "buy",
+            "amount": 100,
+        }
+
+        first = record_actual_trade(self.agent.root, payload)
+        second = record_actual_trade(self.agent.root, payload)
+
+        self.assertNotIn("idempotent_replay", first)
+        self.assertTrue(second["idempotent_replay"])
+        with self.assertRaisesRegex(ValueError, "trade_id already exists"):
+            record_actual_trade(self.agent.root, {**payload, "trade_date": "2026-05-05"})
+
     def test_record_conversion_uses_single_group_id(self):
         result = record_conversion(
             self.agent.root,
@@ -167,6 +187,50 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(fund["actual_daily_pnl_source"], "alipay_screenshot")
         self.assertEqual(fund["last_real_position_date"], "2026-05-05")
         self.assertFalse(lock_path(self.agent.root, "portfolio_state").exists())
+
+    def test_saved_reconciliation_rejects_tamper_stale_state_and_is_idempotent(self):
+        preview = preview_reconciliation(
+            self.agent.root,
+            [{"fund_code": "025857", "fund_name": "Grid", "current_value": 1200, "holding_units": 1100}],
+            snapshot_date="2026-05-05",
+            source="manual_position_snapshot",
+        )
+        request = {
+            "preview_sha256": preview["preview_sha256"],
+            "expected_portfolio_state_sha256": preview["portfolio_state_sha256"],
+        }
+
+        first = apply_saved_reconciliation(self.agent.root, preview["reconcile_id"], **request)
+        second = apply_saved_reconciliation(self.agent.root, preview["reconcile_id"], **request)
+
+        self.assertFalse(first["idempotent_replay"])
+        self.assertTrue(second["idempotent_replay"])
+
+        stale = preview_reconciliation(
+            self.agent.root,
+            [{"fund_code": "025857", "fund_name": "Grid", "current_value": 1300}],
+            snapshot_date="2026-05-06",
+            source="manual_position_snapshot",
+        )
+        current_path = self.agent.root / "db/portfolio_state/current.json"
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        current["funds"][0]["current_value"] = 9999
+        self.agent.write_json("db/portfolio_state/current.json", current)
+        with self.assertRaisesRegex(ValueError, "Portfolio state changed"):
+            apply_saved_reconciliation(
+                self.agent.root,
+                stale["reconcile_id"],
+                preview_sha256=stale["preview_sha256"],
+                expected_portfolio_state_sha256=stale["portfolio_state_sha256"],
+            )
+
+        with self.assertRaisesRegex(ValueError, "preview hash mismatch"):
+            apply_saved_reconciliation(
+                self.agent.root,
+                stale["reconcile_id"],
+                preview_sha256="0" * 64,
+                expected_portfolio_state_sha256=stale["portfolio_state_sha256"],
+            )
 
     def test_reconciliation_apply_rejects_unmatched_screenshot_holdings(self):
         preview = {
@@ -220,7 +284,7 @@ class ExecutionSyncTests(unittest.TestCase):
                 {
                     "import_id": "alipay_test_fail",
                     "snapshot_date": "2026-05-05",
-                    "files": [{"name": "page1.jpg", "data": "not-an-image"}],
+                    "files": [{"name": "page1.jpg", "data": base64.b64encode(b"not-an-image").decode("ascii")}],
                 },
             )
 
@@ -254,7 +318,7 @@ class ExecutionSyncTests(unittest.TestCase):
                 {
                     "import_id": "alipay_test_ok",
                     "snapshot_date": "2026-05-05",
-                    "files": [{"name": "page1.jpg", "data": "not-an-image"}],
+                    "files": [{"name": "page1.jpg", "data": base64.b64encode(b"not-an-image").decode("ascii")}],
                 },
             )
 
@@ -263,6 +327,57 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(result["transport_name"], "direct")
         self.assertTrue(result["apply_ready"])
         self.assertEqual(result["matched_items"][0]["matched_fund_code"], "025857")
+
+    def test_alipay_screenshot_upload_rejects_unsafe_import_id(self):
+        with self.assertRaisesRegex(ValueError, "import_id"):
+            parse_alipay_screenshot_upload(
+                self.agent.root,
+                {
+                    "import_id": "..\\..\\escaped",
+                    "files": [{"name": "page1.jpg", "data": base64.b64encode(b"image").decode("ascii")}],
+                },
+            )
+        self.assertFalse((self.agent.root / "escaped").exists())
+
+    def test_alipay_screenshot_upload_rejects_invalid_base64_and_too_many_files(self):
+        with self.assertRaisesRegex(ValueError, "valid base64"):
+            parse_alipay_screenshot_upload(
+                self.agent.root,
+                {"import_id": "invalid_base64", "files": [{"name": "page1.jpg", "data": "not-base64!"}]},
+            )
+        valid_file = {"name": "page.jpg", "data": base64.b64encode(b"image").decode("ascii")}
+        with self.assertRaisesRegex(ValueError, "between 1 and 4"):
+            parse_alipay_screenshot_upload(
+                self.agent.root,
+                {"import_id": "too_many", "files": [dict(valid_file) for _ in range(5)]},
+            )
+
+    def test_alipay_screenshot_upload_enforces_decoded_size_limits(self):
+        with patch.object(execution_sync_module, "MAX_SCREENSHOT_FILE_BYTES", 3):
+            with self.assertRaisesRegex(ValueError, "decoded bytes"):
+                parse_alipay_screenshot_upload(
+                    self.agent.root,
+                    {
+                        "import_id": "file_too_large",
+                        "files": [{"name": "page.jpg", "data": base64.b64encode(b"1234").decode("ascii")}],
+                    },
+                )
+        with patch.object(execution_sync_module, "MAX_SCREENSHOT_FILE_BYTES", 10), patch.object(
+            execution_sync_module, "MAX_SCREENSHOT_TOTAL_BYTES", 5
+        ):
+            with self.assertRaisesRegex(ValueError, "payload exceeds"):
+                parse_alipay_screenshot_upload(
+                    self.agent.root,
+                    {
+                        "import_id": "total_too_large",
+                        "files": [
+                            {"name": "one.jpg", "data": base64.b64encode(b"123").decode("ascii")},
+                            {"name": "two.jpg", "data": base64.b64encode(b"456").decode("ascii")},
+                        ],
+                    },
+                )
+        self.assertFalse((self.agent.root / "db/execution_sync/imports/alipay_screenshots/file_too_large").exists())
+        self.assertFalse((self.agent.root / "db/execution_sync/imports/alipay_screenshots/total_too_large").exists())
 
     def test_pending_settlement_updates_portfolio_once(self):
         recorded = record_actual_trade(
@@ -329,6 +444,70 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual("db/execution_sync/settlement_events/trade_relative_paths.json", metadata["settlement_event_path"])
         self.assertEqual("db/portfolio_state/events/2026-05-05/actual_trade_settlement_trade_relative_paths.json", metadata["event_journal_path"])
         self.assertNotRegex(json.dumps(metadata), r"[A-Za-z]:\\")
+
+    def test_settlement_retry_recovers_after_portfolio_write_without_double_apply(self):
+        record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "trade_crash_recovery",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "grid equipment C",
+                "operation_type": "buy",
+                "amount": 300,
+                "confirm_date": "2026-05-05",
+            },
+        )
+        event_path = self.agent.root / "db/execution_sync/settlement_events/trade_crash_recovery.json"
+        real_dump_json = execution_sync_module.dump_json
+        fault_injected = False
+
+        def flaky_dump_json(path, payload):
+            nonlocal fault_injected
+            if Path(path) == event_path and not fault_injected:
+                fault_injected = True
+                raise OSError("simulated crash before settlement marker")
+            return real_dump_json(path, payload)
+
+        with patch.object(execution_sync_module, "dump_json", side_effect=flaky_dump_json):
+            first = update_pending_confirmations(self.agent.root, "2026-05-05")
+        self.assertTrue(fault_injected)
+        self.assertEqual(first["portfolio_applied_count"], 0)
+        self.assertTrue(first["apply_errors"])
+        portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        fund = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
+        self.assertEqual(fund["current_value"], 1300.0)
+        self.assertFalse(event_path.exists())
+
+        second = update_pending_confirmations(self.agent.root, "2026-05-06")
+        self.assertEqual(second["portfolio_applied_count"], 0)
+        portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        fund = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
+        self.assertEqual(fund["current_value"], 1300.0)
+        self.assertTrue(event_path.exists())
+        journal = json.loads(
+            (self.agent.root / "db/execution_sync/settlement_journal/trade_crash_recovery.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(journal["status"], "completed")
+        self.assertTrue(journal["recovered"])
+
+    def test_settlement_rejects_same_idempotency_key_with_different_trade(self):
+        trade = {
+            "trade_id": "trade_digest_conflict",
+            "trade_date": "2026-05-04",
+            "confirm_date": "2026-05-05",
+            "fund_code": "025857",
+            "operation_type": "buy",
+            "amount": 100,
+        }
+        first = apply_settled_trade_to_portfolio(self.agent.root, trade)
+        self.assertTrue(first["ok"])
+        with self.assertRaisesRegex(RuntimeError, "different trade payload"):
+            apply_settled_trade_to_portfolio(self.agent.root, {**trade, "amount": 200})
+        journal = json.loads(
+            (self.agent.root / "db/execution_sync/settlement_journal/trade_digest_conflict.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(journal["status"], "conflict")
 
     def test_fund_memory_ignores_actual_trade_journal(self):
         record_actual_trade(

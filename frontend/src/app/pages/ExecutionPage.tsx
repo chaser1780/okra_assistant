@@ -8,7 +8,7 @@ import {
   updateExecutionConfirmations
 } from "../../lib/api";
 import type { ExecutionSyncPayload, PortfolioItem, PortfolioPayload } from "../../lib/types";
-import { asNumber, signedMoney, text } from "../../lib/format";
+import { signedMoney, text } from "../../lib/format";
 import { asList, cleanPayload, extractPreviewRows, fileToDataUrl, operationText, statusText, tradeTitle } from "../../lib/executionSync";
 import { Badge, Button, Card, SectionTitle } from "../../components/ui";
 
@@ -200,7 +200,9 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     setMessage(mode === "replace" ? "正在按截图全部替换真实仓位..." : "正在按截图更新真实仓位...");
     try {
       await applyExecutionReconcile({
-        preview: screenshotPreview,
+        reconcileId: text(screenshotPreview.reconcile_id),
+        previewSha256: text(screenshotPreview.preview_sha256),
+        expectedPortfolioStateSha256: text(screenshotPreview.portfolio_state_sha256),
         dropMissing: mode === "replace",
         confirmReplace: mode === "replace" ? replaceConfirm.trim().toUpperCase() : undefined
       });
@@ -230,7 +232,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
   return (
     <div className="space-y-4">
-      <section className="grid grid-cols-4 gap-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Metric title="待确认" value={executionSync.counts.pending ?? 0} body="未确认份额、未到账赎回或转换未完成" />
         <Metric title="真实操作" value={executionSync.counts.trades ?? 0} body="已写入本地真实执行账本" />
         <Metric title="执行偏差" value={executionSync.counts.deviations ?? 0} body="只用于执行纪律，不影响策略胜率" />
@@ -240,7 +242,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       {message ? <div className="rounded-md border border-cyan-500/30 bg-cyan-950/25 px-4 py-3 text-sm text-cyan-100">{message}</div> : null}
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-7 p-4">
+        <Card className="col-span-12 p-4 xl:col-span-7">
           <SectionTitle title="交易记录" meta="手动录入后直接写入真实执行账本" />
           <div className="mb-4 inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
             {(["buy", "sell", "convert"] as TradeKind[]).map((kind) => (
@@ -270,7 +272,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
           </div>
         </Card>
 
-        <Card className="col-span-5 p-4">
+        <Card className="col-span-12 p-4 xl:col-span-5">
           <SectionTitle title="支付宝截图上传" meta="识别后确认更新真实仓位" />
           <input
             type="file"
@@ -312,14 +314,14 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       </section>
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-6 p-4">
+        <Card className="col-span-12 p-4 lg:col-span-6">
           <SectionTitle title="待确认交易" meta="到确认日/到账日后可刷新落仓" />
           <Button className="mb-3" variant="secondary" disabled={busy} onClick={() => void refreshConfirmations()}>
             刷新确认状态
           </Button>
           <TradeList items={executionSync.pending} empty="暂无待确认交易" />
         </Card>
-        <Card className="col-span-6 p-4">
+        <Card className="col-span-12 p-4 lg:col-span-6">
           <SectionTitle title="最近真实操作" meta="本地账本记录" />
           <TradeList items={executionSync.trades} empty="暂无真实操作记录" />
         </Card>
@@ -340,7 +342,7 @@ function BuySellForm({
   kind: "buy" | "sell";
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3 text-sm">
+    <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
       <Field label="交易日期">
         <input className={inputClass} type="date" value={trade.trade_date} onChange={(e) => setTrade({ ...trade, trade_date: e.target.value })} />
       </Field>
@@ -388,7 +390,7 @@ function ConversionForm({
   portfolio: PortfolioPayload;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3 text-sm">
+    <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
       <Field label="交易日期">
         <input className={inputClass} type="date" value={conversion.trade_date} onChange={(e) => setConversion({ ...conversion, trade_date: e.target.value })} />
       </Field>
@@ -440,7 +442,7 @@ function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; r
           <div key={`${text(row.fund_code ?? row.matched_fund_code, String(index))}-${index}`} className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2">
             <div className="font-semibold text-slate-200">{text(row.fund_code ?? row.matched_fund_code)} {text(row.fund_name ?? row.matched_fund_name ?? row.display_name)}</div>
             <div className="mt-1 text-xs text-slate-500">
-              当前市值 {signedMoney(asNumber(row.current_value))} | 持仓收益 {signedMoney(asNumber(row.holding_pnl))}
+              当前市值 {signedMoney(row.current_value)} | 持仓收益 {signedMoney(row.holding_pnl)}
             </div>
           </div>
         ))}
@@ -451,7 +453,7 @@ function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; r
           <div className="font-semibold">截图中有 {unmatched.length} 只未匹配持仓，当前不会写入持仓。</div>
           {unmatched.slice(0, 4).map((item, index) => (
             <div key={index}>
-              {text(item.display_name)} | 市值 {signedMoney(asNumber(item.current_value))}
+              {text(item.display_name)} | 市值 {signedMoney(item.current_value)}
             </div>
           ))}
         </div>
@@ -476,7 +478,7 @@ function TradeList({ items, empty }: { items: Record<string, unknown>[]; empty: 
             <Badge tone={item.status === "settled" ? "success" : item.status === "confirmed" ? "accent" : "warning"}>{statusText(item.status)}</Badge>
           </div>
           <div>
-            {operationText(item.operation_type)} | {text(item.trade_date)} | {signedMoney(asNumber(item.amount ?? item.out_amount))}
+            {operationText(item.operation_type)} | {text(item.trade_date)} | {signedMoney(item.amount ?? item.out_amount)}
           </div>
           <div className="text-xs text-slate-500">
             确认日 {text(item.confirm_date ?? item.in_confirm_date ?? item.out_confirm_date)} | 到账日 {text(item.settlement_date ?? item.in_confirm_date)}

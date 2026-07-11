@@ -9,12 +9,31 @@ type TodayQueryLike = {
 };
 
 type UseTodayAnalysisRunnerArgs = {
+  autoRunToday: boolean;
   todayQuery: TodayQueryLike;
   refreshAll: () => Promise<void>;
   selectedDate: string;
 };
 
-export function useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate }: UseTodayAnalysisRunnerArgs) {
+export const AUTO_RUN_TODAY_STORAGE_KEY = "okra.ui.v1.autoRunToday";
+
+export function readAutoRunTodayPreference() {
+  try {
+    return window.localStorage.getItem(AUTO_RUN_TODAY_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeAutoRunTodayPreference(enabled: boolean) {
+  try {
+    window.localStorage.setItem(AUTO_RUN_TODAY_STORAGE_KEY, String(enabled));
+  } catch {
+    // The runtime preference remains in React state when storage is unavailable.
+  }
+}
+
+export function useTodayAnalysisRunner({ autoRunToday, todayQuery, refreshAll, selectedDate }: UseTodayAnalysisRunnerArgs) {
   const [dailyRunning, setDailyRunning] = useState(false);
   const [dailyError, setDailyError] = useState("");
   const [activeDailyRunId, setActiveDailyRunId] = useState("");
@@ -32,7 +51,7 @@ export function useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate }:
 
   useEffect(() => {
     const data = todayQuery.data;
-    if (!data || dailyRunning) return;
+    if (!autoRunToday || !data || dailyRunning) return;
     const today = localDateString();
     if (data.selectedDate !== today) return;
     const runtime = getTodayAnalysisRuntime(data.system);
@@ -46,7 +65,7 @@ export function useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate }:
     if (hasTodayAnalysisResult(data)) return;
     autoDailyStarted.current = today;
     void triggerDaily(true);
-  }, [dailyRunning, todayQuery.data]);
+  }, [autoRunToday, dailyRunning, selectedDate, todayQuery.data]);
 
   async function pollDailyResult(runId: string) {
     if (!runId) return;
@@ -126,7 +145,7 @@ export function useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate }:
   };
 }
 
-function localDateString() {
+export function localDateString() {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");

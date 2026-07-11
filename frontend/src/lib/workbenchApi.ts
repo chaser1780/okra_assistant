@@ -66,6 +66,7 @@ export function getTodayPage(date?: string): Promise<TodayPagePayload> {
     selectedDate: snapshot.selectedDate,
     dashboard: snapshot.dashboard,
     portfolio: snapshot.portfolio,
+    research: snapshot.research,
     longMemory: snapshot.longMemory,
     todayAnalysis: snapshot.todayAnalysis,
     dailyFirstOpen: snapshot.dailyFirstOpen,

@@ -20,7 +20,12 @@ import {
   workbenchQueryKeys
 } from "../lib/workbenchQuery";
 import { fundHref, pageKeyFromPath, pageTitles, routeForPage } from "./routeMeta";
-import { useTodayAnalysisRunner } from "./useTodayAnalysisRunner";
+import {
+  localDateString,
+  readAutoRunTodayPreference,
+  useTodayAnalysisRunner,
+  writeAutoRunTodayPreference
+} from "./useTodayAnalysisRunner";
 
 const TodayPage = lazy(async () => ({ default: (await import("./pages/TodayPage")).TodayPage }));
 const PortfolioPage = lazy(async () => ({ default: (await import("./pages/PortfolioPage")).PortfolioPage }));
@@ -64,6 +69,7 @@ function WorkbenchShell() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [realtimeRunning, setRealtimeRunning] = useState(false);
   const [realtimeError, setRealtimeError] = useState("");
+  const [autoRunToday, setAutoRunToday] = useState(readAutoRunTodayPreference);
   const queryClient = useQueryClient();
   const requestedDate = searchParams.get("date") ?? "";
   const pageKey = pageKeyFromPath(location.pathname);
@@ -76,8 +82,15 @@ function WorkbenchShell() {
   const refreshAll = async () => {
     await queryClient.invalidateQueries({ queryKey: workbenchQueryKeys.root });
   };
-  const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({ todayQuery, refreshAll, selectedDate });
+  const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({
+    autoRunToday,
+    todayQuery,
+    refreshAll,
+    selectedDate
+  });
   const error = dailyError || realtimeError;
+  const today = localDateString();
+  const historicalView = Boolean(selectedDate && selectedDate !== today);
 
   useEffect(() => {
     if (!shellQuery.data?.selectedDate || requestedDate) return;
@@ -96,7 +109,7 @@ function WorkbenchShell() {
     setRealtimeError("");
     setRealtimeRunning(true);
     try {
-      await runTask("realtime");
+      await runTask("realtime", { date: today });
       window.setTimeout(() => {
         void refreshAll();
         setRealtimeRunning(false);
@@ -123,6 +136,13 @@ function WorkbenchShell() {
       }}
       onRunDaily={() => void triggerDaily(false)}
       onRunRealtime={() => void triggerRealtime()}
+      autoRunToday={autoRunToday}
+      onAutoRunTodayChange={(enabled) => {
+        setAutoRunToday(enabled);
+        writeAutoRunTodayPreference(enabled);
+      }}
+      dailyRunLabel={historicalView ? "重跑所选日" : "运行今日分析"}
+      dailyRunTarget={selectedDate || today}
       system={shellQuery.data?.system}
       systemRunning={dailyRunning || realtimeRunning}
       dailyRunning={dailyRunning}

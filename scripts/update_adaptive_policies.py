@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,7 @@ from adaptive_policy_models import (
 )
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
 from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now
-from evaluate_action_ticket_outcomes import outcome_event_path
+from evaluate_action_ticket_outcomes import outcome_event_path, relative_learning_signal
 from outcome_event_models import OutcomeEventArtifact
 
 
@@ -34,6 +35,7 @@ DEFAULT_CAPS = {
     "max_candidate_policies_per_scope": 20,
     "archive_if_contradiction_ratio_above": 0.6,
     "min_total_count_for_contradiction_archive": 3,
+    "auto_activation_allowed": False,
 }
 
 
@@ -82,7 +84,8 @@ def safe_float(value: Any) -> float | None:
     try:
         if value in (None, "", "--"):
             return None
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -152,7 +155,21 @@ def event_type_for_outcome(outcome: dict[str, Any]) -> str:
         return ""
     if str(outcome.get("action_verb", "") or "") == "hold" and exposure_context not in {"hold_existing_position", "blocked_add_or_cash_hold"}:
         return ""
-    label = str(outcome.get("outcome_label", "") or "")
+    if str(decision_context.get("learning_basis", "") or "") not in {"benchmark_excess_return", "benchmark_excess_return_net_cost"}:
+        return ""
+    excess_return = safe_float(outcome.get("excess_return_pct"))
+    if excess_return is None:
+        return ""
+    transaction_costs = decision_context.get("transaction_costs", {}) if isinstance(decision_context.get("transaction_costs"), dict) else {}
+    transaction_cost_pct = safe_float(transaction_costs.get("total_pct")) or 0.0
+    label, _diagnostic, learning_signal = relative_learning_signal(
+        str(outcome.get("action_verb", "") or ""),
+        excess_return,
+        exposure_context,
+        transaction_cost_pct,
+    )
+    if learning_signal is None:
+        return ""
     if label in SUPPORTIVE_OUTCOME_LABELS:
         return "support"
     if label in CONTRADICTORY_OUTCOME_LABELS:
@@ -176,10 +193,20 @@ def policy_event_from_outcome(
     policy_id = f"policy:{scope}:repeat_{slug_text(action_verb)}:v1"
     outcome_id = str(outcome.get("outcome_id", "") or "")
     event_id = f"policy_event:{outcome_id}"
-    label = str(outcome.get("outcome_label", "") or "")
+    decision_context = outcome.get("decision_context", {}) if isinstance(outcome.get("decision_context"), dict) else {}
     horizon = str(outcome.get("horizon", "") or "")
     fund_code = str(outcome.get("fund_code", "") or "")
     actual_return = safe_float(outcome.get("actual_return_pct"))
+    benchmark_return = safe_float(outcome.get("benchmark_return_pct"))
+    excess_return = safe_float(outcome.get("excess_return_pct"))
+    transaction_costs = decision_context.get("transaction_costs", {}) if isinstance(decision_context.get("transaction_costs"), dict) else {}
+    transaction_cost_pct = safe_float(transaction_costs.get("total_pct")) or 0.0
+    label, learning_diagnostic, learning_signal = relative_learning_signal(
+        action_verb,
+        excess_return,
+        str(decision_context.get("exposure_context", "") or ""),
+        transaction_cost_pct,
+    )
     source_path = relative_posix(source_artifact, agent_home)
     source_hash = content_sha256(source_artifact) if source_artifact.exists() else ""
     return AdaptivePolicyEvent(
@@ -197,9 +224,13 @@ def policy_event_from_outcome(
         source_ticket_id=str(outcome.get("ticket_id", "") or ticket.get("ticket_id", "") or ""),
         source_artifact=source_path,
         outcome_label=label,
-        diagnostic_label=str(outcome.get("diagnostic_label", "") or ""),
+        diagnostic_label=learning_diagnostic,
         delta={event_type: 1},
-        notes=f"{label} outcome for {fund_code} over {horizon}; actual_return_pct={actual_return}.",
+        notes=(
+            f"{label} relative outcome for {fund_code} over {horizon}; "
+            f"actual_return_pct={actual_return}; benchmark_return_pct={benchmark_return}; "
+            f"excess_return_pct={excess_return}; learning_signal_pct={learning_signal}."
+        ),
         write_scope="learning_only",
         non_executable=True,
         audit={
@@ -207,6 +238,13 @@ def policy_event_from_outcome(
             "derived_from": "outcome_event",
             "source_artifact_sha256": source_hash,
             "source_identity": f"{source_path}#{outcome_id}",
+            "learning_signal_basis": str(decision_context.get("learning_basis", "") or "benchmark_excess_return"),
+            "source_outcome_label": str(outcome.get("outcome_label", "") or ""),
+            "actual_return_pct": actual_return,
+            "benchmark_return_pct": benchmark_return,
+            "excess_return_pct": excess_return,
+            "learning_signal_pct": learning_signal,
+            "transaction_cost_pct": transaction_cost_pct,
         },
     )
 
@@ -217,7 +255,7 @@ def outcome_paths(agent_home: Path, base_date: str, horizons: list[str] | None) 
     return sorted((agent_home / "db" / "outcome_events").glob(f"{base_date}__*.json"))
 
 
-def derive_policy_events(agent_home: Path, base_date: str, horizons: list[str] | None, generated_at: str) -> list[AdaptivePolicyEvent]:
+def derive_policy_events(agent_home: Path, base_date: str, horizons: list[str] | None, generated_at: str) -> tuple[list[AdaptivePolicyEvent], set[str]]:
     paths = outcome_paths(agent_home, base_date, horizons)
     existing_paths = [path for path in paths if path.exists()]
     if not existing_paths:
@@ -225,12 +263,15 @@ def derive_policy_events(agent_home: Path, base_date: str, horizons: list[str] |
 
     ticket_cache: dict[str, dict[str, dict[str, Any]]] = {}
     events: list[AdaptivePolicyEvent] = []
+    replacement_identities: set[str] = set()
     for path in existing_paths:
         artifact = OutcomeEventArtifact.from_dict(load_json_if_exists(path))
+        source_path = relative_posix(path, agent_home)
         ticket_cache.setdefault(artifact.base_date, load_ticket_index(agent_home, artifact.base_date))
         tickets = ticket_cache[artifact.base_date]
         for outcome_event in artifact.events:
             outcome = outcome_event.to_dict()
+            replacement_identities.add(f"{source_path}#{outcome_event.outcome_id}")
             ticket = tickets.get(outcome_event.ticket_id, {})
             policy_event = policy_event_from_outcome(
                 outcome=outcome,
@@ -241,7 +282,7 @@ def derive_policy_events(agent_home: Path, base_date: str, horizons: list[str] |
             )
             if policy_event:
                 events.append(policy_event)
-    return events
+    return events, replacement_identities
 
 
 def existing_event_ids(path: Path) -> set[str]:
@@ -282,11 +323,11 @@ def read_policy_event_payloads(path: Path) -> tuple[list[dict[str, Any]], int]:
     return payloads, invalid_count
 
 
-def rewrite_policy_events(agent_home: Path, events: list[AdaptivePolicyEvent]) -> tuple[Path, int]:
+def rewrite_policy_events(agent_home: Path, events: list[AdaptivePolicyEvent], replacement_identities: set[str] | None = None) -> tuple[Path, int]:
     path = policy_event_log_path(agent_home)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing_payloads, _invalid_count = read_policy_event_payloads(path)
-    replacement_identities = {event_source_identity(event) for event in events}
+    replacement_identities = set(replacement_identities or {event_source_identity(event) for event in events})
     kept_payloads = [
         payload
         for payload in existing_payloads
@@ -399,8 +440,10 @@ def policy_status(acc: PolicyAccumulator, caps: dict[str, Any]) -> str:
         acc.support_count >= int(caps["min_support_count_for_active"])
         and ratio <= float(caps["max_contradiction_ratio_for_active"])
     )
-    if acc.user_approved or active_supported:
+    if acc.user_approved:
         return "active"
+    if active_supported:
+        return "candidate"
     if acc.support_count >= int(caps["min_support_count_for_candidate"]):
         return "candidate"
     return "draft"
@@ -442,6 +485,8 @@ def policy_from_accumulator(acc: PolicyAccumulator, caps: dict[str, Any], genera
             "min_support_count_for_active": caps["min_support_count_for_active"],
             "max_contradiction_ratio_for_active": caps["max_contradiction_ratio_for_active"],
             "user_approval_can_activate": True,
+            "user_approval_required_for_active": True,
+            "auto_activation_allowed": False,
         },
         audit={"created_by": "scripts/update_adaptive_policies.py"},
     )
@@ -541,8 +586,8 @@ def run_updater(
     if not materialize_only:
         if not base_date:
             raise ValueError("base_date is required unless materialize_only=true")
-        events = derive_policy_events(agent_home, base_date, horizons, generated_at)
-        event_path, updated = rewrite_policy_events(agent_home, events)
+        events, replacement_identities = derive_policy_events(agent_home, base_date, horizons, generated_at)
+        event_path, updated = rewrite_policy_events(agent_home, events, replacement_identities)
     store = materialize_policy_store(agent_home, generated_at=generated_at)
     store_path = write_policy_store(agent_home, store)
     return event_path, store_path, updated, store

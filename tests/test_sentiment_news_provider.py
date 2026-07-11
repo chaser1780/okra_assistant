@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fetch_fund_news import (
     build_dynamic_sentiment_queries,
+    classify_news_time,
     classify_news_with_llm,
     compute_heat_metrics,
     cookie_has_required_tokens,
@@ -17,7 +18,13 @@ from fetch_fund_news import (
     extract_eastmoney_search_items,
     fetch_rss_news,
     extract_xueqiu_status_items,
+    fetch_openai_web_search_news,
+    filter_news_items_by_report_date,
+    normalize_regulatory_item,
     normalize_query_news_item,
+    normalize_openai_web_search_item,
+    normalize_rss_news_item,
+    parse_iso_datetime,
     parse_rss_feed,
     parse_rss_datetime,
     parse_cookie_pairs,
@@ -29,13 +36,65 @@ from fetch_fund_news import (
     news_dedup_summary,
     read_cookie_file,
     parse_amac_notice_board,
+    within_lookback,
 )
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
 
 from helpers import TempAgentHome
 
 
+def _web_search_response_item() -> dict:
+    return {
+        "title": "AI compute supply chain update",
+        "summary": "A fresh sector update maps to the AI fund.",
+        "published_at": "2026-05-10T09:48:52+08:00",
+        "source_name": "example finance",
+        "url": "https://example.com/ai-update",
+        "fund_code": "F1",
+        "fund_name": "AI Fund",
+        "query_keyword": "AI",
+        "query_type": "theme",
+        "source_role": "theme_news",
+        "source_tier": "financial_media",
+        "evidence_type": "theme_news",
+        "sentiment_label": "positive",
+        "risk_level": "low",
+        "risk_tags": [],
+        "topic_tags": ["ai"],
+        "reason_short": "sector catalyst",
+        "relevance_score": 0.82,
+    }
+
+
 class SentimentNewsProviderTests(unittest.TestCase):
+    def test_news_time_classification_enforces_closed_report_window(self):
+        report_date = "2026-07-10"
+
+        self.assertEqual(classify_news_time("2026-07-09T23:59:59+08:00", report_date, 24), "fresh")
+        self.assertEqual(classify_news_time("2026-07-10T23:59:59+08:00", report_date, 24), "fresh")
+        self.assertEqual(classify_news_time("2026-07-09T23:59:58+08:00", report_date, 24), "stale")
+        self.assertEqual(classify_news_time("2026-07-11T00:00:00+08:00", report_date, 24), "future")
+        self.assertEqual(classify_news_time("", report_date, 24), "unknown")
+        self.assertEqual(classify_news_time("not-a-date", report_date, 24), "unknown")
+        self.assertTrue(within_lookback("2026-07-10T23:59:59+08:00", report_date, 24))
+        self.assertFalse(within_lookback("2026-07-11T00:00:00+08:00", report_date, 24))
+
+    def test_parse_iso_datetime_normalizes_naive_and_offset_times_to_china(self):
+        self.assertEqual(parse_iso_datetime("2026-07-10T09:00:00").isoformat(), "2026-07-10T09:00:00+08:00")
+        self.assertEqual(parse_iso_datetime("2026-07-10T01:00:00+00:00").isoformat(), "2026-07-10T09:00:00+08:00")
+
+    def test_final_news_time_gate_drops_future_and_unknown_but_keeps_stale(self):
+        items = [
+            {"title": "fresh", "published_at": "2026-07-10T09:00:00+08:00"},
+            {"title": "stale", "published_at": "2026-06-01T09:00:00+08:00"},
+            {"title": "future", "published_at": "2026-07-11T09:00:00+08:00"},
+            {"title": "unknown", "published_at": ""},
+        ]
+
+        filtered = filter_news_items_by_report_date(items, "2026-07-10")
+
+        self.assertEqual([item["title"] for item in filtered], ["fresh", "stale"])
+
     def test_news_dedup_summary_counts_final_item_set(self):
         items = [
             {"code": "F1", "title": "same", "summary": "body", "canonical_url": "https://example.test/a", "published_at": "2026-05-15T10:00:00+08:00"},
@@ -170,6 +229,19 @@ class SentimentNewsProviderTests(unittest.TestCase):
         self.assertTrue(all(item["provider"] == "eastmoney_search_api" for item in items))
         self.assertTrue(all(item["evidence_type"] == "theme_news" for item in items))
 
+    def test_normalize_query_news_item_rejects_future_and_unknown_times(self):
+        query = {"keyword": "AI", "fund_codes": ["F1"], "fund_names": ["AI Fund"]}
+        base_item = {"title": "AI update", "summary": "update", "url": "https://example.com/ai"}
+
+        self.assertEqual(
+            normalize_query_news_item({**base_item, "published_at": "2026-07-11T00:00:00+08:00"}, query, source_role="theme_news", report_date="2026-07-10"),
+            [],
+        )
+        self.assertEqual(
+            normalize_query_news_item({**base_item, "published_at": "invalid"}, query, source_role="theme_news", report_date="2026-07-10"),
+            [],
+        )
+
     def test_dedupe_and_heat_metrics_preserve_multi_fund_mapping(self):
         items = [
             {
@@ -292,6 +364,51 @@ class SentimentNewsProviderTests(unittest.TestCase):
             self.assertEqual(health[0]["metrics"]["matched_item_count"], 1)
         finally:
             agent.cleanup()
+
+    def test_normalize_rss_news_item_rejects_future_and_unknown_times(self):
+        query = {"keyword": "AI", "fund_codes": ["F1"], "fund_names": ["AI Fund"], "query_type": "direct"}
+        base_item = {"title": "AI update", "summary": "update", "url": "https://example.com/rss/ai"}
+
+        self.assertEqual(
+            normalize_rss_news_item(
+                {**base_item, "published_at": "2026-07-11T00:00:00+08:00"},
+                query,
+                feed_name="finance_feed",
+                provider_name="rss:finance",
+                report_date="2026-07-10",
+            ),
+            [],
+        )
+        self.assertEqual(
+            normalize_rss_news_item(
+                {**base_item, "published_at": ""},
+                query,
+                feed_name="finance_feed",
+                provider_name="rss:finance",
+                report_date="2026-07-10",
+            ),
+            [],
+        )
+
+    def test_normalize_regulatory_item_rejects_future_and_unknown_times(self):
+        base_item = {"title": "监管公告", "summary": "notice", "url": "https://example.com/regulatory"}
+
+        self.assertIsNone(
+            normalize_regulatory_item(
+                {**base_item, "published_at": "2026-07-11T00:00:00+08:00"},
+                provider_name="reg:test",
+                feed_name="test regulator",
+                report_date="2026-07-10",
+            )
+        )
+        self.assertIsNone(
+            normalize_regulatory_item(
+                {**base_item, "published_at": "invalid"},
+                provider_name="reg:test",
+                feed_name="test regulator",
+                report_date="2026-07-10",
+            )
+        )
 
     def test_fetch_news_demo_with_rss_disabled_still_writes_new_fields(self):
         agent = TempAgentHome()
@@ -439,6 +556,120 @@ class SentimentNewsProviderTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(any("纪律处分决定书" in row["title"] for row in rows))
         self.assertTrue(any("异常经营" in row["title"] for row in rows))
+
+    def test_normalize_openai_web_search_item_maps_to_existing_news_shape(self):
+        item = normalize_openai_web_search_item(_web_search_response_item(), report_date="2026-05-10")
+
+        self.assertIsNotNone(item)
+        self.assertEqual(item["provider"], "openai_web_search")
+        self.assertEqual(item["code"], "F1")
+        self.assertEqual(item["source_role"], "theme_news")
+        self.assertEqual(item["evidence_type"], "theme_news")
+        self.assertEqual(item["matched_keywords"], ["AI"])
+
+    def test_normalize_openai_web_search_item_rejects_future_and_unknown_times(self):
+        future = {**_web_search_response_item(), "published_at": "2026-05-11T00:00:00+08:00"}
+        unknown = {**_web_search_response_item(), "published_at": "invalid"}
+
+        self.assertIsNone(normalize_openai_web_search_item(future, report_date="2026-05-10"))
+        self.assertIsNone(normalize_openai_web_search_item(unknown, report_date="2026-05-10"))
+
+    def test_news_filter_rejects_same_day_item_after_decision_cutoff(self):
+        items = [
+            {"published_at": "2026-05-10T21:00:00+08:00", "title": "before"},
+            {"published_at": "2026-05-10T22:00:00+08:00", "title": "after"},
+        ]
+
+        filtered = filter_news_items_by_report_date(
+            items,
+            "2026-05-10",
+            "2026-05-10T21:30:00+08:00",
+        )
+
+        self.assertEqual(["before"], [item["title"] for item in filtered])
+
+    def test_fetch_openai_web_search_news_uses_responses_tool_and_normalizes_items(self):
+        agent = TempAgentHome()
+        try:
+            settings = {
+                "providers": {
+                    "openai_web_search_news": {
+                        "enabled": True,
+                        "timeout_seconds": 30,
+                        "max_attempts": 1,
+                        "max_queries": 2,
+                        "max_queries_per_bucket": 1,
+                        "results_per_query": 1,
+                        "freshness_days": 7,
+                        "dedup_window_hours": 12,
+                        "tool_types": ["web_search"],
+                    }
+                }
+            }
+            query_plan = {
+                "direct_queries": [{"keyword": "F1", "fund_codes": ["F1"], "fund_names": ["AI Fund"], "query_type": "direct"}],
+                "theme_queries": [{"keyword": "AI", "fund_codes": ["F1"], "fund_names": ["AI Fund"], "query_type": "theme"}],
+                "market_queries": [],
+            }
+            response_json = {"items": [_web_search_response_item()]}
+
+            from unittest.mock import patch
+
+            response = {
+                "output_text": json.dumps(response_json),
+                "completed_event": {
+                    "type": "response.completed",
+                    "response": {
+                        "output": [
+                            {
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "annotations": [{"type": "url_citation", "url": "https://example.com/ai-update"}],
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                },
+            }
+            with patch("fetch_fund_news.call_responses_text", return_value=response) as mock_call:
+                items, health = fetch_openai_web_search_news(agent.root, settings, "2026-05-10", query_plan)
+
+            payload = mock_call.call_args.args[1]
+            self.assertEqual(payload["tools"][0]["type"], "web_search")
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["provider"], "openai_web_search")
+            self.assertEqual(items[0]["code"], "F1")
+            self.assertTrue(items[0]["citation_verified"])
+            self.assertEqual(health["status"], "ok")
+            self.assertEqual(health["metrics"]["selected_tool"], "web_search")
+            self.assertEqual(health["metrics"]["citation_url_count"], 1)
+        finally:
+            agent.cleanup()
+
+    def test_fetch_openai_web_search_rejects_uncited_model_url(self):
+        agent = TempAgentHome()
+        try:
+            settings = {"providers": {"openai_web_search_news": {"enabled": True, "tool_types": ["web_search"]}}}
+            query_plan = {
+                "direct_queries": [{"keyword": "F1", "fund_codes": ["F1"]}],
+                "theme_queries": [],
+                "market_queries": [],
+            }
+            from unittest.mock import patch
+
+            with patch(
+                "fetch_fund_news.call_responses_text",
+                return_value={"output_text": json.dumps({"items": [_web_search_response_item()]})},
+            ):
+                items, health = fetch_openai_web_search_news(agent.root, settings, "2026-05-10", query_plan)
+
+            self.assertEqual([], items)
+            self.assertEqual("warning", health["status"])
+            self.assertEqual(1, health["metrics"]["unverified_item_count"])
+        finally:
+            agent.cleanup()
 
 
 if __name__ == "__main__":

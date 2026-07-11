@@ -52,6 +52,7 @@ class ConfigWiringTests(unittest.TestCase):
         providers = settings.get("providers", {})
         rss = providers.get("rss_news", {})
         regulatory = providers.get("regulatory_news", {})
+        web_search = providers.get("openai_web_search_news", {})
         rss_providers = {feed.get("provider") for feed in rss.get("feeds", [])}
         regulatory_providers = {feed.get("provider") for feed in regulatory.get("feeds", [])}
 
@@ -62,6 +63,8 @@ class ConfigWiringTests(unittest.TestCase):
         self.assertIn("reg:szse_inquiry", regulatory_providers)
         self.assertIn("reg:szse_supervision_measure", regulatory_providers)
         self.assertIn("reg:szse_disciplinary_action", regulatory_providers)
+        self.assertTrue(web_search.get("enabled"))
+        self.assertIn("web_search", web_search.get("tool_types", []))
 
     def test_retention_config_protects_permanent_state(self):
         config = load_retention_config(self.agent_home)

@@ -1,6 +1,7 @@
 import { fieldLabel, valueLabel } from "../../lib/display";
 import { ragRuntimeSchema } from "../../lib/schemas";
-import type { RagRuntimePayload } from "../../lib/types";
+import { runtimeStatusMeta } from "../../lib/todayAnalysis";
+import type { RagRuntimePayload, Tone } from "../../lib/types";
 import { Badge, Card, SectionTitle } from "../../components/ui";
 
 export function SystemPage({ system, summary }: { system: Record<string, unknown>; summary: Record<string, unknown> }) {
@@ -14,19 +15,19 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
   const degradedAgents = Array.isArray(agentRuntime.degradedAgents) ? agentRuntime.degradedAgents : [];
 
   return (
-    <div className="grid grid-cols-2 gap-4">
-      <Card className="col-span-2 p-4">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card className="p-4 lg:col-span-2">
         <SectionTitle title="模型与主链路状态" />
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <StatusTile label="主模型" value={String(llmRuntime.model ?? "暂无")} tone="accent" />
           <StatusTile label="评审模型" value={String(llmRuntime.reviewModel ?? "暂无")} tone="info" />
-          <StatusTile label="今日分析状态" value={String(todayRuntime.status ?? "暂无")} tone={tileTone(todayRuntime.status)} />
+          <StatusTile label="今日分析状态" value={String(todayRuntime.status ?? "暂无")} tone={runtimeStatusMeta(todayRuntime.status).tone} />
           <StatusTile label="当前 Agent" value={String(todayRuntime.currentAgent ?? "暂无")} tone="success" />
-          <StatusTile label="长期记忆状态" value={String(longMemoryRuntime.status ?? "暂无")} tone={tileTone(longMemoryRuntime.status)} />
+          <StatusTile label="长期记忆状态" value={String(longMemoryRuntime.status ?? "暂无")} tone={runtimeStatusMeta(longMemoryRuntime.status).tone} />
         </div>
       </Card>
 
-      <Card className="col-span-2 p-4">
+      <Card className="p-4 lg:col-span-2">
         <SectionTitle title="RAG 检索状态" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <StatusTile label="默认接入" value={enabledLabel(ragRuntime.enabled)} tone={ragRuntime.enabled ? "success" : "info"} />
@@ -37,7 +38,7 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
           <StatusTile label="Embedding 待处理 / 错误" value={`${countValue(ragRuntime.embeddingStatus, "pending")} / ${countValue(ragRuntime.embeddingStatus, "error")}`} tone={countValue(ragRuntime.embeddingStatus, "error") ? "warning" : "info"} />
         </div>
         {ragRuntime.statusError ? <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-950/25 p-3 text-sm text-amber-100">{String(ragRuntime.statusError)}</div> : null}
-        <div className="mt-4 grid grid-cols-3 gap-3">
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <MiniPanel title="来源计数" value={ragRuntime.sourceCounts ?? {}} />
           <MiniPanel title="最近评估" value={ragRuntime.latestEval ?? {}} />
           <MiniPanel title="最近 Trace" value={latestTraces.slice(0, 5)} />
@@ -117,14 +118,15 @@ function StatusTile({
 }: {
   label: string;
   value: string;
-  tone?: "neutral" | "accent" | "success" | "warning" | "danger" | "info";
+  tone?: Tone;
 }) {
+  const badgeLabel = tone === "danger" ? "异常" : tone === "warning" ? "注意" : tone === "success" ? "正常" : tone === "accent" ? "运行中" : "信息";
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="break-all text-sm font-semibold text-slate-200">{value}</div>
-        <Badge tone={tone}>{tone === "danger" ? "异常" : tone === "success" ? "运行中/正常" : "信息"}</Badge>
+        <Badge tone={tone}>{badgeLabel}</Badge>
       </div>
     </div>
   );
@@ -198,13 +200,6 @@ function ValueBadge({ value }: { value: unknown }) {
 
 function isNested(value: unknown) {
   return Boolean(value && typeof value === "object");
-}
-
-function tileTone(status: unknown) {
-  const text = String(status ?? "").toLowerCase();
-  if (text === "failed") return "danger" as const;
-  if (text === "running" || text === "ok") return "success" as const;
-  return "info" as const;
 }
 
 function enabledLabel(value: unknown) {

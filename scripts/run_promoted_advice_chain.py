@@ -9,6 +9,7 @@ from action_debate_graph import run_debate_graph
 from build_action_ticket_shadow import run_builder as run_action_ticket_builder
 from build_layered_retrieval_pack import run_builder as run_retrieval_pack_builder
 from build_official_advice_compat_preview import build_preview_payload
+from capture_replay_snapshot import capture_decision_snapshot
 from common import (
     committee_advice_path,
     committee_decision_bundle_path,
@@ -105,6 +106,7 @@ def build_status_payload(
     generated_at: str,
     preview: dict[str, Any],
     paths: dict[str, Path],
+    replay_snapshot_capture: dict[str, Any],
 ) -> dict[str, Any]:
     validated = load_json(validated_advice_path(agent_home, report_date))
     preview_summary = preview.get("summary", {}) if isinstance(preview.get("summary"), dict) else {}
@@ -131,6 +133,7 @@ def build_status_payload(
             for name, path in sorted(paths.items())
         },
         "official_path_count": len(paths),
+        "replay_snapshot_capture": replay_snapshot_capture,
         "preview_quality": preview_quality,
         "summary": {
             "promoted_run_passed": True,
@@ -162,7 +165,33 @@ def run_chain(
         raise RuntimeError("promoted advice chain requires successful LLM debate graph before official outputs are written")
     preview = build_preview_payload(agent_home, report_date, generated_at=generated_at)
     paths = write_official_outputs(agent_home, report_date, preview=preview, generated_at=generated_at)
-    status = build_status_payload(agent_home, report_date, generated_at=generated_at, preview=preview, paths=paths)
+    try:
+        capture = capture_decision_snapshot(agent_home, report_date, generated_at)
+        replay_snapshot_capture = {
+            "status": "captured",
+            "snapshot_id": capture["snapshot_id"],
+            "snapshot_path": capture["snapshot_path"],
+            "manifest_candidate_path": capture["manifest_candidate_path"],
+            "created": capture["created"],
+            "source_count": capture["source_count"],
+            "contamination_finding_count": len(capture["contamination_findings"]),
+            "learning_eligible": False,
+        }
+    except Exception as exc:
+        replay_snapshot_capture = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "learning_eligible": False,
+        }
+    status = build_status_payload(
+        agent_home,
+        report_date,
+        generated_at=generated_at,
+        preview=preview,
+        paths=paths,
+        replay_snapshot_capture=replay_snapshot_capture,
+    )
     path = dump_json(run_status_path(agent_home, report_date), status)
     return path, status
 

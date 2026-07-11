@@ -148,6 +148,48 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertNotIn("mem-rejected-test", serialized)
         self.assertNotIn("mem-execution-test", serialized)
 
+    def test_historical_build_excludes_memory_available_after_decision_cutoff(self) -> None:
+        self.copy_real_inputs()
+        self.agent.write_json(
+            "db/long_memory/exports/all_memory.json",
+            {
+                "items": [
+                    {
+                        "memory_id": "mem-known-at-decision",
+                        "memory_type": "portfolio_policy_memory",
+                        "domain": "portfolio",
+                        "entity_key": "017641_known",
+                        "title": "known 017641 policy",
+                        "text": "known 017641 policy should appear",
+                        "status": "strategic",
+                        "confidence": 0.9,
+                        "updated_at": "2026-05-22T20:00:00+08:00",
+                        "valid_from": "2026-05-22",
+                        "metadata": {"tags": ["017641"]},
+                    },
+                    {
+                        "memory_id": "mem-learned-after-decision",
+                        "memory_type": "portfolio_policy_memory",
+                        "domain": "portfolio",
+                        "entity_key": "017641_future",
+                        "title": "future 017641 policy",
+                        "text": "future 017641 policy must not appear",
+                        "status": "strategic",
+                        "confidence": 0.95,
+                        "updated_at": "2026-05-23T10:00:00+08:00",
+                        "valid_from": "2026-05-23",
+                        "metadata": {"tags": ["017641"]},
+                    },
+                ]
+            },
+        )
+
+        artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
+        serialized = json.dumps(artifact.to_dict(), ensure_ascii=False)
+
+        self.assertIn("mem-known-at-decision", serialized)
+        self.assertNotIn("mem-learned-after-decision", serialized)
+
     def test_rag_failure_falls_back_to_missing_data_not_exception(self) -> None:
         self.copy_real_inputs()
         artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT, use_rag=True)

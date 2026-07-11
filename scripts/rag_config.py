@@ -171,7 +171,9 @@ def rag_agent_shadow_settings(agent_home: Path, config: dict[str, Any] | None = 
 
 def rag_agent_default_settings(agent_home: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = (config or load_rag_config(agent_home))["rag"]
-    return dict(settings.get("agent_default", {}) or {})
+    agent_default = dict(settings.get("agent_default", {}) or {})
+    agent_default["enabled"] = bool(settings.get("enabled", False)) and bool(agent_default.get("enabled", False))
+    return agent_default
 
 
 def rag_profile_evidence_settings(agent_home: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:

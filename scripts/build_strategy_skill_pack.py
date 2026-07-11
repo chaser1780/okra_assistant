@@ -71,6 +71,8 @@ def action_matches_skill(skill: dict[str, Any], ticket: dict[str, Any]) -> bool:
 
 
 def usage_candidate(skill: dict[str, Any], ticket: dict[str, Any]) -> dict[str, Any] | None:
+    if str(skill.get("learning_trust_status", "") or "") != "trusted":
+        return None
     if str(skill.get("status", "") or "") not in {"candidate", "active", "strengthened", "revised"}:
         return None
     if not action_matches_skill(skill, ticket):
@@ -151,16 +153,37 @@ def write_usage_artifact(agent_home: Path, payload: dict[str, Any]) -> Path:
 def build_skill_pack(agent_home: Path, *, generated_at: str | None = None) -> dict[str, Any]:
     generated_at = generated_at or timestamp_now()
     pack = build_default_skill_pack(agent_home)
+    trust_path = agent_home / "db" / "learning_trust_audits" / "latest.json"
+    trust_payload = load_json_if_exists(trust_path)
+    skill_trust = {
+        str(item.get("skill_id", "") or ""): str(item.get("trust_status", "blocked") or "blocked")
+        for item in (trust_payload.get("skills", []) or [])
+        if isinstance(item, dict) and item.get("skill_id")
+    }
+    for key in ("active_skills", "candidate_skills"):
+        pack[key] = [
+            {**item, "learning_trust_status": skill_trust.get(str(item.get("skill_id", "") or ""), "blocked")}
+            for item in (pack.get(key, []) or [])
+            if isinstance(item, dict)
+        ]
     pack["artifact_id"] = "strategy_skill_pack:default"
     pack["artifact_kind"] = "strategy_skill_pack"
     pack["generated_at"] = generated_at
     pack["source_artifacts"] = source_artifacts(agent_home, [registry_path(agent_home)])
+    if trust_path.exists():
+        pack["source_artifacts"].extend(source_artifacts(agent_home, [trust_path])[:-1])
+    pack["summary"]["trusted_skill_count"] = sum(
+        item.get("learning_trust_status") == "trusted"
+        for key in ("active_skills", "candidate_skills")
+        for item in pack.get(key, []) or []
+    )
     pack["selection_policy"] = {
         "active_statuses": ["active", "strengthened", "revised"],
         "candidate_statuses": ["candidate"],
         "archived_excluded": True,
         "max_active_skills_per_scope": 5,
         "writes_action_tickets": False,
+        "trusted_lineage_required_for_usage": True,
     }
     return pack
 

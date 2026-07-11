@@ -1,0 +1,55 @@
+{
+  "schema_version": "historical_replay_trust.v1",
+  "default_mode": "blocked",
+  "dates": {},
+  "slices": {
+    "2026-05-22__017641__scheduled_dca": {
+      "report_date": "2026-05-22",
+      "mode": "structural_only",
+      "learning_eligible": false,
+      "decision_cutoff": "2026-05-22T21:30:00+08:00",
+      "reason_codes": [
+        "future_outcome_nav_in_decision_pack",
+        "execution_memory_visibility_violation"
+      ],
+      "sources": [
+        {
+          "kind": "retrieval_pack",
+          "role": "decision",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/expected/retrieval_pack.expected.json",
+          "sha256": "3b026dc3097b7aa818ffadb9c5d48d036bff8800e0664aff5a000e3873c77602"
+        },
+        {
+          "kind": "slice_definition",
+          "role": "decision",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/slice.json",
+          "sha256": "f487f8407a4115337c708743f15d181ec704e4d3f9e18051bd4ffc15ba222072"
+        },
+        {
+          "kind": "validated_advice",
+          "role": "decision",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/validated_advice.json",
+          "sha256": "b231495187f2453b2c81e01f973b84ffdbdbb45afa63b943a542fc1638a4d16c"
+        },
+        {
+          "kind": "portfolio_state",
+          "role": "decision",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/portfolio_state.json",
+          "sha256": "4d2f337da43ecdd74b8c0d4e31585f1d5cc3fff72d4d7f32ced31678cba6025e"
+        },
+        {
+          "kind": "context_evidence",
+          "role": "decision",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/context_evidence.json",
+          "sha256": "04e0c3a25e065cca5e605c63fd09df32524fde2d4291611c9663bc101db5b8e6"
+        },
+        {
+          "kind": "official_nav_benchmark",
+          "role": "evaluation",
+          "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/input/official_nav_benchmark.json",
+          "sha256": "197851d2aed0e109d997d3c62d3e0aa905ab04b118c1c6b521f71591729d6fc7"
+        }
+      ]
+    }
+  }
+}

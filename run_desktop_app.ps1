@@ -119,6 +119,7 @@ function Test-WorkbenchNeedsBuild {
 
     $exeTime = (Get-Item $ExecutablePath).LastWriteTimeUtc
     $sourcePaths = @(
+        (Join-Path $FrontendRoot 'dist'),
         (Join-Path $FrontendRoot 'src'),
         (Join-Path $FrontendRoot 'src-tauri\src'),
         (Join-Path $FrontendRoot 'src-tauri\icons'),

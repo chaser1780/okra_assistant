@@ -17,7 +17,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from artifact_boundary import BoundaryViolation, assert_refactor_write_allowed
-from evaluate_action_ticket_outcomes import build_outcome_artifact, outcome_event_path, run_builder
+from evaluate_action_ticket_outcomes import build_outcome_artifact, explicit_transaction_costs, outcome_event_path, relative_learning_signal, run_builder
 from helpers import TempAgentHome
 from outcome_event_models import OutcomeEventArtifact, OutcomeEventValidationError
 
@@ -192,6 +192,8 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual(5.0, by_code["ADD"]["actual_return_pct"])
         self.assertEqual(2.0, by_code["ADD"]["benchmark_return_pct"])
         self.assertEqual(3.0, by_code["ADD"]["excess_return_pct"])
+        self.assertRegex(by_code["ADD"]["benchmark"]["mapping_sha256"], r"^[0-9a-f]{64}$")
+        self.assertTrue(by_code["ADD"]["benchmark"]["mapping_version"].startswith("sha256:"))
         self.assertEqual("scored", by_code["HOLD"]["scoring_status"])
         self.assertEqual("hurt", by_code["HOLD"]["outcome_label"])
         self.assertEqual("hold_existing_position", by_code["HOLD"]["decision_context"]["exposure_context"])
@@ -199,6 +201,8 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual("scored", by_code["RED"]["scoring_status"])
         self.assertEqual("avoided_loss", by_code["RED"]["outcome_label"])
         self.assertEqual("reduce_exposure", by_code["RED"]["decision_context"]["exposure_context"])
+        self.assertFalse(by_code["RED"]["decision_context"]["learning_eligible"])
+        self.assertEqual("missing_benchmark_return", by_code["RED"]["decision_context"]["learning_blocked_reason"])
         self.assertEqual("blocked", by_code["UNTRUST"]["scoring_status"])
         self.assertEqual("untrusted_units_source:derived_from_official_nav", by_code["UNTRUST"]["blocked_reason"])
         self.assertEqual("ticket:2026-03-10:ADD:add:001", by_code["ADD"]["ticket_id"])
@@ -218,6 +222,68 @@ class ActionOutcomeTests(unittest.TestCase):
 
         self.assertEqual("avoided_loss", event["outcome_label"])
         self.assertEqual("blocked_add_or_cash_hold", event["decision_context"]["exposure_context"])
+        self.assertFalse(event["decision_context"]["learning_eligible"])
+        self.assertEqual("missing_benchmark_return", event["decision_context"]["learning_blocked_reason"])
+
+    def test_learning_label_uses_benchmark_excess_return(self) -> None:
+        self.agent.write_json(
+            "db/benchmark_history/bm_add.json",
+            {
+                "generated_at": "2026-03-11T16:30:00+08:00",
+                "items": [
+                    {"date": "2026-03-10", "nav": 1.0},
+                    {"date": "2026-03-11", "nav": 1.1},
+                ],
+            },
+        )
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        add_event = next(event for event in artifact.to_dict()["events"] if event["fund_code"] == "ADD")
+
+        self.assertEqual(5.0, add_event["actual_return_pct"])
+        self.assertEqual(10.0, add_event["benchmark_return_pct"])
+        self.assertEqual(-5.0, add_event["excess_return_pct"])
+        self.assertEqual("helped", add_event["outcome_label"])
+        self.assertEqual("benchmark_excess_return", add_event["decision_context"]["learning_basis"])
+        self.assertEqual(-5.0, add_event["decision_context"]["learning_signal_pct"])
+        self.assertEqual("hurt", add_event["decision_context"]["learning_label"])
+        self.assertEqual("increase_exposure_underperformed_benchmark", add_event["decision_context"]["learning_diagnostic_label"])
+        self.assertTrue(add_event["decision_context"]["learning_eligible"])
+
+    def test_relative_learning_signal_aligns_with_exposure_direction(self) -> None:
+        cases = [
+            ("add", 1.0, "increase_exposure", "helped", 1.0),
+            ("add", -1.0, "increase_exposure", "hurt", -1.0),
+            ("hold", 1.0, "hold_existing_position", "helped", 1.0),
+            ("reduce", -1.0, "reduce_exposure", "avoided_loss", 1.0),
+            ("reduce", 1.0, "reduce_exposure", "missed_opportunity", -1.0),
+            ("hold", -1.0, "blocked_add_or_cash_hold", "avoided_loss", 1.0),
+        ]
+        for action, excess, context, expected_label, expected_signal in cases:
+            with self.subTest(action=action, excess=excess, context=context):
+                label, _diagnostic, signal = relative_learning_signal(action, excess, context)
+                self.assertEqual(expected_label, label)
+                self.assertEqual(expected_signal, signal)
+
+        self.assertEqual(("neutral", "missing_benchmark_return", None), relative_learning_signal("add", None, "increase_exposure"))
+        self.assertEqual(("neutral", "invalid_benchmark_excess_return", None), relative_learning_signal("add", float("inf"), "increase_exposure"))
+
+    def test_learning_signal_deducts_only_explicit_transaction_costs(self) -> None:
+        ticket_path = self.agent.root / "db" / "action_tickets" / f"{BASE_DATE}.json"
+        payload = json.loads(ticket_path.read_text(encoding="utf-8"))
+        add_ticket = next(item for item in payload["tickets"] if item["fund_code"] == "ADD")
+        add_ticket["estimated_subscription_fee_rate"] = 0.5
+        add_ticket["estimated_slippage_pct"] = 0.1
+        ticket_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
+        event = next(item for item in artifact.to_dict()["events"] if item["fund_code"] == "ADD")
+
+        self.assertEqual(3.0, event["excess_return_pct"])
+        self.assertEqual(0.6, event["decision_context"]["transaction_costs"]["total_pct"])
+        self.assertEqual(2.4, event["decision_context"]["learning_signal_pct"])
+        self.assertEqual("benchmark_excess_return_net_cost", event["decision_context"]["learning_basis"])
+        self.assertEqual(0.0, explicit_transaction_costs(self.ticket("HOLD", "hold", 0.0))["total_pct"])
 
     def test_existing_position_blocked_add_hold_is_not_learning_eligible(self) -> None:
         ticket_path = self.agent.root / "db" / "action_tickets" / f"{BASE_DATE}.json"

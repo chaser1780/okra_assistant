@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
+import re
 
 from common import (
     dump_json,
+    decisions_path,
     ensure_layout,
     legacy_portfolio_path,
     llm_advice_path,
@@ -21,6 +23,7 @@ from common import (
 from learning_memory import apply_replay_summary_to_ledger
 from long_memory_store import stable_memory_id, upsert_memory_record
 from rag_profile_evidence import build_backtest_evidence_pack
+from replay_trust import audit_replay_dates
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
 from promoted_advice_guardrails import build_validated_payload
 from decision_ledger import load_decisions
@@ -37,7 +40,7 @@ def iter_report_dates(agent_home: Path, start_date: str, end_date: str) -> list[
             continue
         if start_date <= stem <= end_date:
             dates.append(stem)
-    return dates
+    return sorted(set(dates))
 
 
 def load_portfolio_for_replay(agent_home: Path, report_date: str) -> dict | None:
@@ -55,6 +58,42 @@ def load_portfolio_for_replay(agent_home: Path, report_date: str) -> dict | None
         if str(payload.get("as_of_date", "") or "") == report_date:
             return payload
     return None
+
+
+def portfolio_source_path_for_replay(agent_home: Path, report_date: str) -> Path | None:
+    snapshot = agent_home / "db" / "portfolio_state" / "snapshots" / f"{report_date}.json"
+    if snapshot.exists():
+        return snapshot
+    current = agent_home / "db" / "portfolio_state" / "current.json"
+    if current.exists() and str(load_json(current).get("as_of_date", "") or "") == report_date:
+        return current
+    legacy = legacy_portfolio_path(agent_home)
+    if legacy.exists() and str(load_json(legacy).get("as_of_date", "") or "") == report_date:
+        return legacy
+    return None
+
+
+def required_sources_for_replay(agent_home: Path, report_date: str, mode: str) -> list[dict]:
+    paths: list[tuple[Path, str]] = [(llm_advice_path(agent_home, report_date), "decision")]
+    for path in (llm_raw_path(agent_home, report_date), validated_advice_path(agent_home, report_date), decisions_path(agent_home, report_date)):
+        if path.exists():
+            paths.append((path, "decision"))
+    if mode == "revalidate":
+        portfolio_path = portfolio_source_path_for_replay(agent_home, report_date)
+        if portfolio_path is not None:
+            paths.append((portfolio_path, "decision"))
+    for relative in ("db/review_results", "db/execution_reviews"):
+        base = agent_home / relative
+        for path in sorted(base.glob("*.json")) if base.exists() else []:
+            try:
+                if load_json(path).get("base_date") == report_date:
+                    paths.append((path, "evaluation"))
+            except (OSError, ValueError, TypeError):
+                paths.append((path, "evaluation"))
+    return [
+        {"path": path.resolve().relative_to(agent_home.resolve()).as_posix(), "role": role}
+        for path, role in paths
+    ]
 
 
 def review_summary_for_base_date(agent_home: Path, base_date: str) -> dict:
@@ -391,6 +430,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=["baseline", "revalidate"], default="baseline")
     parser.add_argument("--experiment-name", default="", help="Optional stable experiment label.")
     parser.add_argument("--write-learning", action="store_true", help="Apply replay learning impacts to the memory ledger.")
+    parser.add_argument("--include-structural", action="store_true", help="Allow structural-only dates for diagnostic replay; never enables learning.")
     args = parser.parse_args()
 
     agent_home = resolve_agent_home(args.agent_home)
@@ -401,7 +441,38 @@ def main() -> None:
 
     experiment_label = args.experiment_name.strip().replace(" ", "_")
     experiment_id = experiment_label or f"{timestamp_now().replace(':', '-').replace('+', '_')}_{args.mode}_{start_date}_{end_date}"
+    if experiment_id in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", experiment_id):
+        raise SystemExit("Invalid --experiment-name: use only letters, numbers, dot, underscore, and hyphen.")
     target_dir = replay_experiment_dir(agent_home, experiment_id)
+    replay_root = (agent_home / "db" / "replay_experiments").resolve()
+    if target_dir.resolve().parent != replay_root:
+        raise SystemExit("Invalid replay experiment path.")
+
+    selected_dates = iter_report_dates(agent_home, start_date, end_date)
+    required_sources_by_date = {
+        report_date: required_sources_for_replay(agent_home, report_date, args.mode)
+        for report_date in selected_dates
+    }
+    trust_audit = audit_replay_dates(
+        agent_home,
+        selected_dates,
+        include_structural=args.include_structural,
+        required_sources_by_date=required_sources_by_date,
+    )
+    trust_audit.update(
+        {
+            "experiment_id": experiment_id,
+            "generated_at": timestamp_now(),
+            "mode": args.mode,
+            "include_structural": args.include_structural,
+            "write_learning_requested": args.write_learning,
+        }
+    )
+    trust_audit_path = agent_home / "db" / "replay_audits" / f"{experiment_id}.json"
+    dump_json(trust_audit_path, trust_audit)
+    if args.write_learning and not trust_audit["all_allowed_for_learning"]:
+        raise SystemExit(f"Replay learning blocked by historical trust audit: {trust_audit_path}")
+
     target_dir.mkdir(parents=True, exist_ok=True)
 
     daily_results = []
@@ -418,7 +489,18 @@ def main() -> None:
         "optimizer": empty_optimizer_aggregate(),
     }
 
-    for report_date in iter_report_dates(agent_home, start_date, end_date):
+    trust_by_date = {item["replay_key"]: item for item in trust_audit["date_audits"]}
+    for report_date in selected_dates:
+        date_trust = trust_by_date[report_date]
+        if not date_trust["allowed_for_replay"]:
+            skipped_dates.append(
+                {
+                    "report_date": report_date,
+                    "reason": "historical_replay_not_trusted",
+                    "trust_audit": date_trust,
+                }
+            )
+            continue
         advice_path = llm_advice_path(agent_home, report_date)
         if not advice_path.exists():
             skipped_dates.append({"report_date": report_date, "reason": "missing_llm_advice"})
@@ -504,9 +586,20 @@ def main() -> None:
         "skipped_dates": skipped_dates,
         "aggregate": aggregate,
         "learning_impacts": _aggregate_learning_impacts(daily_results),
+        "trust_audit": trust_audit,
+        "trust_audit_path": str(trust_audit_path),
     }
 
     if args.write_learning:
+        processed_dates = {item["report_date"] for item in daily_results}
+        if processed_dates != set(selected_dates):
+            summary["learning_update"] = {
+                "applied": False,
+                "blocked_reason": "replay_batch_incomplete",
+            }
+            dump_json(target_dir / "summary.json", summary)
+            (target_dir / "report.md").write_text(build_markdown_report(summary), encoding="utf-8")
+            raise SystemExit(f"Replay learning blocked because the replay batch was incomplete: {target_dir / 'summary.json'}")
         ledger, memory = apply_replay_summary_to_ledger(agent_home, summary)
         for impact in summary.get("learning_impacts", []) or []:
             label = str(impact.get("rule_label", "") or "")
@@ -536,6 +629,7 @@ def main() -> None:
                     "metadata": {
                         "experiment_id": summary.get("experiment_id", ""),
                         "mode": summary.get("mode", ""),
+                        "learning_trust_status": "trusted",
                         "fund_codes": impact.get("fund_codes", []),
                         "tags": [label, "replay"],
                     },

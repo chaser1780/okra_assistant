@@ -53,6 +53,13 @@ def _same_time_basis(left: datetime, right: datetime) -> tuple[datetime, datetim
     return left, right
 
 
+def is_available_by_cutoff(available_from: str, decision_cutoff: str, *, field_name: str = "available_from") -> bool:
+    available = _parse_timestamp(available_from, field_name)
+    cutoff = _parse_cutoff(decision_cutoff)
+    available, cutoff = _same_time_basis(available, cutoff)
+    return available <= cutoff
+
+
 def _coerce_dict(value: Any, field_name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -125,10 +132,7 @@ class LayeredContextItem:
             self.score = float(self.score)
 
     def assert_not_future(self, decision_cutoff: str) -> None:
-        available = _parse_timestamp(self.available_from, f"{self.item_id}.available_from")
-        cutoff = _parse_cutoff(decision_cutoff)
-        available, cutoff = _same_time_basis(available, cutoff)
-        if available > cutoff:
+        if not is_available_by_cutoff(self.available_from, decision_cutoff, field_name=f"{self.item_id}.available_from"):
             raise LayeredContextValidationError(
                 f"{self.item_id} available_from={self.available_from} is later than decision_cutoff={decision_cutoff}"
             )

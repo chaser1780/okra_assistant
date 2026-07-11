@@ -14,7 +14,7 @@ import {
   YAxis
 } from "recharts";
 import type { PortfolioItem, PortfolioPayload } from "../../lib/types";
-import { asNumber, compactMoney, signedMoney, signedPct } from "../../lib/format";
+import { asNullableNumber, asNumber, compactMoney, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
@@ -45,7 +45,8 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
   const returnBars = useMemo(
     () =>
       portfolio.items
-        .map((item) => ({ code: item.fundCode, name: item.fundName || item.fundCode, value: asNumber(item.holdingReturnPct), pnl: asNumber(item.holdingPnl) }))
+        .map((item) => ({ code: item.fundCode, name: item.fundName || item.fundCode, value: asNullableNumber(item.holdingReturnPct), pnl: asNullableNumber(item.holdingPnl) }))
+        .filter((item): item is typeof item & { value: number } => item.value !== null)
         .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
         .slice(0, 10),
     [portfolio.items]
@@ -53,7 +54,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="总资产" value={portfolio.totalValueText} body={`快照日期 ${portfolio.asOfDate || "暂无"}`} tone="accent" />
         <MetricCard title="持有盈亏" value={portfolio.holdingPnlText} body="基于当前持仓快照汇总" tone={pnlTone(portfolio.holdingPnl)} />
         <MetricCard title="持仓数量" value={String(portfolio.items.length)} body="当前组合覆盖的基金数量" tone="info" />
@@ -61,7 +62,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
       </div>
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-7 p-4">
+        <Card className="col-span-12 p-4 xl:col-span-7">
           <SectionTitle title="组合资产走势" meta="来自 portfolio_state 历史快照" />
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -82,9 +83,9 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
           </div>
         </Card>
 
-        <Card className="col-span-5 p-4">
+        <Card className="col-span-12 p-4 xl:col-span-5">
           <SectionTitle title="持仓风格分布" meta="按当前市值汇总" />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -113,7 +114,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
       </section>
 
       <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-4 p-4">
+        <Card className="col-span-12 p-4 lg:col-span-4">
           <SectionTitle title="角色配置" meta="核心、战术、现金、固定持有" />
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -132,7 +133,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
           </div>
         </Card>
 
-        <Card className="col-span-8 p-4">
+        <Card className="col-span-12 p-4 lg:col-span-8">
           <SectionTitle title="持仓收益结构" meta="收益率绝对值最高的前 10 只基金" />
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -159,8 +160,8 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
       <Card className="p-4">
         <SectionTitle title="持仓明细" meta="点击基金查看持仓、收益、净值与交易约束" />
         {portfolio.items.length ? (
-          <div className="overflow-hidden rounded-md border border-slate-800">
-            <table className="w-full border-collapse text-sm">
+          <div className="overflow-x-auto rounded-md border border-slate-800">
+            <table className="min-w-[760px] w-full border-collapse text-sm">
               <thead className="bg-slate-900 text-xs text-slate-500">
                 <tr>
                   <th className="px-3 py-3 text-left">基金</th>
@@ -195,8 +196,8 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
                       <Badge tone="info">{roleLabel(item.role || "未标注")}</Badge>
                     </td>
                     <td className="px-3 py-3">
-                      <Badge tone={item.fixedDailyBuyAmount > 0 ? "success" : actionTone(item.action)}>
-                        {item.fixedDailyBuyAmount > 0 ? "每日定投" : actionLabel(item.action)}
+                      <Badge tone={(item.fixedDailyBuyAmount ?? 0) > 0 ? "success" : actionTone(item.action)}>
+                        {(item.fixedDailyBuyAmount ?? 0) > 0 ? "每日定投" : actionLabel(item.action)}
                       </Badge>
                     </td>
                   </tr>
@@ -224,22 +225,22 @@ function PortfolioDetail({ item, onOpenFundDetail }: { item: PortfolioItem; onOp
     ["官方日盈亏", `${officialDailyPnlLabel(item)}${item.officialDailyPnlDate ? ` (${item.officialDailyPnlDate})` : ""}`],
     ["持有收益率", item.holdingReturnPctText],
     ["组合占比", item.weightText],
-    ["持有份额", String(item.holdingUnits)],
-    ["最近净值", String(item.lastNav || "暂无")],
+    ["持有份额", text(item.holdingUnits, "不可用")],
+    ["最近净值", text(item.lastNav, "不可用")],
     ["净值日期", item.lastNavDate || "暂无"],
     ["角色", roleLabel(item.role || "未标注")],
     ["风格分组", styleLabel(item.styleGroup || "未分组")],
     ["交易状态", item.allowTrade ? "允许交易" : "固定持有/不可交易"],
     ["官方日盈亏状态", item.officialDailyPnlStatus || "暂无"],
     ["官方日盈亏说明", item.officialDailyPnlReason || "暂无"],
-    ["定投金额", item.fixedDailyBuyAmount > 0 ? `${item.fixedDailyBuyAmount} 元/日` : "未开启"]
+    ["定投金额", item.fixedDailyBuyAmount === null ? "不可用" : item.fixedDailyBuyAmount > 0 ? `${item.fixedDailyBuyAmount} 元/日` : "未开启"]
   ];
   return (
     <div className="space-y-4">
       <Button variant="primary" className="w-full" onClick={() => onOpenFundDetail(item.fundCode)}>
         查看完整详情
       </Button>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {rows.slice(0, 8).map(([label, value]) => (
           <div key={label} className="rounded-md border border-slate-800 bg-slate-950/60 p-3">
             <div className="text-xs text-slate-500">{label}</div>

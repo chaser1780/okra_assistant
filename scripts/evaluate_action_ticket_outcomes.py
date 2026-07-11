@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -150,7 +151,8 @@ def safe_float(value: Any) -> float | None:
     try:
         if value in (None, "", "--"):
             return None
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -203,6 +205,19 @@ def benchmark_mapping(agent_home: Path, fund_code: str) -> dict[str, Any]:
     return item if isinstance(item, dict) else {}
 
 
+def benchmark_mapping_provenance(agent_home: Path) -> dict[str, str]:
+    path = agent_home / "config" / "benchmark_mappings.json"
+    if not path.exists():
+        return {"mapping_path": "config/benchmark_mappings.json", "mapping_sha256": "", "mapping_version": "missing"}
+    digest = content_sha256(path)
+    payload = load_json_if_exists(path)
+    return {
+        "mapping_path": relative_posix(path, agent_home),
+        "mapping_sha256": digest,
+        "mapping_version": str(payload.get("schema_version") or f"sha256:{digest[:12]}"),
+    }
+
+
 def history_return_pct(path: Path, start_date: str, end_date: str) -> float | None:
     if not path.exists():
         return None
@@ -227,6 +242,7 @@ def benchmark_ref(agent_home: Path, ticket: dict[str, Any], start_date: str, end
         return {}, None
     path = benchmark_history_path(agent_home, key)
     return_pct = history_return_pct(path, start_date, end_date)
+    provenance = benchmark_mapping_provenance(agent_home)
     return (
         {
             "benchmark_id": f"benchmark:{key}",
@@ -235,6 +251,7 @@ def benchmark_ref(agent_home: Path, ticket: dict[str, Any], start_date: str, end
             "source_path": relative_posix(path, agent_home),
             "available_from": str(load_json_if_exists(path).get("generated_at", "") or "") if path.exists() else "",
             "status": "present" if return_pct is not None else "missing",
+            **provenance,
         },
         path if path.exists() else None,
     )
@@ -330,6 +347,63 @@ def outcome_label(action_verb: str, actual_return_pct: float, exposure_context: 
     if actual_return_pct < 0:
         return "hurt", f"{action_verb}_negative_nav_follow_through"
     return "neutral", f"{action_verb}_neutral_nav_follow_through"
+
+
+def relative_learning_signal(
+    action_verb: str,
+    excess_return_pct: float | None,
+    exposure_context: str,
+    transaction_cost_pct: float = 0.0,
+) -> tuple[str, str, float | None]:
+    if excess_return_pct is None:
+        return "neutral", "missing_benchmark_return", None
+    if not math.isfinite(excess_return_pct):
+        return "neutral", "invalid_benchmark_excess_return", None
+    inverse = action_verb in REDUCE_ACTIONS or exposure_context == "blocked_add_or_cash_hold"
+    cost = safe_float(transaction_cost_pct)
+    cost = max(0.0, cost or 0.0)
+    signal = round((-excess_return_pct if inverse else excess_return_pct) - cost, 4)
+    context = exposure_context or action_verb or "unknown_exposure"
+    suffix = "_net_transaction_cost" if cost > 0 else ""
+    if signal > 0:
+        if inverse:
+            return "avoided_loss", f"{context}_avoided_benchmark_underperformance{suffix}", signal
+        return "helped", f"{context}_outperformed_benchmark{suffix}", signal
+    if signal < 0:
+        if inverse:
+            return "missed_opportunity", f"{context}_missed_benchmark_outperformance{suffix}", signal
+        return "hurt", f"{context}_underperformed_benchmark{suffix}", signal
+    return "neutral", f"{context}_matched_benchmark{suffix}", signal
+
+
+def explicit_transaction_costs(ticket: dict[str, Any]) -> dict[str, Any]:
+    action = str(ticket.get("action_verb", "") or "")
+    if action == "hold":
+        return {"fee_pct": 0.0, "slippage_pct": 0.0, "total_pct": 0.0, "source_fields": []}
+    legacy = ticket.get("legacy_mapping", {}) if isinstance(ticket.get("legacy_mapping"), dict) else {}
+
+    def first_rate(keys: tuple[str, ...]) -> tuple[float, str]:
+        for container_name, container in (("ticket", ticket), ("legacy_mapping", legacy)):
+            for key in keys:
+                value = safe_float(container.get(key))
+                if value is not None and value >= 0:
+                    return value, f"{container_name}.{key}"
+        return 0.0, ""
+
+    fee_keys = (
+        ("estimated_redeem_fee_rate", "redeem_fee_rate_pct", "fee_rate_pct")
+        if action in REDUCE_ACTIONS
+        else ("estimated_subscription_fee_rate", "subscription_fee_rate_pct", "fee_rate_pct")
+    )
+    fee_pct, fee_source = first_rate(fee_keys)
+    slippage_pct, slippage_source = first_rate(("estimated_slippage_pct", "slippage_rate_pct"))
+    source_fields = [item for item in (fee_source, slippage_source) if item]
+    return {
+        "fee_pct": round(fee_pct, 4),
+        "slippage_pct": round(slippage_pct, 4),
+        "total_pct": round(fee_pct + slippage_pct, 4),
+        "source_fields": source_fields,
+    }
 
 
 def source_refs_for_event(agent_home: Path, base_date: str, evaluation_date: str, ticket_index: int, start_date: str, end_date: str) -> list[dict[str, Any]]:
@@ -551,6 +625,9 @@ def evaluate_ticket(
     )
     if benchmark_path:
         source_refs.append({"kind": "benchmark", "path": relative_posix(benchmark_path, agent_home), "record_id": benchmark.get("benchmark_id", "")})
+    mapping_path = agent_home / "config" / "benchmark_mappings.json"
+    if mapping_path.exists():
+        source_refs.append({"kind": "benchmark_mapping", "path": relative_posix(mapping_path, agent_home), "record_id": benchmark.get("mapping_version", "")})
     evaluation_path = quote_path(agent_home, evaluation_date)
     extra_sources = [path for path in (benchmark_path, evaluation_path) if path and path.exists()]
     if start_nav is None or start_nav <= 0:
@@ -637,6 +714,28 @@ def evaluate_ticket(
     benchmark_return_pct = safe_float(benchmark.get("return_pct"))
     excess_return_pct = round(actual_return_pct - benchmark_return_pct, 4) if benchmark_return_pct is not None else None
     decision_context = decision_context_for(ticket, position)
+    exposure_context = str(decision_context.get("exposure_context", "") or "")
+    transaction_costs = explicit_transaction_costs(ticket)
+    learning_label, learning_diagnostic, learning_signal_pct = relative_learning_signal(
+        action_verb,
+        excess_return_pct,
+        exposure_context,
+        transaction_costs["total_pct"],
+    )
+    decision_context.update(
+        {
+            "learning_basis": "benchmark_excess_return_net_cost" if transaction_costs["total_pct"] > 0 else "benchmark_excess_return",
+            "learning_signal_pct": learning_signal_pct,
+            "transaction_costs": transaction_costs,
+            "learning_label": learning_label,
+            "learning_diagnostic_label": learning_diagnostic,
+        }
+    )
+    if excess_return_pct is None:
+        decision_context["learning_eligible"] = False
+        decision_context["learning_blocked_reason"] = "missing_benchmark_return"
+    elif decision_context.get("learning_eligible") is not True:
+        decision_context["learning_blocked_reason"] = "exposure_context_not_learning_eligible"
     label, diagnostic = outcome_label(action_verb, actual_return_pct, str(decision_context.get("exposure_context", "") or ""))
     return event_from_parts(
         ticket=ticket,
@@ -698,7 +797,13 @@ def build_outcome_artifact(agent_home: Path, base_date: str, horizon: str, *, ge
     ticket_artifact = load_json_if_exists(ticket_path)
     base_quote_payload = load_json_if_exists(base_quote_path)
     evaluation_quote_payload = load_json_if_exists(evaluation_quote_path)
-    source_paths = [ticket_path, base_quote_path, evaluation_quote_path, portfolio_path]
+    source_paths = [
+        ticket_path,
+        base_quote_path,
+        evaluation_quote_path,
+        portfolio_path,
+        agent_home / "config" / "benchmark_mappings.json",
+    ]
     events: list[OutcomeEvent] = []
     extra_source_paths: list[Path] = []
     for index, ticket in enumerate(ticket_artifact.get("tickets", []) or []):
