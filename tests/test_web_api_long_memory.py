@@ -178,6 +178,20 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertNotIn("2026-05-20", command)
         self.assertEqual(result["runDate"], expected_date)
 
+    def test_realtime_run_reuses_active_process(self):
+        controller = TaskController(self.agent.root)
+        process = unittest.mock.MagicMock()
+        process.pid = 12345
+        process.poll.return_value = None
+        with patch("app.web_api_services.subprocess.Popen", return_value=process) as popen:
+            first = controller.run_task("realtime")
+            second = controller.run_task("realtime")
+
+        self.assertFalse(first["alreadyRunning"])
+        self.assertTrue(second["alreadyRunning"])
+        self.assertEqual(first["pid"], second["pid"])
+        popen.assert_called_once()
+
     def test_fund_detail_exposes_fund_memory(self):
         upsert_memory_record(
             self.agent.root,

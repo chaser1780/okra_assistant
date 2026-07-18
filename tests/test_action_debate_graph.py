@@ -142,6 +142,57 @@ class ActionDebateGraphTests(unittest.TestCase):
         self.assertEqual("llm", first["bull_case"]["reasoning_mode"])
         self.assertEqual("llm", first["action_former"]["reasoning_mode"])
 
+    def test_llm_debate_retries_only_missing_ticket_ids(self) -> None:
+        self.build_phase2_inputs()
+        seen_requests: list[tuple[str, str, list[str]]] = []
+        bull_request_count = 0
+
+        def fake_call_json_agent(agent_home, system_prompt, user_prompt, **kwargs):
+            nonlocal bull_request_count
+            payload = json.loads(user_prompt)
+            request_items = list(payload["items"])
+            if payload["node"] == "bull_case":
+                bull_request_count += 1
+                if bull_request_count == 1:
+                    request_items = request_items[3:]
+            seen_requests.append((payload["node"], kwargs["request_name"], [item["ticket_id"] for item in payload["items"]]))
+            return {
+                "transport_name": "fake",
+                "response_json": {
+                    "items": [
+                        {
+                            "ticket_id": item["ticket_id"],
+                            "stance": "shadow_review",
+                            "strength": "medium",
+                            "summary": f"llm summary for {item['ticket_id']}",
+                            "verdict": "support_shadow_ticket",
+                            "uncertainty": "low",
+                            "target_status": "shadow_only",
+                            "confidence_delta": 0.01,
+                            "reason": f"llm reason for {item['ticket_id']}",
+                            "non_executable": True,
+                        }
+                        for item in request_items
+                    ]
+                },
+            }
+
+        with patch("action_debate_graph.call_json_agent", side_effect=fake_call_json_agent):
+            _, artifact = run_debate_graph(
+                self.agent.root,
+                REPORT_DATE,
+                generated_at=DEBATE_GENERATED_AT,
+                debate_mode="llm",
+            )
+
+        self.assertEqual("ok", artifact["summary"]["status"])
+        self.assertEqual("action_debate_bull_case_retry_missing", seen_requests[1][1])
+        self.assertEqual(3, len(seen_requests[1][2]))
+        runtime = json.loads(action_debate_runtime_path(self.agent.root, REPORT_DATE).read_text(encoding="utf-8"))
+        bull_ref = runtime["state"]["node_refs"]["bull_case"][0]
+        self.assertEqual(2, bull_ref["request_count"])
+        self.assertEqual(3, bull_ref["recovered_item_count"])
+
     def test_node_failure_writes_degraded_artifact_without_official_mutation(self) -> None:
         self.build_phase2_inputs()
         validated_path = self.agent.root / "db" / "validated_advice" / f"{REPORT_DATE}.json"

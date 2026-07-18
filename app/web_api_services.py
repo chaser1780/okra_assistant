@@ -167,6 +167,8 @@ class TaskController:
         self.home = home
         self._run_lock = threading.Lock()
         self._alignment_lock = threading.Lock()
+        self._realtime_process = None
+        self._realtime_log_path = ""
 
     def run_portfolio_alignment_if_needed(self, *, force: bool = False) -> dict[str, Any]:
         with self._alignment_lock:
@@ -204,6 +206,18 @@ class TaskController:
                 task_name = "today_analysis"
             elif kind == "realtime":
                 run_date = today_str()
+                if self._realtime_process is not None and self._realtime_process.poll() is None:
+                    return {
+                        "ok": True,
+                        "task": "realtime",
+                        "pid": self._realtime_process.pid,
+                        "runId": "",
+                        "runDate": run_date,
+                        "force": False,
+                        "logPath": self._realtime_log_path,
+                        "portfolioAlignment": {},
+                        "alreadyRunning": True,
+                    }
                 command = build_realtime_command(self.home, run_date)
                 task_name = "realtime"
                 alignment = {}
@@ -217,12 +231,16 @@ class TaskController:
                 process = subprocess.Popen(command, cwd=str(self.home), env=env, stdout=handle, stderr=subprocess.STDOUT)
             finally:
                 handle.close()
+            if kind == "realtime":
+                self._realtime_process = process
+                self._realtime_log_path = str(log_path)
             runtime: dict[str, Any] = {}
-            for _ in range(20):
-                runtime = get_active_runtime(self.home, run_date)
-                if runtime.get("runId"):
-                    break
-                time.sleep(0.1)
+            if kind == "daily":
+                for _ in range(20):
+                    runtime = get_active_runtime(self.home, run_date)
+                    if runtime.get("runId"):
+                        break
+                    time.sleep(0.1)
         return {
             "ok": True,
             "task": task_name,
@@ -232,6 +250,7 @@ class TaskController:
             "force": force,
             "logPath": str(log_path),
             "portfolioAlignment": alignment,
+            "alreadyRunning": False,
         }
 
 

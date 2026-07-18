@@ -115,7 +115,7 @@ export function getFundDetail(fundCode: string, date?: string, range = "since_in
 export function runTask(
   kind: "daily" | "realtime",
   options: { force?: boolean; date?: string } = {}
-): Promise<{ ok: boolean; pid: number; runId?: string; task: string; runDate: string; force?: boolean; logPath?: string }> {
+): Promise<{ ok: boolean; pid: number; runId?: string; task: string; runDate: string; force?: boolean; logPath?: string; alreadyRunning?: boolean }> {
   return request(`/api/run/${kind}`, { method: "POST", body: JSON.stringify(options) });
 }
 

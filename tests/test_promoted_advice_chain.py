@@ -159,6 +159,8 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertFalse(validated["dca_actions"])
         self.assertFalse(validated["tactical_actions"])
         self.assertEqual(4, len(validated["hold_actions"]))
+        self.assertIn("Mock action-ticket chain", validated["market_view"]["summary"])
+        self.assertNotIn("Compatibility preview only", " ".join(validated["cross_fund_observations"]))
         self.assertTrue(step_output_exists(self.agent.root, "2026-06-01", "run_promoted_advice_chain.py", ["--llm-mock"]))
         self.assertFalse(step_output_exists(self.agent.root, "2026-06-01", "run_promoted_advice_chain.py"))
         with patch("run_daily_pipeline.run_step") as run_step_mock:

@@ -321,48 +321,69 @@ def call_debate_llm_node(
         return {}
     system_prompt = (
         NODE_PROMPTS[node_name]
-        + "\nReturn strict JSON only. Do not invent facts. Every item must remain non_executable=true "
-        "and must be a shadow-only proposal."
+        + "\nReturn strict JSON only. Return exactly one output item for every input item, in the same order. "
+        "Copy every ticket_id verbatim, including hold tickets; never filter, rank, merge, or omit an item. "
+        "Do not invent facts. Every item must remain non_executable=true and must be a shadow-only proposal."
     )
-    user_payload = {
-        "report_date": state.report_date,
-        "node": node_name,
-        "write_scope": "shadow_only",
-        "non_executable": True,
-        "items": compact_llm_items(items, limit=20),
-    }
-    response = call_json_agent(
-        context["agent_home"],
-        system_prompt,
-        json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
-        schema=LLM_NODE_SCHEMA,
-        max_attempts=1,
-        reasoning_effort=context.get("llm_reasoning_effort") or None,
-        request_name=f"action_debate_{node_name}",
-        text_verbosity="low",
-        max_output_tokens=3000,
-        temperature=0.0,
-        timeout=(10, 120),
-    )
-    context.setdefault("llm_node_meta", {})[node_name] = {
-        "transport_name": str(response.get("transport_name", "") or ""),
-        "stream_incomplete": bool(response.get("stream_incomplete", False)),
-        "item_count": len((response.get("response_json", {}) or {}).get("items", []) or []),
-    }
-    output = {
-        str(item.get("ticket_id", "") or ""): item
-        for item in (response.get("response_json", {}) or {}).get("items", []) or []
-        if isinstance(item, dict) and item.get("ticket_id")
-    }
-    expected_ids = {
-        str(item.get("ticket_id", "") or (item.get("target", {}) or {}).get("ticket_id", "") or "")
+    expected_by_id = {
+        str(item.get("ticket_id", "") or (item.get("target", {}) or {}).get("ticket_id", "") or ""): item
         for item in items
         if item.get("ticket_id") or (item.get("target", {}) or {}).get("ticket_id")
     }
-    if set(output) != expected_ids:
-        missing = sorted(expected_ids - set(output))
-        extra = sorted(set(output) - expected_ids)
-        raise ActionDebateGraphError(f"llm node {node_name} returned mismatched ticket ids: missing={missing[:3]}, extra={extra[:3]}")
+    output: dict[str, dict[str, Any]] = {}
+    remaining_ids = list(expected_by_id)
+    responses: list[dict[str, Any]] = []
+    for request_index in range(2):
+        requested_items = [expected_by_id[ticket_id] for ticket_id in remaining_ids]
+        user_payload = {
+            "report_date": state.report_date,
+            "node": node_name,
+            "write_scope": "shadow_only",
+            "non_executable": True,
+            "required_item_count": len(requested_items),
+            "required_ticket_ids": remaining_ids,
+            "items": compact_llm_items(requested_items, limit=20),
+        }
+        response = call_json_agent(
+            context["agent_home"],
+            system_prompt,
+            json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
+            schema=LLM_NODE_SCHEMA,
+            max_attempts=1,
+            reasoning_effort=context.get("llm_reasoning_effort") or None,
+            request_name=f"action_debate_{node_name}" + ("_retry_missing" if request_index else ""),
+            text_verbosity="low",
+            max_output_tokens=max(3000, min(6000, len(requested_items) * 260)),
+            temperature=0.0,
+            timeout=(10, 120),
+        )
+        responses.append(response)
+        response_items = {
+            str(item.get("ticket_id", "") or ""): item
+            for item in (response.get("response_json", {}) or {}).get("items", []) or []
+            if isinstance(item, dict) and item.get("ticket_id")
+        }
+        extra = sorted(set(response_items) - set(remaining_ids))
+        if extra:
+            raise ActionDebateGraphError(f"llm node {node_name} returned unexpected ticket ids: extra={extra[:3]}")
+        output.update(response_items)
+        remaining_ids = [ticket_id for ticket_id in remaining_ids if ticket_id not in output]
+        if not remaining_ids:
+            break
+    first_response_count = len((responses[0].get("response_json", {}) or {}).get("items", []) or [])
+    context.setdefault("llm_node_meta", {})[node_name] = {
+        "transport_name": str(responses[-1].get("transport_name", "") or ""),
+        "stream_incomplete": any(bool(response.get("stream_incomplete", False)) for response in responses),
+        "item_count": len(output),
+        "request_count": len(responses),
+        "recovered_item_count": max(0, len(output) - first_response_count),
+    }
+    if remaining_ids:
+        response_counts = [len((response.get("response_json", {}) or {}).get("items", []) or []) for response in responses]
+        raise ActionDebateGraphError(
+            f"llm node {node_name} returned mismatched ticket ids after retry: "
+            f"missing={sorted(remaining_ids)[:3]}, extra=[], response_counts={response_counts}"
+        )
     if any(item.get("non_executable") is not True for item in output.values()):
         raise ActionDebateGraphError(f"llm node {node_name} returned executable item")
     return output

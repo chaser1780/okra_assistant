@@ -447,13 +447,25 @@ def replayable_validated_sections(section_preview: dict[str, list[dict[str, Any]
     }
 
 
-def market_view_preview(validated: dict[str, Any], report_date: str, decision_count: int) -> dict[str, Any]:
+def market_view_preview(
+    validated: dict[str, Any],
+    report_date: str,
+    decision_count: int,
+    *,
+    promoted_run: bool = False,
+    is_mock: bool = False,
+) -> dict[str, Any]:
     base = dict(validated.get("market_view", {}) or {})
     base.setdefault("regime", "mixed")
-    base["summary"] = (
-        "Shadow action-ticket chain produced an adapter-shape advice preview "
-        f"for {report_date}; decisions={decision_count}. This preview is non-executable."
-    )
+    if promoted_run and not is_mock:
+        base["summary"] = f"Promoted action-ticket chain produced official advice for {report_date}; decisions={decision_count}."
+    elif promoted_run:
+        base["summary"] = f"Mock action-ticket chain produced non-executable test advice for {report_date}; decisions={decision_count}."
+    else:
+        base["summary"] = (
+            "Shadow action-ticket chain produced an adapter-shape advice preview "
+            f"for {report_date}; decisions={decision_count}. This preview is non-executable."
+        )
     drivers = list(base.get("key_drivers", []) or [])
     drivers.append("source_chain=action_ticket->retrieval_pack->action_debate")
     base["key_drivers"] = stable_list(drivers, limit=8)
@@ -730,14 +742,32 @@ def build_preview_payload(
         "degradation_mode": str(official_bundle.get("degradation_mode", "") or ("none" if debate_artifact.get("summary", {}).get("status") == "ok" else "shadow_degraded")),
         "execution_eligible": root_execution_eligible,
         "is_mock": is_mock,
-        "committee_confidence": "preview",
+        "committee_confidence": "mock" if is_mock else ("promoted" if promoted_run else "preview"),
         "manager_order": ["action_ticket_shadow", "layered_retrieval_pack", "action_debate_shadow"],
         "fund_decisions": committee_decisions,
-        "market_view": market_view_preview(validated, report_date, len(final_decisions)),
-        "cross_fund_observations": [
-            "Compatibility preview only; not written to db/committee_decision_bundle or db/llm_advice.",
-            "Official validator, optimizer, ledger, execution sync, and long memory are unchanged.",
-        ],
+        "market_view": market_view_preview(
+            validated,
+            report_date,
+            len(final_decisions),
+            promoted_run=promoted_run,
+            is_mock=is_mock,
+        ),
+        "cross_fund_observations": (
+            [
+                "Mock debate result is non-executable and must not be used for trading.",
+                "Official-shaped artifacts are isolated by explicit is_mock and production_eligible flags.",
+            ]
+            if promoted_run and is_mock
+            else [
+                "Promoted action-ticket chain wrote the official advice contracts.",
+                "Execution remains subject to validated portfolio and fund-level guardrails.",
+            ]
+            if promoted_run
+            else [
+                "Compatibility preview only; not written to db/committee_decision_bundle or db/llm_advice.",
+                "Official validator, optimizer, ledger, execution sync, and long memory are unchanged.",
+            ]
+        ),
         "risk_vetoes": [
             {
                 "fund_code": item["fund_code"],
@@ -749,7 +779,13 @@ def build_preview_payload(
         ],
         "failed_agent_names": [],
         "degraded_agent_names": [],
-        "notes": ["Generated from shadow artifacts under a non-executable adapter_shape_preview boundary."],
+        "notes": [
+            "Mock promoted run; execution is disabled."
+            if promoted_run and is_mock
+            else "Promoted run passed the official-output gate."
+            if promoted_run
+            else "Generated from shadow artifacts under a non-executable adapter_shape_preview boundary."
+        ],
     }
     final_advice_preview = {
         "market_view": committee_bundle_preview["market_view"],

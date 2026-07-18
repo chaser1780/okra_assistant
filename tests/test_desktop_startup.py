@@ -37,6 +37,13 @@ class DesktopStartupTests(unittest.TestCase):
         self.assertNotIn("from fund_registry import search_fund_candidates", imports)
         self.assertIn("from fund_registry import search_fund_candidates", lookup_method.split("def execution_fund_register", 1)[0])
 
+    def test_workbench_starts_visible_realtime_refresh_loop(self):
+        source = (ROOT / "frontend" / "src" / "app" / "routes.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("window.setInterval(refreshWhenVisible, 60_000)", source)
+        self.assertIn('document.visibilityState === "visible"', source)
+        self.assertIn("realtimeRequestInFlight.current", source)
+
 
 if __name__ == "__main__":
     unittest.main()

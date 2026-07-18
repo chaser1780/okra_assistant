@@ -1,6 +1,6 @@
 import { AlertTriangle, RefreshCcw } from "lucide-react";
 import type { ReactNode } from "react";
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { WorkbenchLayout, type PageKey } from "../components/okra/WorkbenchLayout";
@@ -69,6 +69,7 @@ function WorkbenchShell() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [realtimeRunning, setRealtimeRunning] = useState(false);
   const [realtimeError, setRealtimeError] = useState("");
+  const realtimeRequestInFlight = useRef(false);
   const [autoRunToday, setAutoRunToday] = useState(readAutoRunTodayPreference);
   const queryClient = useQueryClient();
   const requestedDate = searchParams.get("date") ?? "";
@@ -79,9 +80,9 @@ function WorkbenchShell() {
   const dates = useMemo(() => shellQuery.data?.dates ?? (selectedDate ? [selectedDate] : []), [selectedDate, shellQuery.data?.dates]);
   const todayQuery = useTodayPageQuery(selectedDate || undefined, { enabled: Boolean(selectedDate) });
 
-  const refreshAll = async () => {
+  const refreshAll = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: workbenchQueryKeys.root });
-  };
+  }, [queryClient]);
   const { activeDailyRunId, dailyError, dailyRunning, triggerDaily } = useTodayAnalysisRunner({
     autoRunToday,
     todayQuery,
@@ -105,20 +106,38 @@ function WorkbenchShell() {
   }, [requestedDate, setSearchParams, shellQuery.data?.selectedDate]);
 
 
-  async function triggerRealtime() {
-    setRealtimeError("");
+  const triggerRealtime = useCallback(async (automatic = false) => {
+    if (realtimeRequestInFlight.current) return;
+    realtimeRequestInFlight.current = true;
+    if (!automatic) setRealtimeError("");
     setRealtimeRunning(true);
     try {
       await runTask("realtime", { date: today });
-      window.setTimeout(() => {
-        void refreshAll();
-        setRealtimeRunning(false);
-      }, 900);
+      await new Promise((resolve) => window.setTimeout(resolve, 4_000));
+      await refreshAll();
+      setRealtimeError("");
     } catch (err) {
-      setRealtimeRunning(false);
       setRealtimeError(err instanceof Error ? err.message : "实时刷新启动失败。");
+    } finally {
+      realtimeRequestInFlight.current = false;
+      setRealtimeRunning(false);
     }
-  }
+  }, [refreshAll, today]);
+
+  useEffect(() => {
+    if (!shellQuery.isSuccess) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void triggerRealtime(true);
+    };
+    const initialTimer = window.setTimeout(refreshWhenVisible, 1_500);
+    const intervalTimer = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalTimer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [shellQuery.isSuccess, triggerRealtime]);
 
   const title = pageTitles[pageKey];
 
@@ -135,7 +154,7 @@ function WorkbenchShell() {
         });
       }}
       onRunDaily={() => void triggerDaily(false)}
-      onRunRealtime={() => void triggerRealtime()}
+      onRunRealtime={() => void triggerRealtime(false)}
       autoRunToday={autoRunToday}
       onAutoRunTodayChange={(enabled) => {
         setAutoRunToday(enabled);
