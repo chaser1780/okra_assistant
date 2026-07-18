@@ -500,8 +500,10 @@ def build_sync_preview(agent_home: Path, detected_items: list[dict], image_paths
                 {
                     "display_name": row.get("display_name", ""),
                     "current_value": current_value,
+                    "daily_pnl": daily_pnl,
                     "holding_pnl": holding_pnl,
                     "holding_return_pct": holding_return_pct,
+                    "derived_cost_basis_value": cost_basis,
                     "page_index": row.get("page_index"),
                     "row_index": row.get("row_index"),
                 }

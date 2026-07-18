@@ -1,4 +1,7 @@
 import { text } from "./format";
+import type { ScreenshotPreview, ScreenshotPreviewRow } from "./types";
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 export function cleanPayload(source: Record<string, string>) {
   return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== ""));
@@ -13,11 +16,15 @@ export function fileToDataUrl(file: File) {
   });
 }
 
-export function extractPreviewRows(preview: Record<string, unknown> | null) {
+export function extractPreviewRows(preview: ScreenshotPreview | null): ScreenshotPreviewRow[] {
   if (!preview) return [];
-  const rows = asList(preview.matched_items).concat(asList(preview.new_items));
+  const rows = preview.matched_items.concat(preview.new_items);
   if (rows.length) return rows;
-  return asList(preview.detected_holdings).filter((row) => row.fund_code || row.matched_fund_code);
+  return preview.detected_holdings.filter((row) => row.fund_code || row.matched_fund_code);
+}
+
+export function hasValidPreviewIntegrity(preview: ScreenshotPreview) {
+  return SHA256_PATTERN.test(preview.preview_sha256) && SHA256_PATTERN.test(preview.portfolio_state_sha256);
 }
 
 export function asList(value: unknown): Record<string, unknown>[] {

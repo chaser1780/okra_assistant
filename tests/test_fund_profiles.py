@@ -22,6 +22,7 @@ class FundProfileTests(unittest.TestCase):
         管理费率：0.50%
         托管费率：0.10%
         </div>
+        <table><tr><th>业绩比较基准</th><td>恒生科技指数收益率*95%</td><th>跟踪标的</th><td>恒生科技指数</td></tr></table>
         </body></html>
         """
         profile = parse_profile_html(html, "017193", "测试基金", "2026-03-11")
@@ -36,6 +37,8 @@ class FundProfileTests(unittest.TestCase):
         self.assertGreater(profile["fund_age_years"], 2.0)
         self.assertEqual(profile["fund_scale_bucket"], "medium")
         self.assertEqual(profile["fee_level"], "medium")
+        self.assertEqual(profile["benchmark"], "恒生科技指数收益率*95%")
+        self.assertEqual(profile["tracking_target"], "恒生科技指数")
 
 
 if __name__ == "__main__":

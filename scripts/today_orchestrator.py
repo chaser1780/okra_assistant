@@ -100,6 +100,26 @@ def read_runtime(agent_home: Path, report_date: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def failure_runtime_status(agent_home: Path, report_date: str, error: Exception) -> tuple[str, bool]:
+    preflight_path = daily_workspace_dir(agent_home, report_date) / "preflight.json"
+    if preflight_path.exists():
+        try:
+            preflight = load_json(preflight_path)
+            probe = next(
+                (item for item in preflight.get("checks", []) or [] if item.get("name") == "llm:probe" and item.get("status") == "error"),
+                None,
+            )
+            if probe is not None:
+                retryable = bool(probe.get("retryable", False))
+                return (RUNTIME_STATUS["retryable_failure"] if retryable else RUNTIME_STATUS["blocking_failure"], retryable)
+        except Exception:
+            pass
+    text = str(error).lower()
+    if any(marker in text for marker in ("model_not_found", "missingportfoliostateerror", "portfolio_state snapshot missing")):
+        return RUNTIME_STATUS["blocking_failure"], False
+    return RUNTIME_STATUS["retryable_failure"], True
+
+
 def ensure_runtime_not_stale(agent_home: Path, report_date: str) -> dict:
     runtime = read_runtime(agent_home, report_date)
     if not runtime:
@@ -611,9 +631,10 @@ def run_today_analysis(
         _write_runtime(agent_home, report_date, runtime)
         return paths.decision
     except Exception as exc:
+        failure_status, retryable = failure_runtime_status(agent_home, report_date, exc)
         runtime.update(
             {
-                "status": RUNTIME_STATUS["retryable_failure"],
+                "status": failure_status,
                 "phase": "failed",
                 "currentStep": "",
                 "currentAgent": "",
@@ -623,6 +644,8 @@ def run_today_analysis(
                 "endedAt": timestamp_now(),
                 "resultReady": False,
                 "lastError": str(exc),
+                "failureType": type(exc).__name__,
+                "retryable": retryable,
             }
         )
         _write_runtime(agent_home, report_date, runtime)

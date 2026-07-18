@@ -27,7 +27,7 @@ import win32crypt
 from bs4 import BeautifulSoup
 
 from common import dump_json, ensure_layout, load_llm_config, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
-from multiagent_utils import call_json_agent, call_responses_text, parse_json_text
+from multiagent_utils import ProviderRequestError, call_json_agent, call_responses_text, parse_json_text
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_provider_payload, build_provider_result, build_source_health_item, normalize_provider_item, resolve_provider_chain
@@ -882,9 +882,15 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) 
     model_override = str(cfg.get("model", "") or "").strip()
     llm_batches = 0
     fallback_batches = 0
+    circuit_error = ""
     classified = [dict(item) for item in items]
     for start in range(0, len(classified), batch_size):
         batch = classified[start : start + batch_size]
+        if circuit_error:
+            fallback_batches += 1
+            for item in batch:
+                item.update(rule_classify_news_item(item))
+            continue
         system_prompt, user_prompt = build_news_classification_prompts(batch)
         try:
             response = call_json_agent(
@@ -898,6 +904,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) 
                 text_verbosity="low",
                 temperature=0.1,
                 timeout=(10, timeout_seconds),
+                model=model_override or None,
             )
             result_items = {int(item.get("index", -1)): item for item in (response.get("response_json", {}) or {}).get("items", []) or []}
             llm_batches += 1
@@ -914,7 +921,9 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) 
                         "impact": impact_from_classification(str(parsed.get("sentiment_label", "neutral")), str(parsed.get("risk_level", "low"))),
                     }
                 item.update(parsed)
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                circuit_error = str(exc)
             fallback_batches += 1
             for item in batch:
                 item.update(rule_classify_news_item(item))
@@ -927,6 +936,8 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) 
         "fallback_batches": fallback_batches,
         "batch_size": batch_size,
         "model": model_override or "default",
+        "circuit_open": bool(circuit_error),
+        "error": circuit_error,
     }
 
 
@@ -2135,6 +2146,8 @@ def fetch_openai_web_search_news(agent_home: Path, settings: dict, report_date: 
             break
         except Exception as exc:
             errors.append(f"{tool_type}: {exc}")
+            if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                break
     items = []
     for raw_item in raw_rows:
         normalized = normalize_openai_web_search_item(raw_item, report_date=report_date, citation_urls=citation_urls)

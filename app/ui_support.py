@@ -423,7 +423,7 @@ def summarize_state(state: dict) -> dict:
         "decision_source": llm_raw.get("decision_source", ""),
         "narrative_mode": llm_raw.get("narrative_mode", ""),
         "advice_is_fallback": advice_mode == "committee_fallback",
-        "advice_is_mock": advice_mode == "mock",
+        "advice_is_mock": bool(llm_raw.get("is_mock") or advice_mode in {"mock", "action_debate_mock"}),
         "aggregate_degraded_ok": bool(aggregate.get("degraded_ok", False)),
         "preflight_status": state.get("preflight", {}).get("status", ""),
         "review_available": bool(state.get("review_results_for_date") or state.get("review_report")),

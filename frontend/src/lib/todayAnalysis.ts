@@ -44,8 +44,10 @@ export function runtimeStatusMeta(value: unknown): RuntimeStatusMeta {
   const status = String(value ?? "").trim().toLowerCase();
   if (["running", "in_progress", "started"].includes(status)) return { kind: "running", label: "运行中", tone: "accent" };
   if (["ok", "success", "completed", "complete", "ready"].includes(status)) return { kind: "success", label: "成功", tone: "success" };
-  if (["degraded", "partial", "retryable_failure", "warning"].includes(status)) return { kind: "degraded", label: "降级", tone: "warning" };
-  if (["failed", "failure", "error", "blocking_failure"].includes(status)) return { kind: "failed", label: "失败", tone: "danger" };
+  if (["degraded", "partial", "warning"].includes(status)) return { kind: "degraded", label: "降级", tone: "warning" };
+  if (status === "retryable_failure") return { kind: "failed", label: "失败，可重试", tone: "danger" };
+  if (status === "blocking_failure") return { kind: "failed", label: "失败，需处理", tone: "danger" };
+  if (["failed", "failure", "error"].includes(status)) return { kind: "failed", label: "失败", tone: "danger" };
   if (["stale", "expired"].includes(status)) return { kind: "stale", label: "已过期", tone: "warning" };
   if (["idle", "pending", "not_run", "not_started"].includes(status)) return { kind: "idle", label: "未运行", tone: "neutral" };
   return { kind: "unknown", label: status || "未知", tone: "neutral" };

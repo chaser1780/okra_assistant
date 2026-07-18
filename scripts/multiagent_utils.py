@@ -13,6 +13,15 @@ from common import dump_json, load_llm_config, project_path, timestamp_now
 
 DEFAULT_LOCAL_OPENAI_API_KEY_FILE = "config/" + "openai_api_key.txt"
 
+
+class ProviderRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int, retryable: bool, request_kind: str, transport_name: str):
+        super().__init__(message)
+        self.status_code = int(status_code)
+        self.retryable = bool(retryable)
+        self.request_kind = request_kind
+        self.transport_name = transport_name
+
 SIGNAL_CARD_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -362,6 +371,16 @@ def describe_api_failure(status_code: int, snippet: str, request_kind: str, tran
     return f"HTTP {status_code} from {request_kind} API ({transport_name}): {snippet}"
 
 
+def provider_request_error(status_code: int, snippet: str, request_kind: str, transport_name: str) -> ProviderRequestError:
+    return ProviderRequestError(
+        describe_api_failure(status_code, snippet, request_kind, transport_name),
+        status_code=status_code,
+        retryable=is_retryable_provider_status(status_code),
+        request_kind=request_kind,
+        transport_name=transport_name,
+    )
+
+
 def call_responses_text(
     config: dict,
     payload: dict,
@@ -392,7 +411,7 @@ def call_responses_text(
                     stream=True,
                 ) as response:
                     if response.status_code >= 400:
-                        raise RuntimeError(describe_api_failure(response.status_code, response.text[:800], request_kind, transport_name))
+                        raise provider_request_error(response.status_code, response.text[:800], request_kind, transport_name)
                     parsed = consume_sse_response(response)
                     events = parsed.get("events", [])
                     delta_parts = [parsed.get("output_text", "")]
@@ -460,6 +479,8 @@ def call_responses_text(
                             "use_env_proxy": use_env_proxy,
                         },
                     )
+                if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                    raise
             finally:
                 session.close()
         if attempt == max_attempts:
@@ -656,6 +677,7 @@ def call_json_agent(
     temperature: float | None = None,
     fallback_defaults: dict | None = None,
     timeout: tuple[int, int] = (30, 240),
+    model: str | None = None,
 ) -> dict:
     config = load_llm_config(agent_home)
     provider = config["model_providers"][config["model_provider"]]
@@ -663,7 +685,7 @@ def call_json_agent(
     endpoint = responses_endpoint(provider)
     effective_schema = schema or GENERIC_AGENT_SCHEMA
     payload = {
-        "model": config["model"],
+        "model": model or config["model"],
         "stream": True,
         "store": False,
         "reasoning": {"effort": reasoning_effort or config.get("model_reasoning_effort", "high")},
@@ -702,7 +724,7 @@ def call_json_agent(
                 ) as response:
                     if response.status_code >= 400:
                         snippet = response.text[:800]
-                        raise RuntimeError(describe_api_failure(response.status_code, snippet, "agent", transport_name))
+                        raise provider_request_error(response.status_code, snippet, request_name, transport_name)
                     parsed = consume_sse_response(response)
                     events = parsed.get("events", [])
                     delta_parts = [parsed.get("output_text", "")]
@@ -831,6 +853,8 @@ def call_json_agent(
                         "use_env_proxy": use_env_proxy,
                     },
                 )
+                if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                    raise
             finally:
                 session.close()
         if attempt == max_attempts:

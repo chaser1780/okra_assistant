@@ -1,5 +1,5 @@
 $script:rebuildRequested = $false
-$script:autoRebuildWhenChanged = $true
+$script:autoRebuildWhenChanged = $false
 foreach ($arg in $args) {
     if ($arg -eq '-Rebuild' -or $arg -eq '--rebuild') {
         $script:rebuildRequested = $true
@@ -330,16 +330,10 @@ try {
             $frontendExit = 1
         } elseif ($needsBuild -and $cargoCommand) {
             "Building OKRA Workbench..." | Tee-Object -FilePath $logPath
-            $buildProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'build') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendLogPath -RedirectStandardError $frontendErrPath -PassThru
-            $buildExit = Get-ProcessExitCode -Process $buildProcess
-            if ($buildExit -ne 0) {
-                $frontendExit = $buildExit
-            } else {
-                $cargoLogPath = Join-Path $logDir ("tauri_" + $timestamp + ".log")
-                $cargoErrPath = Join-Path $logDir ("tauri_" + $timestamp + ".err.log")
-                $tauriProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'tauri', '--', 'build', '--no-bundle') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $cargoLogPath -RedirectStandardError $cargoErrPath -PassThru
-                $frontendExit = Get-ProcessExitCode -Process $tauriProcess
-            }
+            $cargoLogPath = Join-Path $logDir ("tauri_" + $timestamp + ".log")
+            $cargoErrPath = Join-Path $logDir ("tauri_" + $timestamp + ".err.log")
+            $tauriProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @('run', 'tauri', '--', 'build', '--no-bundle') -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $cargoLogPath -RedirectStandardError $cargoErrPath -PassThru
+            $frontendExit = Get-ProcessExitCode -Process $tauriProcess
         } else {
             "Using existing OKRA Workbench executable: $workbenchExe" | Tee-Object -FilePath $logPath
             if (-not $script:autoRebuildWhenChanged) {
@@ -362,10 +356,10 @@ try {
                     $frontendExit = 0
                 }
             } elseif (Test-Path $workbenchExe) {
-                if ($desktopMode -eq 'local') {
-                    $apiProcess = Start-ManagedOkraApi
-                } else {
+                if ($desktopMode -eq 'remote') {
                     "Remote mode selected; local Python backend will not be started." | Tee-Object -FilePath $logPath -Append
+                } else {
+                    "Local mode selected; Tauri will start and manage the Python backend." | Tee-Object -FilePath $logPath -Append
                 }
                 $appProcess = Start-Process -FilePath $workbenchExe -WorkingDirectory $agentHome -PassThru
                 Wait-Process -Id $appProcess.Id

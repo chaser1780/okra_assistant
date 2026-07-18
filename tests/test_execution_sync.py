@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 import execution_sync as execution_sync_module
-from execution_sync import apply_reconciliation, apply_saved_reconciliation, apply_settled_trade_to_portfolio, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, update_pending_confirmations
+from execution_sync import apply_reconciliation, apply_saved_reconciliation, apply_settled_trade_to_portfolio, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, register_reconciliation_fund, update_pending_confirmations
 from common import lock_path, project_path
 from helpers import TempAgentHome
 from long_memory_store import build_fund_memory
@@ -253,6 +253,17 @@ class ExecutionSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply_reconciliation(self.agent.root, preview, drop_missing=False)
 
+    def test_reconciliation_apply_rejects_unregistered_new_fund_code(self):
+        preview = preview_reconciliation(
+            self.agent.root,
+            [{"fund_code": "012348", "fund_name": "New Fund", "current_value": 500}],
+            snapshot_date="2026-05-05",
+            source="manual_position_snapshot",
+        )
+
+        with self.assertRaisesRegex(ValueError, "confirmed and registered"):
+            apply_reconciliation(self.agent.root, preview, drop_missing=False)
+
     def test_reconciliation_replace_zeros_missing_holdings(self):
         preview = preview_reconciliation(
             self.agent.root,
@@ -327,6 +338,115 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(result["transport_name"], "direct")
         self.assertTrue(result["apply_ready"])
         self.assertEqual(result["matched_items"][0]["matched_fund_code"], "025857")
+        self.assertRegex(result["portfolio_state_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(result["preview_sha256"], r"^[0-9a-f]{64}$")
+
+        applied = apply_saved_reconciliation(
+            self.agent.root,
+            result["reconcile_id"],
+            preview_sha256=result["preview_sha256"],
+            expected_portfolio_state_sha256=result["portfolio_state_sha256"],
+        )
+        self.assertTrue(applied["ok"])
+
+    def test_confirmed_new_fund_is_registered_before_position_apply(self):
+        extracted = {
+            "items": [
+                {
+                    "display_name": "电网设备C",
+                    "current_value": 1200,
+                    "daily_pnl": 1,
+                    "holding_pnl": 200,
+                    "holding_return_pct": 20,
+                    "page_index": 1,
+                    "row_index": 1,
+                },
+                {
+                    "display_name": "天弘恒生科技ETF联接(QDII)A",
+                    "current_value": 500,
+                    "daily_pnl": -2,
+                    "holding_pnl": -50,
+                    "holding_return_pct": -9.09,
+                    "page_index": 1,
+                    "row_index": 2,
+                },
+            ],
+            "warnings": [],
+            "_transport_name": "direct",
+        }
+        with patch("sync_portfolio_from_screenshots.call_screenshot_vision", return_value=extracted):
+            preview = parse_alipay_screenshot_upload(
+                self.agent.root,
+                {
+                    "import_id": "alipay_with_new_fund",
+                    "snapshot_date": "2026-05-05",
+                    "files": [{"name": "page1.jpg", "data": base64.b64encode(b"not-an-image").decode("ascii")}],
+                },
+            )
+        self.assertFalse(preview["apply_ready"])
+        self.assertEqual(len(preview["unmatched_detected"]), 1)
+
+        candidate = {
+            "fund_code": "012348",
+            "fund_name": "天弘恒生科技ETF联接A",
+            "fund_type": "指数型-海外股票",
+            "category": "etf_linked",
+            "risk_level": "high",
+            "company_name": "天弘基金",
+            "manager_name": "胡超",
+            "latest_nav": 0.6466,
+            "nav_date": "2026-05-05",
+            "aliases": ["天弘恒生科技指数(QDII)A"],
+            "source_url": "https://fundf10.eastmoney.com/jbgk_012348.html",
+            "search_source_url": "https://fundsuggest.eastmoney.com/?key=012348",
+        }
+        profile = {
+            "fund_code": "012348",
+            "fund_name": candidate["fund_name"],
+            "benchmark": "恒生科技指数收益率*95%",
+            "category": "etf_linked",
+            "risk_level": "high",
+            "status": "ok",
+        }
+        with patch("fund_registry.lookup_fund_by_code", return_value=candidate), patch("fund_registry.fetch_one_profile", return_value=profile):
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                register_reconciliation_fund(
+                    self.agent.root,
+                    preview["reconcile_id"],
+                    expected_preview_sha256="0" * 64,
+                    display_name="天弘恒生科技ETF联接(QDII)A",
+                    fund_code="012348",
+                )
+            resolved = register_reconciliation_fund(
+                self.agent.root,
+                preview["reconcile_id"],
+                expected_preview_sha256=preview["preview_sha256"],
+                display_name="天弘恒生科技ETF联接(QDII)A",
+                fund_code="012348",
+            )
+
+        self.assertTrue(resolved["apply_ready"])
+        self.assertNotEqual(resolved["reconcile_id"], preview["reconcile_id"])
+        self.assertFalse(resolved["unmatched_detected"])
+        definition = json.loads((self.agent.root / "config/portfolio_definition.json").read_text(encoding="utf-8"))
+        registered = next(item for item in definition["funds"] if item["fund_code"] == "012348")
+        self.assertFalse(registered["allow_trade"])
+        self.assertEqual(registered["classification_status"], "pending_review")
+        self.assertEqual(registered["benchmark"], "恒生科技指数收益率*95%")
+        watchlist = json.loads((self.agent.root / "config/watchlist.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(item["code"] == "012348" for item in watchlist["funds"]))
+
+        applied = apply_saved_reconciliation(
+            self.agent.root,
+            resolved["reconcile_id"],
+            preview_sha256=resolved["preview_sha256"],
+            expected_portfolio_state_sha256=resolved["portfolio_state_sha256"],
+        )
+        self.assertIn("012348", applied["added_fund_codes"])
+        portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        new_fund = next(item for item in portfolio["funds"] if item["fund_code"] == "012348")
+        self.assertEqual(new_fund["current_value"], 500.0)
+        self.assertFalse(new_fund["allow_trade"])
 
     def test_alipay_screenshot_upload_rejects_unsafe_import_id(self):
         with self.assertRaisesRegex(ValueError, "import_id"):

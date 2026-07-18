@@ -240,6 +240,18 @@ class ExecutionReconcileApplyRequestDto(MutationRequestModel):
     confirmReplace: str | None = None
 
 
+class ExecutionFundLookupRequestDto(MutationRequestModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ExecutionFundRegisterRequestDto(MutationRequestModel):
+    reconcileId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
+    expectedPreviewSha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    displayName: str = Field(min_length=1, max_length=120)
+    fundCode: str = Field(pattern=r"^\d{6}$")
+    userConfirmed: Literal[True]
+
+
 class RunTaskRequestDto(MutationRequestModel):
     date: str | None = None
     runDate: str | None = None

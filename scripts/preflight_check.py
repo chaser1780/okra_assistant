@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import requests
+import sys
 from datetime import time
 from pathlib import Path
 
@@ -96,7 +98,11 @@ def check_basic_layout(agent_home: Path, result: dict, scope: str) -> None:
         else:
             _add_check(result, "python_config", "warning", f"project.toml 中配置了 Python，但路径不存在：{configured_python}")
     else:
-        _add_check(result, "python_config", "warning", "project.toml 未配置 python_executable，将依赖启动脚本自动发现。")
+        discovered_python = Path(str(os.environ.get("OKRA_PYTHON_EXE", "") or sys.executable))
+        if discovered_python.exists():
+            _add_check(result, "python_config", "ok", f"Python 已由启动链自动发现：{discovered_python}")
+        else:
+            _add_check(result, "python_config", "warning", "project.toml 未配置 python_executable，且未找到可用的自动发现路径。")
 
     for name in ("temp", "cache", "logs"):
         directory = agent_home / name
@@ -210,6 +216,8 @@ def probe_llm_model(agent_home: Path, config: dict) -> dict:
                         }
                     )
                     last_errors.append(f"{transport_name}: HTTP {response.status_code}{' retryable' if retryable else ''}: {detail}")
+                    if not retryable:
+                        break
                     continue
                 parsed_payload = consume_sse_response(response)
                 attempts.append(
@@ -307,8 +315,8 @@ def check_llm(agent_home: Path, result: dict, probe_network: bool) -> None:
     status = probe["status"]
     detail = probe["detail"]
     if probe["status"] == "error":
-        status = "warning"
-        detail = probe["detail"] + " | 将在运行时降级为 mock/degraded outputs。"
+        status = "error"
+        detail = probe["detail"] + " | 正式建议链已阻断；修复模型配置或网络后重试，也可显式使用 --llm-mock 运行非正式测试。"
     _add_check(
         result,
         "llm:probe",

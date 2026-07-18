@@ -39,6 +39,7 @@ from fetch_fund_news import (
     within_lookback,
 )
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
+from multiagent_utils import ProviderRequestError
 
 from helpers import TempAgentHome
 
@@ -67,6 +68,28 @@ def _web_search_response_item() -> dict:
 
 
 class SentimentNewsProviderTests(unittest.TestCase):
+    def test_news_classifier_opens_circuit_after_non_retryable_provider_failure(self):
+        from unittest.mock import patch
+
+        items = [{"title": f"item-{index}", "summary": "summary"} for index in range(5)]
+        settings = {"providers": {"news_classification": {"enabled": True, "batch_size": 2}}}
+        failure = ProviderRequestError(
+            "model_not_found",
+            status_code=404,
+            retryable=False,
+            request_kind="news_batch_classifier",
+            transport_name="direct",
+        )
+
+        with patch("fetch_fund_news.call_json_agent", side_effect=failure) as mocked_call:
+            classified, summary = classify_news_with_llm(Path.cwd(), settings, items)
+
+        self.assertEqual(mocked_call.call_count, 1)
+        self.assertEqual(len(classified), len(items))
+        self.assertEqual(summary["fallback_batches"], 3)
+        self.assertTrue(summary["circuit_open"])
+        self.assertIn("model_not_found", summary["error"])
+
     def test_news_time_classification_enforces_closed_report_window(self):
         report_date = "2026-07-10"
 

@@ -354,6 +354,117 @@ export const executionSyncSchema = z.object({
   }).passthrough()
 }).passthrough();
 
+const screenshotPreviewRowSchema = z.object({
+  display_name: z.string().catch(""),
+  fund_code: z.string().catch(""),
+  fund_name: z.string().catch(""),
+  matched_fund_code: z.string().catch(""),
+  matched_fund_name: z.string().catch(""),
+  current_value: financialNumberSchema,
+  holding_pnl: financialNumberSchema,
+  holding_return_pct: financialNumberSchema,
+  page_index: financialNumberSchema,
+  row_index: financialNumberSchema
+}).passthrough();
+
+const fundSourceLinkSchema = z.object({
+  label: z.string().catch("来源"),
+  url: z.string().catch("")
+}).passthrough();
+
+function firstCandidateText(source: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== null && value !== undefined && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function normalizeSourceLinks(source: Record<string, unknown>) {
+  const links: Array<{ label: string; url: string }> = [];
+  const add = (label: string, url: unknown) => {
+    const normalizedUrl = String(url ?? "").trim();
+    if (normalizedUrl && !links.some((item) => item.url === normalizedUrl)) links.push({ label, url: normalizedUrl });
+  };
+  if (Array.isArray(source.source_links)) {
+    source.source_links.forEach((item, index) => {
+      if (typeof item === "string") add(`来源 ${index + 1}`, item);
+      else if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        add(firstCandidateText(record, ["label", "name", "source_name"]) || `来源 ${index + 1}`, record.url ?? record.source_url);
+      }
+    });
+  }
+  add(firstCandidateText(source, ["source_name"]) || "基金详情", source.source_url ?? source.url);
+  add("搜索来源", source.search_source_url);
+  return links;
+}
+
+export const fundLookupCandidateSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  return {
+    ...source,
+    fund_code: firstCandidateText(source, ["fund_code", "code"]),
+    fund_name: firstCandidateText(source, ["fund_name", "official_name", "name"]),
+    fund_type: firstCandidateText(source, ["fund_type", "type", "category"]),
+    company_name: firstCandidateText(source, ["company_name", "fund_company", "company", "management_company"]),
+    manager_name: firstCandidateText(source, ["manager_name", "fund_manager", "manager"]),
+    latest_nav: source.latest_nav ?? source.nav ?? null,
+    nav_date: firstCandidateText(source, ["nav_date", "latest_nav_date"]),
+    source_name: firstCandidateText(source, ["source_name"]),
+    source_url: firstCandidateText(source, ["source_url", "url"]),
+    search_source_url: firstCandidateText(source, ["search_source_url"]),
+    source_links: normalizeSourceLinks(source),
+    match_score: source.match_score ?? null
+  };
+}, z.object({
+  fund_code: z.string(),
+  fund_name: z.string(),
+  fund_type: z.string(),
+  company_name: z.string(),
+  manager_name: z.string(),
+  latest_nav: z.union([z.number(), z.string()]).nullable(),
+  nav_date: z.string(),
+  source_name: z.string(),
+  source_url: z.string(),
+  search_source_url: z.string(),
+  source_links: z.array(fundSourceLinkSchema),
+  match_score: financialNumberSchema
+}).passthrough());
+
+export const fundLookupResponseSchema = z.object({
+  query: z.string().catch(""),
+  candidates: z.array(fundLookupCandidateSchema).catch([]),
+  warnings: z.array(z.string()).catch([])
+}).passthrough();
+
+export const screenshotPreviewSchema = z.object({
+  reconcile_id: z.string().catch(""),
+  import_id: z.string().catch(""),
+  provider: z.string().catch(""),
+  generated_at: z.string().catch(""),
+  sync_date: z.string().catch(""),
+  source: z.string().catch(""),
+  platform: z.string().catch(""),
+  snapshot_date: z.string().catch(""),
+  detected_holdings: z.array(screenshotPreviewRowSchema).catch([]),
+  matched_items: z.array(screenshotPreviewRowSchema).catch([]),
+  new_items: z.array(screenshotPreviewRowSchema).catch([]),
+  unmatched_detected: z.array(screenshotPreviewRowSchema).catch([]),
+  new_fund_candidates: z.array(screenshotPreviewRowSchema).catch([]),
+  missing_items: z.array(screenshotPreviewRowSchema).catch([]),
+  missing_portfolio_funds: z.array(screenshotPreviewRowSchema).catch([]),
+  apply_ready: z.boolean().catch(false),
+  preview_sha256: z.string().catch(""),
+  portfolio_state_sha256: z.string().catch(""),
+  warnings: z.array(z.string()).catch([]),
+  vision_warnings: z.array(z.string()).catch([]),
+  auto_parse_attempted: z.boolean().catch(false),
+  auto_parse_ok: z.boolean().catch(false),
+  auto_parse_error: z.string().catch("")
+}).passthrough();
+
 export const shellPayloadSchema = z.object({
   selectedDate: z.string(),
   dates: z.array(z.string()),

@@ -18,7 +18,9 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from action_ticket_models import ActionTicket, ActionTicketArtifact, ActionTicketValidationError, GuardrailResult
 from artifact_boundary import BoundaryViolation, assert_refactor_write_allowed
-from build_action_ticket_shadow import MissingPortfolioStateError, action_ticket_path, build_action_ticket_artifact, run_builder
+from action_debate_graph import build_evidence_view
+from build_action_ticket_shadow import MissingPortfolioStateError, action_ticket_path, build_action_ticket_artifact, load_portfolio_state_for_report, run_builder
+from build_layered_retrieval_pack import derived_signals_from_context, missing_data_for_pack
 from helpers import TempAgentHome
 
 
@@ -28,6 +30,76 @@ def _sha256(path: Path) -> str:
 
 def _load_repo_json(relative: str) -> dict:
     return json.loads((PROJECT_ROOT / relative).read_text(encoding="utf-8"))
+
+
+class StaleEvidenceGateTests(unittest.TestCase):
+    def test_stale_estimate_is_risk_context_not_directional_support(self) -> None:
+        ticket = {"ticket_id": "ticket:1", "fund_code": "F1", "generated_at": GENERATED_AT}
+        context = {
+            "generated_at": GENERATED_AT,
+            "funds": [
+                {
+                    "fund_code": "F1",
+                    "estimated_nav": {
+                        "estimate_change_pct": 4.2,
+                        "estimate_date": "2026-05-21",
+                        "stale": True,
+                    },
+                    "quote": {
+                        "day_change_pct": 0.8,
+                        "as_of_date": REPORT_DATE,
+                        "stale": False,
+                    },
+                }
+            ],
+        }
+
+        signals = derived_signals_from_context(ticket, context, REPORT_DATE)
+        missing = missing_data_for_pack(ticket, None, context, REPORT_DATE)
+
+        self.assertEqual(["quote"], [item.value["signal_type"] for item in signals])
+        self.assertIn("estimated_nav_direction_signal", [item.field for item in missing])
+
+    def test_debate_view_defensively_excludes_non_present_signal(self) -> None:
+        view = build_evidence_view(
+            {
+                "target": {"fund_code": "F1", "ticket_id": "ticket:1", "action_verb": "add"},
+                "derived_signals": [
+                    {
+                        "item_id": "signal:F1:estimated_nav",
+                        "status": "stale",
+                        "summary": "stale positive estimate",
+                    }
+                ],
+            },
+            {"ticket_id": "ticket:1", "fund_code": "F1"},
+        )
+
+        self.assertEqual(0, view["counts"]["derived_signal_count"])
+        self.assertEqual(1, view["counts"]["missing_data_count"])
+        self.assertNotIn("stale positive estimate", view["primary_support"])
+
+    def test_fresh_estimate_is_not_rejected_for_delayed_official_nav(self) -> None:
+        ticket = {"ticket_id": "ticket:1", "fund_code": "F1", "generated_at": GENERATED_AT}
+        context = {
+            "generated_at": GENERATED_AT,
+            "funds": [
+                {
+                    "fund_code": "F1",
+                    "estimated_nav": {
+                        "estimate_change_pct": 1.2,
+                        "estimate_date": REPORT_DATE,
+                        "estimate_freshness_status": "same_day",
+                        "official_nav_freshness_status": "delayed",
+                        "stale": False,
+                    },
+                }
+            ],
+        }
+
+        signals = derived_signals_from_context(ticket, context, REPORT_DATE)
+
+        self.assertEqual(["estimated_nav"], [item.value["signal_type"] for item in signals])
 
 
 class ActionTicketModelTests(unittest.TestCase):
@@ -217,6 +289,34 @@ class ActionTicketBuilderTests(unittest.TestCase):
         self.assertIn("portfolio_state snapshot missing", message)
         self.assertIn(f"db\\portfolio_state\\snapshots\\{REPORT_DATE}.json", message)
         self.assertIn("current.as_of_date=2026-05-27", message)
+
+    def test_native_intraday_can_use_previous_business_day_current_state(self) -> None:
+        current_path = self.agent.write_json(
+            "db/portfolio_state/current.json",
+            {"portfolio_name": "test", "as_of_date": "2026-05-21", "funds": [{"fund_code": "F1"}]},
+        )
+
+        selected_path, payload = load_portfolio_state_for_report(
+            self.agent.root,
+            "2026-05-22",
+            allow_prior_current=True,
+        )
+
+        self.assertEqual(selected_path, current_path)
+        self.assertEqual(payload["as_of_date"], "2026-05-21")
+
+    def test_native_intraday_rejects_current_state_older_than_one_business_day(self) -> None:
+        self.agent.write_json(
+            "db/portfolio_state/current.json",
+            {"portfolio_name": "test", "as_of_date": "2026-05-19", "funds": [{"fund_code": "F1"}]},
+        )
+
+        with self.assertRaises(MissingPortfolioStateError):
+            load_portfolio_state_for_report(
+                self.agent.root,
+                "2026-05-22",
+                allow_prior_current=True,
+            )
 
     def test_boundary_rejects_action_ticket_payload_on_official_path(self) -> None:
         self.copy_real_slice_inputs()

@@ -8,7 +8,7 @@ from typing import Any
 
 from action_ticket_models import ActionTicket, ActionTicketArtifact, EvidenceRef, GuardrailResult, SoftPolicyAdjustment
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
-from common import dump_json, load_json, load_strategy, resolve_agent_home, resolve_date, score_path, timestamp_now, validated_advice_path
+from common import business_day_gap, dump_json, load_json, load_strategy, resolve_agent_home, resolve_date, score_path, timestamp_now, validated_advice_path
 from build_layered_seed import build_native_action_seeds
 
 
@@ -47,7 +47,13 @@ def select_portfolio_state_path(agent_home: Path, report_date: str) -> Path:
     return snapshot_path
 
 
-def load_portfolio_state_for_report(agent_home: Path, report_date: str) -> tuple[Path, dict[str, Any]]:
+def load_portfolio_state_for_report(
+    agent_home: Path,
+    report_date: str,
+    *,
+    allow_prior_current: bool = False,
+    max_prior_business_days: int = 1,
+) -> tuple[Path, dict[str, Any]]:
     snapshot_path = portfolio_state_snapshot_path(agent_home, report_date)
     if snapshot_path.exists():
         return snapshot_path, load_json(snapshot_path)
@@ -56,6 +62,9 @@ def load_portfolio_state_for_report(agent_home: Path, report_date: str) -> tuple
     current = load_json_if_exists(current_path)
     current_as_of = portfolio_as_of_date(current) if current else ""
     if current and current_as_of == report_date:
+        return current_path, current
+    gap = business_day_gap(current_as_of, report_date) if current_as_of else None
+    if allow_prior_current and current and gap is not None and 0 <= gap <= max_prior_business_days:
         return current_path, current
 
     raise MissingPortfolioStateError(
@@ -467,7 +476,11 @@ def build_action_ticket_artifact(
     validated_path = validated_advice_path(agent_home, report_date)
     if source_mode == "validated" and not validated_path.exists():
         raise FileNotFoundError(f"validated advice not found: {validated_path}")
-    portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+    portfolio_path, portfolio = load_portfolio_state_for_report(
+        agent_home,
+        report_date,
+        allow_prior_current=source_mode == "native",
+    )
     if source_mode == "native":
         seed_path, seed_payload = build_native_action_seeds(
             agent_home,
@@ -493,8 +506,16 @@ def build_action_ticket_artifact(
         generated_at = generated_at or str(validated.get("generated_at", "") or timestamp_now())
         actions, by_code = collect_legacy_actions(validated)
         committee_by_code = committee_decision_by_code(validated)
+    portfolio_state_date = portfolio_as_of_date(portfolio)
     root_sources = source_artifacts(agent_home, report_date, seed_path, portfolio_path, source_mode=source_mode)
-    positions = fund_lookup(portfolio)
+    for source in root_sources:
+        if source.get("kind") == "portfolio_state":
+            source["as_of_date"] = portfolio_state_date
+            source["carried_forward"] = bool(portfolio_state_date and portfolio_state_date != report_date)
+    positions = {
+        code: {**position, "as_of_date": str(position.get("as_of_date", "") or portfolio_state_date or report_date)}
+        for code, position in fund_lookup(portfolio).items()
+    }
     if all_funds:
         for fund in portfolio_funds(portfolio):
             code = str(fund.get("fund_code"))
@@ -549,6 +570,8 @@ def build_action_ticket_artifact(
             "non_executable_violation_count": 0,
             "official_advice_unchanged": True,
             "source_mode": source_mode,
+            "portfolio_state_as_of_date": portfolio_state_date,
+            "portfolio_state_carried_forward": bool(portfolio_state_date and portfolio_state_date != report_date),
         },
         tickets=tickets,
     )

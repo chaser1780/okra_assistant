@@ -41,6 +41,12 @@ def extract_float(pattern: str, text: str) -> float | None:
         return None
 
 
+def table_value(soup: BeautifulSoup, label: str) -> str | None:
+    header = soup.find("th", string=lambda value: normalize_text(value or "") == label)
+    cell = header.find_next_sibling("td") if header else None
+    return normalize_text(cell.get_text(" ", strip=True)) if cell else None
+
+
 def profile_age_years(inception_date: str | None, report_date: str) -> float | None:
     if not inception_date:
         return None
@@ -99,6 +105,8 @@ def parse_profile_html(html: str, fund_or_code, fund_name: str | None = None, re
     scale = extract_float(r"基金规模[:：]\s*([\d.]+)亿元", text)
     management_fee = extract_float(r"管理费率[:：]\s*([\d.]+)%", text)
     custody_fee = extract_float(r"托管费率[:：]\s*([\d.]+)%", text)
+    benchmark = str(fund.get("benchmark") or table_value(soup, "业绩比较基准") or "")
+    tracking_target = table_value(soup, "跟踪标的")
     fund_age = profile_age_years(inception_date, effective_report_date)
     category = fund.get("category", "unknown")
     return {
@@ -113,7 +121,8 @@ def parse_profile_html(html: str, fund_or_code, fund_name: str | None = None, re
         "management_fee_rate": management_fee,
         "custody_fee_rate": custody_fee,
         "category": category,
-        "benchmark": fund.get("benchmark", ""),
+        "benchmark": benchmark,
+        "tracking_target": tracking_target,
         "risk_level": fund.get("risk_level", ""),
         "manager_tenure_years": fund_age if fund_manager else None,
         "fund_scale_bucket": scale_bucket(scale),

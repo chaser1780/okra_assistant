@@ -302,6 +302,7 @@ def main() -> None:
     provider_attempts: list[dict] = []
     last_error = ""
     selected_provider = provider_config.name
+    max_stale_business_days = int(provider_config.raw.get("max_stale_business_days", 1) or 1)
 
     for provider in provider_chain:
         if provider == "fundgz_1234567":
@@ -320,6 +321,8 @@ def main() -> None:
             if ok_count > 0:
                 selected_provider = provider
                 payload = build_provider_payload(report_date, provider, "items", items, enabled=True)
+                if ok_count == len(items):
+                    break
                 continue
             last_error = "no_successful_estimates"
             continue
@@ -354,23 +357,31 @@ def main() -> None:
                         item_count=len(items),
                         ok_count=ok_count,
                         filled_count=filled_count,
-                        selected=filled_count > 0,
+                        selected=False,
                         fallback_kind="quote_nav_derived",
                     )
                 )
-                if filled_count > 0:
-                    payload["provider"] = provider
-                    selected_provider = provider
-                    break
+                break
             except Exception as exc:
                 last_error = str(exc)
                 provider_attempts.append(build_provider_attempt(provider, "error", detail=last_error))
             continue
 
         if provider == "stale_snapshot":
-            payload = stale_fallback_from_recent_snapshot(target_path, report_date, provider, "items", last_error or "fallback_requested")
             if payload is not None:
-                item_count = len(payload.get("items", []))
+                provider_attempts.append(build_provider_attempt(provider, "skipped", detail="live_or_partial_live_payload_retained"))
+                break
+            fallback_payload = stale_fallback_from_recent_snapshot(
+                target_path,
+                report_date,
+                provider,
+                "items",
+                last_error or "fallback_requested",
+                max_business_day_gap=max_stale_business_days,
+            )
+            if fallback_payload is not None:
+                payload = fallback_payload
+                item_count = len(fallback_payload.get("items", []))
                 provider_attempts.append(
                     build_provider_attempt(
                         provider,
@@ -390,7 +401,14 @@ def main() -> None:
         provider_attempts.append(build_provider_attempt(provider, "unsupported", detail=f"Unsupported estimate provider: {provider}"))
 
     if payload is None and provider_config.allow_stale_fallback:
-        payload = stale_fallback_from_recent_snapshot(target_path, report_date, "stale_snapshot_auto", "items", last_error or "all_providers_failed")
+        payload = stale_fallback_from_recent_snapshot(
+            target_path,
+            report_date,
+            "stale_snapshot_auto",
+            "items",
+            last_error or "all_providers_failed",
+            max_business_day_gap=max_stale_business_days,
+        )
         if payload is not None:
             item_count = len(payload.get("items", []))
             provider_attempts.append(

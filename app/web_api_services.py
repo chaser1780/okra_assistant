@@ -17,6 +17,7 @@ from execution_sync import (
     build_execution_sync_payload,
     parse_alipay_screenshot_upload,
     preview_reconciliation,
+    register_reconciliation_fund,
     record_actual_trade,
     record_conversion,
     update_pending_confirmations,
@@ -266,6 +267,25 @@ class ExecutionController:
 
     def execution_screenshot_parse(self, payload: dict[str, Any]) -> dict[str, Any]:
         return _to_jsonable(parse_alipay_screenshot_upload(self.home, payload))
+
+    def execution_fund_lookup(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from fund_registry import search_fund_candidates
+
+        return _to_jsonable(search_fund_candidates(str(payload.get("name") or "")))
+
+    def execution_fund_register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _reject_shadow_mutation_payload(payload, endpoint="execution fund register")
+        if payload.get("userConfirmed") is not True:
+            raise ValueError("userConfirmed=true is required")
+        return _to_jsonable(
+            register_reconciliation_fund(
+                self.home,
+                str(payload.get("reconcileId") or ""),
+                expected_preview_sha256=str(payload.get("expectedPreviewSha256") or ""),
+                display_name=str(payload.get("displayName") or ""),
+                fund_code=str(payload.get("fundCode") or ""),
+            )
+        )
 
     def execution_reconcile_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
         items = payload.get("items", []) or payload.get("positions", []) or []
@@ -628,6 +648,8 @@ class PageService:
             "runId": runtime.get("runId", ""),
             "pid": runtime.get("pid"),
             "status": runtime.get("status", ""),
+            "phase": runtime.get("phase", ""),
+            "reportDate": runtime.get("reportDate", ""),
             "startedAt": runtime.get("startedAt", ""),
             "endedAt": runtime.get("endedAt", ""),
             "heartbeatAt": runtime.get("heartbeatAt", runtime.get("startedAt", "")),
@@ -639,6 +661,12 @@ class PageService:
             "failedAgents": runtime.get("failedAgents", []),
             "degradedAgents": runtime.get("degradedAgents", []),
             "lastError": runtime.get("lastError", ""),
+            "failureType": runtime.get("failureType", ""),
+            "retryable": runtime.get("retryable"),
+            "degradationMode": runtime.get("degradationMode", ""),
+            "decisionMode": runtime.get("decisionMode", ""),
+            "executionEligible": runtime.get("executionEligible"),
+            "committeeReady": runtime.get("committeeReady"),
             "analysisQuality": runtime.get("analysisQuality"),
             "memoryEligible": runtime.get("memoryEligible"),
             "resultReady": runtime.get("resultReady", False),

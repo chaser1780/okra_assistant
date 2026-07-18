@@ -21,6 +21,7 @@ from common import (
     llm_advice_path,
     llm_raw_path,
     load_json,
+    load_llm_config,
     project_relative_path,
     resolve_agent_home,
     resolve_date,
@@ -32,6 +33,7 @@ from promoted_advice_guardrails import build_validated_payload
 
 
 PROMOTED_MODE = "action_debate_promoted"
+MOCK_MODE = "action_debate_mock"
 SCHEMA_VERSION = "promoted_advice_chain.v1"
 
 
@@ -49,17 +51,31 @@ def write_official_outputs(
     *,
     preview: dict[str, Any],
     generated_at: str,
+    is_mock: bool,
+    llm_model: str,
 ) -> dict[str, Path]:
-    advice = preview["final_advice_preview"]
-    committee_bundle = preview["committee_decision_bundle_preview"]
+    advice = dict(preview["final_advice_preview"])
+    committee_bundle = dict(preview["committee_decision_bundle_preview"])
+    mode = MOCK_MODE if is_mock else PROMOTED_MODE
+    decision_source = "action_debate_mock" if is_mock else "action_debate_promoted"
+    committee_bundle.update(
+        {
+            "decision_source": decision_source,
+            "is_mock": is_mock,
+            "llm_model": llm_model,
+            "execution_eligible": False if is_mock else bool(committee_bundle.get("execution_eligible", True)),
+        }
+    )
     raw_payload = {
-        "mode": PROMOTED_MODE,
-        "decision_source": "action_debate_promoted",
-        "narrative_mode": "action_debate_promoted",
+        "mode": mode,
+        "decision_source": decision_source,
+        "narrative_mode": mode,
         "generated_at": generated_at,
+        "is_mock": is_mock,
+        "llm_model": llm_model,
         "advice": advice,
         "committee": {
-            "decision_source": "action_debate_promoted",
+            "decision_source": decision_source,
             "committee_confidence": committee_bundle.get("committee_confidence", "promoted"),
             "risk_vetoes": committee_bundle.get("risk_vetoes", []),
         },
@@ -69,6 +85,9 @@ def write_official_outputs(
             "source_preview_artifact_id": preview.get("artifact_id", ""),
             "native_independent_of_legacy_validated_seed": True,
             "official_path_mutation_allowed": True,
+            "is_mock": is_mock,
+            "production_eligible": not is_mock,
+            "llm_model": llm_model,
         },
         "aggregate_all_agents_ok": True,
         "aggregate_degraded_ok": False,
@@ -107,6 +126,9 @@ def build_status_payload(
     preview: dict[str, Any],
     paths: dict[str, Path],
     replay_snapshot_capture: dict[str, Any],
+    debate_mode: str,
+    llm_model: str,
+    is_mock: bool,
 ) -> dict[str, Any]:
     validated = load_json(validated_advice_path(agent_home, report_date))
     preview_summary = preview.get("summary", {}) if isinstance(preview.get("summary"), dict) else {}
@@ -124,7 +146,12 @@ def build_status_payload(
         "artifact_kind": "promoted_advice_chain_run",
         "report_date": report_date,
         "generated_at": generated_at,
-        "mode": PROMOTED_MODE,
+        "status": "ok",
+        "mode": MOCK_MODE if is_mock else PROMOTED_MODE,
+        "debate_mode": debate_mode,
+        "llm_model": llm_model,
+        "is_mock": is_mock,
+        "production_eligible": not is_mock,
         "official_path_mutation_allowed": True,
         "native_independent_of_legacy_validated_seed": True,
         "source_preview_artifact_id": preview.get("artifact_id", ""),
@@ -143,6 +170,8 @@ def build_status_payload(
             "hold_action_count": len(validated.get("hold_actions", []) or []),
             "advice_mode": validated.get("advice_mode", ""),
             "decision_source": validated.get("decision_source", ""),
+            "execution_eligible": bool(validated.get("execution_eligible")),
+            "is_mock": bool(validated.get("advice_is_mock")),
         },
     }
 
@@ -156,6 +185,8 @@ def run_chain(
     debate_mode: str = "llm",
 ) -> tuple[Path, dict[str, Any]]:
     generated_at = generated_at or timestamp_now()
+    is_mock = debate_mode != "llm"
+    llm_model = str(load_llm_config(agent_home).get("model", "") or "")
     ensure_layout(agent_home)
     (agent_home / "db" / "action_seed").mkdir(parents=True, exist_ok=True)
     run_action_ticket_builder(agent_home, report_date, generated_at=generated_at, source_mode="native")
@@ -163,8 +194,21 @@ def run_chain(
     _debate_path, debate_artifact = run_debate_graph(agent_home, report_date, generated_at=generated_at, debate_mode=debate_mode)
     if debate_mode == "llm" and debate_artifact.get("summary", {}).get("status") != "ok":
         raise RuntimeError("promoted advice chain requires successful LLM debate graph before official outputs are written")
-    preview = build_preview_payload(agent_home, report_date, generated_at=generated_at)
-    paths = write_official_outputs(agent_home, report_date, preview=preview, generated_at=generated_at)
+    preview = build_preview_payload(
+        agent_home,
+        report_date,
+        generated_at=generated_at,
+        promoted_run=True,
+        is_mock=is_mock,
+    )
+    paths = write_official_outputs(
+        agent_home,
+        report_date,
+        preview=preview,
+        generated_at=generated_at,
+        is_mock=is_mock,
+        llm_model=llm_model,
+    )
     try:
         capture = capture_decision_snapshot(agent_home, report_date, generated_at)
         replay_snapshot_capture = {
@@ -191,6 +235,9 @@ def run_chain(
         preview=preview,
         paths=paths,
         replay_snapshot_capture=replay_snapshot_capture,
+        debate_mode=debate_mode,
+        llm_model=llm_model,
+        is_mock=is_mock,
     )
     path = dump_json(run_status_path(agent_home, report_date), status)
     return path, status

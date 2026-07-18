@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_daily_pipeline import add_business_days, due_review_jobs, run_rag_shadow, step_output_exists
+from run_daily_pipeline import add_business_days, due_review_jobs, run_rag_shadow, run_step, step_output_exists
 from run_realtime_monitor import should_sync_units
 from run_report_window import intraday_report_target
 from helpers import TempAgentHome
@@ -22,7 +22,22 @@ from web_api_services import TaskController
 
 
 class PipelineLogicTests(unittest.TestCase):
-    def _write_promoted_outputs(self, agent: TempAgentHome, report_date: str) -> Path:
+    def test_run_step_persists_child_stderr_on_failure(self):
+        agent = TempAgentHome()
+        try:
+            completed = __import__("subprocess").CompletedProcess(["python"], 1, stdout="partial output", stderr="root cause")
+            with patch("run_daily_pipeline.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(RuntimeError, "root cause"):
+                    run_step("failing_step.py", agent.root, "2026-07-18", False)
+
+            error_path = agent.root / "db" / "daily_workspace" / "2026-07-18" / "step_errors" / "failing_step.json"
+            payload = json.loads(error_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["returncode"], 1)
+            self.assertEqual(payload["stderr"], "root cause")
+        finally:
+            agent.cleanup()
+
+    def _write_promoted_outputs(self, agent: TempAgentHome, report_date: str, *, is_mock: bool = False, model: str = "gpt-5.5") -> Path:
         for relative in (
             f"db/daily_scores/{report_date}.json",
             "db/portfolio_state/current.json",
@@ -38,7 +53,18 @@ class PipelineLogicTests(unittest.TestCase):
             f"db/validated_advice/{report_date}.json",
         ):
             agent.write_json(relative, {"report_date": report_date})
-        return agent.write_json(f"db/phase8/promoted_runs/{report_date}.json", {"status": True})
+        return agent.write_json(
+            f"db/phase8/promoted_runs/{report_date}.json",
+            {
+                "status": "ok",
+                "report_date": report_date,
+                "debate_mode": "deterministic" if is_mock else "llm",
+                "llm_model": model,
+                "is_mock": is_mock,
+                "production_eligible": not is_mock,
+                "summary": {"promoted_run_passed": True},
+            },
+        )
 
     def _make_promoted_outputs_newer_than_inputs(self, agent: TempAgentHome, report_date: str, future: float) -> None:
         for relative in (
@@ -48,6 +74,7 @@ class PipelineLogicTests(unittest.TestCase):
             "config/portfolio.json",
             "db/long_memory/exports/all_memory.json",
             "config/strategy.toml",
+            "config/llm.toml",
         ):
             os.utime(agent.root / relative, (future - 10, future - 10))
         for relative in (
@@ -147,7 +174,37 @@ class PipelineLogicTests(unittest.TestCase):
 
             self.assertTrue(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
             guardrail_source = Path(__file__).resolve().parents[1] / "scripts" / "promoted_advice_guardrails.py"
-            os.utime(guardrail_source, (future + 10, future + 10))
+            original_times = (guardrail_source.stat().st_atime, guardrail_source.stat().st_mtime)
+            try:
+                os.utime(guardrail_source, (future + 10, future + 10))
+                self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
+            finally:
+                os.utime(guardrail_source, original_times)
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_separates_live_and_mock_promoted_runs(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            self._write_promoted_outputs(agent, report_date, is_mock=True)
+            future = self._fresh_promoted_output_timestamp(agent, report_date)
+            self._make_promoted_outputs_newer_than_inputs(agent, report_date, future)
+
+            self.assertTrue(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py", ["--llm-mock"]))
+            self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
+        finally:
+            agent.cleanup()
+
+    def test_resume_existing_rebuilds_promoted_chain_when_model_changes(self):
+        agent = TempAgentHome()
+        try:
+            report_date = "2026-03-11"
+            agent.write_json(f"db/llm_context/{report_date}.json", {"context": True})
+            self._write_promoted_outputs(agent, report_date, model="old-model")
+            future = self._fresh_promoted_output_timestamp(agent, report_date)
+            self._make_promoted_outputs_newer_than_inputs(agent, report_date, future)
 
             self.assertFalse(step_output_exists(agent.root, report_date, "run_promoted_advice_chain.py"))
         finally:

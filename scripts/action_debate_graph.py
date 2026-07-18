@@ -423,12 +423,23 @@ def proposed_patch_for(ticket: dict[str, Any], status: str, confidence_delta: fl
 def build_evidence_view(pack: dict[str, Any], ticket: dict[str, Any]) -> dict[str, Any]:
     target = pack.get("target", {}) or {}
     canonical = list(pack.get("canonical_facts", []) or [])
-    signals = list(pack.get("derived_signals", []) or [])
+    all_signals = list(pack.get("derived_signals", []) or [])
+    signals = [item for item in all_signals if str(item.get("status", "present") or "present") == "present"]
+    stale_signals = [item for item in all_signals if item not in signals]
     raw_refs = list(pack.get("raw_observation_refs", []) or [])
     long_text = list(pack.get("long_text_evidence", []) or [])
     anti = list(pack.get("anti_patterns", []) or [])
     adaptive = list(pack.get("adaptive_policies", []) or [])
     missing = list(pack.get("missing_data", []) or [])
+    missing.extend(
+        {
+            "field": f"derived_signal:{item.get('item_id', '')}",
+            "state": str(item.get("status", "stale") or "stale"),
+            "impact": "Excluded from directional support because the signal is not present/fresh.",
+            "blocks_debate": False,
+        }
+        for item in stale_signals
+    )
     return {
         "target": {
             "fund_code": str(target.get("fund_code", ticket.get("fund_code", "")) or ""),

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from common import actual_trade_dir, load_review_config, resolve_agent_home, resolve_date
+from common import actual_trade_dir, dump_json, load_json, load_llm_config, load_review_config, project_relative_path, resolve_agent_home, resolve_date, timestamp_now
 from common import (
     committee_advice_path,
     committee_decision_bundle_path,
@@ -58,7 +58,7 @@ class PipelineStep:
     def input_paths(self, agent_home: Path, report_date: str) -> list[Path]:
         return [builder(agent_home, report_date) for builder in self.inputs]
 
-    def is_fresh(self, agent_home: Path, report_date: str) -> bool:
+    def is_fresh(self, agent_home: Path, report_date: str, extra_args: list[str] | None = None) -> bool:
         if not self.can_resume:
             return False
         outputs = self.output_paths(agent_home, report_date)
@@ -86,6 +86,29 @@ def _config_path(name: str):
 
 def _project_path(*parts: str):
     return lambda agent_home, report_date: SCRIPT_DIR.parent.joinpath(*parts)
+
+
+def _promoted_run_status_path(agent_home: Path, report_date: str) -> Path:
+    return agent_home / "db" / "phase8" / "promoted_runs" / f"{report_date}.json"
+
+
+def _promoted_run_matches_request(agent_home: Path, report_date: str, extra_args: list[str] | None) -> bool:
+    status_path = _promoted_run_status_path(agent_home, report_date)
+    try:
+        status = load_json(status_path)
+        expected_mock = "--llm-mock" in (extra_args or [])
+        expected_model = str(load_llm_config(agent_home).get("model", "") or "")
+    except Exception:
+        return False
+    return bool(
+        status.get("status") == "ok"
+        and status.get("report_date") == report_date
+        and status.get("summary", {}).get("promoted_run_passed") is True
+        and status.get("is_mock") is expected_mock
+        and status.get("debate_mode") == ("deterministic" if expected_mock else "llm")
+        and status.get("llm_model") == expected_model
+        and status.get("production_eligible") is (not expected_mock)
+    )
 
 
 def _stable_digest(value) -> str:
@@ -176,7 +199,13 @@ STEP_OUTPUT_CHECKS = {
     ),
     "run_promoted_advice_chain.py": PipelineStep(
         "run_promoted_advice_chain.py",
-        outputs=(_dated_path(llm_advice_path), _dated_path(committee_advice_path), _dated_path(committee_decision_bundle_path), _dated_path(validated_advice_path)),
+        outputs=(
+            _dated_path(llm_advice_path),
+            _dated_path(committee_advice_path),
+            _dated_path(committee_decision_bundle_path),
+            _dated_path(validated_advice_path),
+            _promoted_run_status_path,
+        ),
         inputs=(
             _dated_path(llm_context_path),
             _dated_path(score_path),
@@ -184,6 +213,7 @@ STEP_OUTPUT_CHECKS = {
             _fixed_path(legacy_portfolio_path),
             _fixed_path(long_memory_export_path),
             _config_path("strategy.toml"),
+            _config_path("llm.toml"),
             _project_path("scripts", "run_promoted_advice_chain.py"),
             _project_path("scripts", "build_layered_seed.py"),
             _project_path("scripts", "build_action_ticket_shadow.py"),
@@ -221,7 +251,11 @@ STEP_OUTPUT_CHECKS = {
 
 def step_output_exists(agent_home: Path, report_date: str, script_name: str, extra_args: list[str] | None = None) -> bool:
     step = STEP_OUTPUT_CHECKS.get(script_name)
-    return bool(step and step.is_fresh(agent_home, report_date))
+    if not step or not step.is_fresh(agent_home, report_date, extra_args):
+        return False
+    if script_name == "run_promoted_advice_chain.py":
+        return _promoted_run_matches_request(agent_home, report_date, extra_args)
+    return True
 
 
 def run_step(
@@ -248,7 +282,37 @@ def run_step(
     if extra_args:
         command.extend(extra_args)
     try:
-        subprocess.run(command, check=True)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed.stdout:
+            print(completed.stdout.rstrip(), flush=True)
+        if completed.stderr:
+            print(completed.stderr.rstrip(), file=sys.stderr, flush=True)
+        if completed.returncode != 0:
+            error_payload = {
+                "report_date": report_date,
+                "generated_at": timestamp_now(),
+                "step_name": script_name,
+                "display_name": label,
+                "returncode": completed.returncode,
+                "command": command,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+            }
+            error_path = dump_json(
+                agent_home / "db" / "daily_workspace" / report_date / "step_errors" / f"{Path(script_name).stem}.json",
+                error_payload,
+            )
+            detail = (completed.stderr or completed.stdout or f"exit status {completed.returncode}").strip()
+            raise RuntimeError(
+                f"{script_name} failed with exit status {completed.returncode}: {detail[:4000]} "
+                f"[error_artifact={project_relative_path(agent_home, error_path)}]"
+            )
     except Exception as exc:
         elapsed = time.perf_counter() - started_at
         if record_step is not None:

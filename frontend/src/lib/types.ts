@@ -476,6 +476,8 @@ export type TodayAnalysisRuntimePayload = {
   runId?: string;
   pid?: number;
   status?: string;
+  phase?: string;
+  reportDate?: string;
   startedAt?: string;
   endedAt?: string;
   heartbeatAt?: string;
@@ -486,6 +488,12 @@ export type TodayAnalysisRuntimePayload = {
   resultReady?: boolean;
   resultRunId?: string;
   lastError?: string;
+  failureType?: string;
+  retryable?: boolean;
+  degradationMode?: string;
+  decisionMode?: string;
+  executionEligible?: boolean;
+  committeeReady?: boolean;
 };
 
 export type RagRuntimePayload = Record<string, unknown> & {
@@ -537,6 +545,73 @@ export type ExecutionSyncPayload = {
     deviations?: number;
     reports?: number;
   };
+};
+
+export type ScreenshotPreviewRow = Record<string, unknown> & {
+  display_name: string;
+  fund_code: string;
+  fund_name: string;
+  matched_fund_code: string;
+  matched_fund_name: string;
+  current_value: number | null;
+  holding_pnl: number | null;
+  holding_return_pct: number | null;
+  page_index: number | null;
+  row_index: number | null;
+};
+
+export type UnmatchedHolding = ScreenshotPreviewRow;
+
+export type FundSourceLink = {
+  label: string;
+  url: string;
+};
+
+export type FundLookupCandidate = Record<string, unknown> & {
+  fund_code: string;
+  fund_name: string;
+  fund_type: string;
+  company_name: string;
+  manager_name: string;
+  latest_nav: number | string | null;
+  nav_date: string;
+  source_name: string;
+  source_url: string;
+  search_source_url: string;
+  source_links: FundSourceLink[];
+  match_score: number | null;
+};
+
+export type FundLookupResponse = Record<string, unknown> & {
+  query: string;
+  candidates: FundLookupCandidate[];
+  warnings: string[];
+};
+
+export type ScreenshotPreview = Record<string, unknown> & {
+  reconcile_id: string;
+  import_id: string;
+  provider: string;
+  generated_at: string;
+  sync_date: string;
+  source: string;
+  platform: string;
+  snapshot_date: string;
+  detected_holdings: ScreenshotPreviewRow[];
+  matched_items: ScreenshotPreviewRow[];
+  new_items: ScreenshotPreviewRow[];
+  unmatched_detected: UnmatchedHolding[];
+  new_fund_candidates: ScreenshotPreviewRow[];
+  missing_items: ScreenshotPreviewRow[];
+  missing_portfolio_funds: ScreenshotPreviewRow[];
+  apply_ready: boolean;
+  preview_sha256: string;
+  portfolio_state_sha256: string;
+  warnings: string[];
+  vision_warnings: string[];
+  auto_parse_attempted: boolean;
+  auto_parse_ok: boolean;
+  auto_parse_error: string;
 };
 
 export type Snapshot = {

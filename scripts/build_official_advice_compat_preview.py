@@ -468,9 +468,10 @@ def preview_sections_as_validated_payload(
     committee_bundle: dict[str, Any],
     final_advice: dict[str, Any],
     section_preview: dict[str, list[dict[str, Any]]],
+    is_mock: bool = False,
 ) -> dict[str, Any]:
     try:
-        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date, allow_prior_current=True)
     except Exception:
         portfolio = {}
     fixed_dca_total = round(sum(safe_float(item.get("validated_amount")) for item in section_preview.get("dca_actions", []) or []), 2)
@@ -493,9 +494,9 @@ def preview_sections_as_validated_payload(
         "cross_fund_observations": final_advice.get("cross_fund_observations", []),
         "allocation_plan": validated.get("allocation_plan", {}),
         "strategy_bucket_summary": validated.get("strategy_bucket_summary", []),
-        "advice_mode": "action_debate_promoted_preview",
+        "advice_mode": "action_debate_mock" if is_mock else "action_debate_promoted_preview",
         "advice_is_fallback": False,
-        "advice_is_mock": False,
+        "advice_is_mock": is_mock,
         "decision_source": committee_bundle.get("decision_source", "action_debate_shadow_compat_preview"),
         "decision_mode": committee_bundle.get("decision_mode", "canonical"),
         "degradation_mode": committee_bundle.get("degradation_mode", "none"),
@@ -595,7 +596,7 @@ def validated_advice_is_comparable(candidate: dict[str, Any], official: dict[str
 
 def dry_run_official_validator(agent_home: Path, report_date: str, committee_bundle: dict[str, Any], final_advice: dict[str, Any], official: dict[str, Any]) -> dict[str, Any]:
     try:
-        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+        _portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date, allow_prior_current=True)
         candidate = build_validated_payload(
             agent_home,
             report_date,
@@ -662,7 +663,14 @@ def source_artifacts(agent_home: Path, paths: list[Path]) -> list[dict[str, Any]
     return artifacts
 
 
-def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: str | None = None) -> dict[str, Any]:
+def build_preview_payload(
+    agent_home: Path,
+    report_date: str,
+    *,
+    generated_at: str | None = None,
+    promoted_run: bool = False,
+    is_mock: bool = False,
+) -> dict[str, Any]:
     generated_at = generated_at or timestamp_now()
     ticket_file = action_ticket_path(agent_home, report_date)
     retrieval_file = retrieval_pack_path(agent_home, report_date)
@@ -685,6 +693,13 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
 
     pack_map = packs_by_ticket_id(retrieval_artifact)
     debate_map = debates_by_ticket_id(debate_artifact)
+    official_bundle = validated.get("committee_decision_bundle", {}) if isinstance(validated.get("committee_decision_bundle"), dict) else {}
+    if promoted_run:
+        root_decision_mode = "hold_only" if is_mock else "canonical"
+        root_execution_eligible = not is_mock
+    else:
+        root_decision_mode = str(official_bundle.get("decision_mode", "") or validated.get("decision_mode", "") or "adapter_shape_preview")
+        root_execution_eligible = bool(official_bundle.get("execution_eligible", validated.get("execution_eligible", False)))
     committee_decisions: list[dict[str, Any]] = []
     final_decisions: list[dict[str, Any]] = []
     validated_action_previews: list[dict[str, Any]] = []
@@ -695,14 +710,17 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         pack = pack_map.get(ticket_id, {})
         debate = debate_map.get(ticket_id, {})
         committee_decision = build_committee_decision(ticket, pack, debate, priority)
+        if is_mock:
+            committee_decision["execution_eligible"] = False
+            committee_decision["constraint_notes"] = stable_list(
+                list(committee_decision.get("constraint_notes", []) or []) + ["Mock debate output is never execution eligible."],
+                limit=16,
+            )
         final_decision = build_final_decision(committee_decision, ticket, pack, debate)
         committee_decisions.append(committee_decision)
         final_decisions.append(final_decision)
         validated_action_previews.append(build_validated_action_preview(ticket, final_decision))
 
-    official_bundle = validated.get("committee_decision_bundle", {}) if isinstance(validated.get("committee_decision_bundle"), dict) else {}
-    root_decision_mode = str(official_bundle.get("decision_mode", "") or validated.get("decision_mode", "") or "adapter_shape_preview")
-    root_execution_eligible = bool(official_bundle.get("execution_eligible", validated.get("execution_eligible", False)))
     committee_bundle_preview = {
         "schema_version": 1,
         "report_date": report_date,
@@ -711,6 +729,7 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         "decision_source": "action_debate_shadow_compat_preview",
         "degradation_mode": str(official_bundle.get("degradation_mode", "") or ("none" if debate_artifact.get("summary", {}).get("status") == "ok" else "shadow_degraded")),
         "execution_eligible": root_execution_eligible,
+        "is_mock": is_mock,
         "committee_confidence": "preview",
         "manager_order": ["action_ticket_shadow", "layered_retrieval_pack", "action_debate_shadow"],
         "fund_decisions": committee_decisions,
@@ -756,6 +775,7 @@ def build_preview_payload(agent_home: Path, report_date: str, *, generated_at: s
         committee_bundle=committee_bundle_preview,
         final_advice=final_advice_preview,
         section_preview=section_preview,
+        is_mock=is_mock,
     )
     adapter_dry_run_passed = bool(
         shape_compatible

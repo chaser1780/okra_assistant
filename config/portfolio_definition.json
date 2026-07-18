@@ -348,7 +348,70 @@
         "last_official_nav_date": "2026-03-10",
         "units_source": "derived_from_official_nav"
       }
+    },
+    {
+      "fund_code": "011608",
+      "fund_name": "易方达上证科创50联接A",
+      "role": "tactical",
+      "style_group": "unknown",
+      "category": "etf_linked",
+      "benchmark": "上证科创板50成份指数收益率*95%+活期存款利率(税后)*5%",
+      "risk_level": "high",
+      "allow_trade": false,
+      "classification_status": "pending_review",
+      "registry_source": "confirmed_screenshot_fund",
+      "profile_source_url": "https://fundf10.eastmoney.com/jbgk_011608.html",
+      "opening_state": {
+        "current_value": 0.0,
+        "holding_pnl": 0.0,
+        "holding_return_pct": 0.0,
+        "holding_units": 0.0,
+        "cost_basis_value": 0.0,
+        "units_source": "registered_before_position_apply"
+      }
+    },
+    {
+      "fund_code": "012920",
+      "fund_name": "易方达全球成长精选混合(QDII)人民币A",
+      "role": "tactical",
+      "style_group": "growth_rotation",
+      "category": "active_equity",
+      "benchmark": "MSCI全球指数(MSCI All Country World Index)收益率* 30%+中证港股通综合指数(人民币)收益率*25%+中证800指数收益率*30%+中债-总全价(总值)指数收益率*15%",
+      "risk_level": "high",
+      "allow_trade": false,
+      "classification_status": "pending_review",
+      "registry_source": "confirmed_screenshot_fund",
+      "profile_source_url": "https://fundf10.eastmoney.com/jbgk_012920.html",
+      "opening_state": {
+        "current_value": 0.0,
+        "holding_pnl": 0.0,
+        "holding_return_pct": 0.0,
+        "holding_units": 0.0,
+        "cost_basis_value": 0.0,
+        "units_source": "registered_before_position_apply"
+      }
+    },
+    {
+      "fund_code": "012348",
+      "fund_name": "天弘恒生科技ETF联接A",
+      "role": "tactical",
+      "style_group": "unknown",
+      "category": "etf_linked",
+      "benchmark": "恒生科技指数收益率(使用估值汇率折算)*95%+人民币活期存款收益率(税后)*5%",
+      "risk_level": "high",
+      "allow_trade": false,
+      "classification_status": "pending_review",
+      "registry_source": "confirmed_screenshot_fund",
+      "profile_source_url": "https://fundf10.eastmoney.com/jbgk_012348.html",
+      "opening_state": {
+        "current_value": 0.0,
+        "holding_pnl": 0.0,
+        "holding_return_pct": 0.0,
+        "holding_units": 0.0,
+        "cost_basis_value": 0.0,
+        "units_source": "registered_before_position_apply"
+      }
     }
   ],
-  "updated_at": "2026-04-16T15:08:17+08:00"
+  "updated_at": "2026-07-11T16:59:24+08:00"
 }

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from multiagent_utils import describe_api_failure, is_retryable_provider_status, responses_endpoint, responses_headers
+from multiagent_utils import ProviderRequestError, describe_api_failure, is_retryable_provider_status, provider_request_error, responses_endpoint, responses_headers
 
 
 class LlmResponsesTransportTests(unittest.TestCase):
@@ -25,6 +25,14 @@ class LlmResponsesTransportTests(unittest.TestCase):
     def test_502_is_retryable_provider_failure(self):
         self.assertTrue(is_retryable_provider_status(502))
         self.assertIn("Retryable HTTP 502", describe_api_failure(502, "bad gateway", "agent", "direct"))
+
+    def test_model_not_found_is_structured_non_retryable_failure(self):
+        error = provider_request_error(404, "model_not_found", "agent", "direct")
+
+        self.assertIsInstance(error, ProviderRequestError)
+        self.assertEqual(error.status_code, 404)
+        self.assertFalse(error.retryable)
+        self.assertEqual(error.transport_name, "direct")
 
 
 if __name__ == "__main__":

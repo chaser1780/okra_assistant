@@ -25,7 +25,7 @@ from common import (
     timestamp_now,
     validated_advice_path,
 )
-from portfolio_state import _save_portfolio_state_unlocked, portfolio_state_event_path, portfolio_state_hash, upsert_execution_status
+from portfolio_state import _save_portfolio_state_unlocked, ensure_portfolio_definition, portfolio_state_event_path, portfolio_state_hash, upsert_execution_status
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
 from update_portfolio_from_trade import apply_trade
 
@@ -52,6 +52,10 @@ def parsed_import_path(agent_home: Path, import_id: str) -> Path:
 
 def reconciliation_applied_path(agent_home: Path, reconcile_id: str) -> Path:
     return execution_sync_dir(agent_home) / "reconciliation_applied" / f"{reconcile_id}.json"
+
+
+def fund_registration_path(agent_home: Path, registration_id: str) -> Path:
+    return execution_sync_dir(agent_home) / "fund_registrations" / f"{registration_id}.json"
 
 
 def alipay_screenshot_dir(agent_home: Path) -> Path:
@@ -724,6 +728,13 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
         raise ValueError("Position preview contains unmatched holdings; add or classify them before applying.")
     portfolio = deepcopy(load_portfolio(agent_home))
     current_by_code = {str(item.get("fund_code", "")): item for item in portfolio.get("funds", []) or []}
+    try:
+        definition = ensure_portfolio_definition(agent_home)
+    except FileNotFoundError:
+        from sync_portfolio_from_screenshots import safe_portfolio_definition
+
+        definition = safe_portfolio_definition(agent_home, portfolio)
+    definition_by_code = {str(item.get("fund_code", "")): item for item in definition.get("funds", []) or []}
     snapshot_date = str(preview.get("snapshot_date") or preview.get("sync_date") or resolve_date())
     source = str(preview.get("source") or preview.get("provider") or "actual_position_sync")
     platform = str(preview.get("platform") or preview.get("provider") or "alipay")
@@ -740,13 +751,10 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
             continue
         fund = current_by_code.get(code)
         if not fund:
-            fund = {
-                "fund_code": code,
-                "fund_name": row.get("fund_name", code),
-                "role": "tactical",
-                "style_group": "unknown",
-                "allow_trade": True,
-            }
+            registered = definition_by_code.get(code)
+            if not registered:
+                raise ValueError(f"Fund {code} must be confirmed and registered before reconciliation apply")
+            fund = {key: deepcopy(value) for key, value in registered.items() if key != "opening_state"}
             portfolio.setdefault("funds", []).append(fund)
             current_by_code[code] = fund
             added_codes.append(code)
@@ -832,6 +840,108 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
     }
     dump_json(reconciliation_report_path(agent_home, snapshot_date), report)
     return report
+
+
+def register_reconciliation_fund(
+    agent_home: Path,
+    reconcile_id: str,
+    *,
+    expected_preview_sha256: str,
+    display_name: str,
+    fund_code: str,
+) -> dict[str, Any]:
+    if not IMPORT_ID_PATTERN.fullmatch(str(reconcile_id or "")):
+        raise ValueError("reconcile_id must contain only letters, numbers, underscores, or hyphens")
+    with file_lock(lock_path(agent_home, "fund_registry")):
+        preview_path = parsed_import_path(agent_home, reconcile_id)
+        if not preview_path.exists():
+            raise FileNotFoundError(f"Reconciliation preview not found: {reconcile_id}")
+        preview = load_json(preview_path)
+        stored_digest = str(preview.get("preview_sha256") or "")
+        if not expected_preview_sha256 or stored_digest != expected_preview_sha256 or stored_digest != reconciliation_preview_digest(preview):
+            raise ValueError("Reconciliation preview hash mismatch")
+        expected_state = str(preview.get("portfolio_state_sha256") or "")
+        if not expected_state or expected_state != portfolio_state_hash(load_portfolio(agent_home)):
+            raise ValueError("Portfolio state changed after reconciliation preview; generate a new preview")
+
+        unmatched = list(preview.get("unmatched_detected", []) or [])
+        selected = next((item for item in unmatched if str(item.get("display_name") or "").strip() == str(display_name or "").strip()), None)
+        if selected is None:
+            raise ValueError("The selected screenshot holding is no longer unmatched")
+
+        from fund_registry import fund_name_similarity, lookup_fund_by_code, register_fund_metadata
+        from sync_portfolio_from_screenshots import build_sync_preview
+
+        candidate = lookup_fund_by_code(fund_code)
+        if fund_name_similarity(display_name, candidate) < 0.72:
+            raise ValueError("The confirmed fund code does not sufficiently match the screenshot holding name")
+
+        registration_id = _new_id("fund_registration")
+        snapshot_date = str(preview.get("snapshot_date") or preview.get("sync_date") or resolve_date())
+        metadata = register_fund_metadata(
+            agent_home,
+            candidate=candidate,
+            display_name=display_name,
+            snapshot_date=snapshot_date,
+            registration_id=registration_id,
+        )
+        detected_items = list(preview.get("detected_holdings", []) or [])
+        rebuilt = build_sync_preview(
+            agent_home,
+            detected_items,
+            [Path(path) for path in preview.get("images", []) or []],
+            str(preview.get("provider") or "alipay"),
+            snapshot_date,
+        )
+        new_reconcile_id = _new_id("reconcile")
+        rebuilt.update(
+            {
+                "import_id": preview.get("import_id") or reconcile_id,
+                "reconcile_id": new_reconcile_id,
+                "parent_reconcile_id": reconcile_id,
+                "source": str(preview.get("source") or "alipay_screenshot"),
+                "platform": str(preview.get("platform") or "alipay"),
+                "snapshot_date": snapshot_date,
+                "saved_files": list(preview.get("saved_files", []) or []),
+                "vision_warnings": list(preview.get("vision_warnings", []) or []),
+                "transport_name": preview.get("transport_name", ""),
+                "auto_parse_attempted": bool(preview.get("auto_parse_attempted", True)),
+                "auto_parse_ok": bool(preview.get("auto_parse_ok", True)),
+                "auto_parse_error": str(preview.get("auto_parse_error") or ""),
+                "registered_funds": [
+                    *list(preview.get("registered_funds", []) or []),
+                    {
+                        "registration_id": registration_id,
+                        "display_name": display_name,
+                        "fund_code": candidate["fund_code"],
+                        "fund_name": candidate["fund_name"],
+                        "source_url": candidate.get("source_url", ""),
+                    },
+                ],
+            }
+        )
+        rebuilt["portfolio_state_sha256"] = portfolio_state_hash(load_portfolio(agent_home))
+        rebuilt["preview_sha256"] = reconciliation_preview_digest(rebuilt)
+        dump_json(parsed_import_path(agent_home, new_reconcile_id), rebuilt)
+        dump_json(
+            fund_registration_path(agent_home, registration_id),
+            {
+                "schema_version": "fund_registration.v1",
+                "registration_id": registration_id,
+                "registered_at": timestamp_now(),
+                "source_reconcile_id": reconcile_id,
+                "result_reconcile_id": new_reconcile_id,
+                "display_name": display_name,
+                "candidate": metadata["candidate"],
+                "profile": metadata["profile"],
+                "definition_path": metadata["definition_path"],
+                "watchlist_path": metadata["watchlist_path"],
+                "profile_path": metadata["profile_path"],
+                "user_confirmed": True,
+                "allow_trade": False,
+            },
+        )
+        return rebuilt
 
 
 def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -930,6 +1040,8 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
             recognized["auto_parse_attempted"] = True
             recognized["auto_parse_ok"] = True
             recognized["auto_parse_error"] = ""
+            recognized["portfolio_state_sha256"] = portfolio_state_hash(load_portfolio(agent_home))
+            recognized["preview_sha256"] = reconciliation_preview_digest(recognized)
             dump_json(parsed_import_path(agent_home, import_id), recognized)
             return recognized
         except Exception as exc:

@@ -4,6 +4,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +15,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from helpers import TempAgentHome  # noqa: E402
-from run_promoted_advice_chain import PROMOTED_MODE, run_chain  # noqa: E402
+from run_daily_pipeline import maybe_run_step, step_output_exists  # noqa: E402
+from run_promoted_advice_chain import MOCK_MODE, run_chain  # noqa: E402
 
 
 class PromotedAdviceChainTests(unittest.TestCase):
@@ -136,16 +138,40 @@ class PromotedAdviceChainTests(unittest.TestCase):
 
         self.assertTrue(status_path.exists())
         self.assertFalse((self.agent.root / "db" / "validated_advice" / "legacy_seed.json").exists())
-        self.assertEqual(PROMOTED_MODE, status["summary"]["advice_mode"])
+        self.assertEqual(MOCK_MODE, status["summary"]["advice_mode"])
+        self.assertEqual("ok", status["status"])
+        self.assertTrue(status["is_mock"])
+        self.assertFalse(status["production_eligible"])
+        self.assertEqual("deterministic", status["debate_mode"])
+        self.assertEqual("gpt-5.5", status["llm_model"])
         self.assertGreater(status["summary"]["validated_action_count"], 0)
         self.assertTrue((self.agent.root / "db" / "action_seed" / "2026-06-01.json").exists())
         raw = json.loads((self.agent.root / "db" / "llm_raw" / "2026-06-01.json").read_text(encoding="utf-8"))
-        self.assertEqual(PROMOTED_MODE, raw["mode"])
+        self.assertEqual(MOCK_MODE, raw["mode"])
+        self.assertTrue(raw["is_mock"])
+        self.assertFalse(raw["promoted_chain"]["production_eligible"])
         self.assertTrue(raw["promoted_chain"]["native_independent_of_legacy_validated_seed"])
         validated = json.loads((self.agent.root / "db" / "validated_advice" / "2026-06-01.json").read_text(encoding="utf-8"))
-        self.assertEqual(PROMOTED_MODE, validated["advice_mode"])
-        self.assertEqual("action_debate_promoted", validated["decision_source"])
-        self.assertTrue(validated["dca_actions"])
+        self.assertEqual(MOCK_MODE, validated["advice_mode"])
+        self.assertEqual("action_debate_mock", validated["decision_source"])
+        self.assertTrue(validated["advice_is_mock"])
+        self.assertFalse(validated["execution_eligible"])
+        self.assertFalse(validated["dca_actions"])
+        self.assertFalse(validated["tactical_actions"])
+        self.assertEqual(4, len(validated["hold_actions"]))
+        self.assertTrue(step_output_exists(self.agent.root, "2026-06-01", "run_promoted_advice_chain.py", ["--llm-mock"]))
+        self.assertFalse(step_output_exists(self.agent.root, "2026-06-01", "run_promoted_advice_chain.py"))
+        with patch("run_daily_pipeline.run_step") as run_step_mock:
+            elapsed = maybe_run_step(
+                "run_promoted_advice_chain.py",
+                self.agent.root,
+                "2026-06-01",
+                False,
+                extra_args=["--llm-mock"],
+                resume_existing=True,
+            )
+        self.assertEqual(0.0, elapsed)
+        run_step_mock.assert_not_called()
         self.assertTrue((self.agent.root / "db" / "decisions" / "2026-06-01.json").exists())
         capture = status["replay_snapshot_capture"]
         self.assertEqual("captured", capture["status"])
@@ -171,6 +197,29 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertEqual("FileNotFoundError", status["replay_snapshot_capture"]["error_type"])
         self.assertTrue((self.agent.root / "db" / "validated_advice" / "2026-06-01.json").exists())
         self.assertTrue((self.agent.root / "db" / "decisions" / "2026-06-01.json").exists())
+
+    def test_intraday_promoted_chain_accepts_previous_business_day_current_state(self) -> None:
+        self.write_inputs()
+        (self.agent.root / "db" / "portfolio_state" / "snapshots" / "2026-06-01.json").unlink()
+        current_path = self.agent.root / "db" / "portfolio_state" / "current.json"
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        current["as_of_date"] = "2026-05-29"
+        current_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        status_path, status = run_chain(
+            self.agent.root,
+            "2026-06-01",
+            generated_at="2026-06-01T14:30:00+08:00",
+            debate_mode="deterministic",
+        )
+
+        self.assertTrue(status_path.exists())
+        self.assertTrue(status["summary"]["promoted_run_passed"])
+        tickets = json.loads((self.agent.root / "db" / "action_tickets" / "2026-06-01.json").read_text(encoding="utf-8"))
+        self.assertTrue(tickets["summary"]["portfolio_state_carried_forward"])
+        self.assertEqual(tickets["summary"]["portfolio_state_as_of_date"], "2026-05-29")
+        portfolio_source = next(item for item in tickets["source_artifacts"] if item["kind"] == "portfolio_state")
+        self.assertEqual(portfolio_source["as_of_date"], "2026-05-29")
 
 
 if __name__ == "__main__":

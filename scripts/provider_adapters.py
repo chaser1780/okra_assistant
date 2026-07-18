@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from common import load_json, timestamp_now
+from common import business_day_gap, load_json, timestamp_now
 
 
 @dataclass
@@ -231,11 +231,11 @@ def summarize_provider_attempts(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def latest_dated_payload(target_path: Path, report_date: str) -> tuple[Path, dict[str, Any]] | None:
+def _dated_payload_candidates(target_path: Path, report_date: str) -> list[Path]:
     candidates: list[Path] = []
-    if target_path.exists():
-        candidates.append(target_path)
     for path in sorted(target_path.parent.glob("*.json"), reverse=True):
+        if path == target_path:
+            continue
         stem = path.stem[:10]
         if len(stem) != 10 or stem.count("-") != 2:
             continue
@@ -243,6 +243,11 @@ def latest_dated_payload(target_path: Path, report_date: str) -> tuple[Path, dic
             continue
         if path not in candidates:
             candidates.append(path)
+    return candidates
+
+
+def latest_dated_payload(target_path: Path, report_date: str) -> tuple[Path, dict[str, Any]] | None:
+    candidates = _dated_payload_candidates(target_path, report_date)
     for path in candidates:
         try:
             payload = load_json(path)
@@ -253,6 +258,37 @@ def latest_dated_payload(target_path: Path, report_date: str) -> tuple[Path, dic
     return None
 
 
+def _fallback_derived(payload: dict[str, Any]) -> bool:
+    metadata = payload.get("provider_metadata", {}) if isinstance(payload.get("provider_metadata"), dict) else {}
+    freshness = str(metadata.get("freshness_status", "") or "").lower()
+    provider = str(metadata.get("provider_name", payload.get("provider", "")) or "").lower()
+    return bool(
+        payload.get("fallback_kind")
+        or payload.get("fallback_reason")
+        or freshness in {"fallback", "stale", "missing"}
+        or provider.startswith("stale_snapshot")
+    )
+
+
+def _item_date(item: dict[str, Any]) -> str:
+    for key in ("estimate_date", "trade_date", "as_of_date", "as_of", "official_nav_date", "published_at"):
+        value = str(item.get(key, "") or "")[:10]
+        if len(value) == 10 and value.count("-") == 2:
+            return value
+    return ""
+
+
+def _snapshot_within_age(payload: dict[str, Any], items_key: str, report_date: str, max_business_day_gap: int | None) -> bool:
+    if max_business_day_gap is None:
+        return True
+    dates = [_item_date(item) for item in payload.get(items_key, []) or [] if isinstance(item, dict)]
+    dated = [value for value in dates if value]
+    if not dated:
+        return False
+    gaps = [business_day_gap(value, report_date) for value in dated]
+    return all(gap is not None and 0 <= gap <= max_business_day_gap for gap in gaps)
+
+
 def stale_fallback_from_recent_snapshot(
     target_path: Path,
     report_date: str,
@@ -261,18 +297,26 @@ def stale_fallback_from_recent_snapshot(
     reason: str,
     *,
     stale_field: str = "stale",
+    max_business_day_gap: int | None = None,
 ) -> dict[str, Any] | None:
-    snapshot = latest_dated_payload(target_path, report_date)
-    if snapshot is None:
-        return None
-    source_path, existing_payload = snapshot
-    payload = stale_fallback_payload(existing_payload, provider_name, items_key, reason, stale_field=stale_field)
-    payload["report_date"] = report_date
-    payload["source_report_date"] = str(existing_payload.get("report_date", source_path.stem[:10]) or source_path.stem[:10])
-    payload["fallback_source_date"] = source_path.stem[:10]
-    payload["fallback_source_path"] = str(source_path)
-    payload["fallback_reason"] = reason
-    return payload
+    for source_path in _dated_payload_candidates(target_path, report_date):
+        try:
+            existing_payload = load_json(source_path)
+        except Exception:
+            continue
+        if not isinstance(existing_payload, dict) or _fallback_derived(existing_payload):
+            continue
+        if not _snapshot_within_age(existing_payload, items_key, report_date, max_business_day_gap):
+            continue
+        payload = stale_fallback_payload(existing_payload, provider_name, items_key, reason, stale_field=stale_field)
+        payload["report_date"] = report_date
+        payload["source_report_date"] = str(existing_payload.get("report_date", source_path.stem[:10]) or source_path.stem[:10])
+        payload["fallback_source_date"] = source_path.stem[:10]
+        payload["fallback_source_path"] = str(source_path)
+        payload["fallback_origin_provider"] = str(existing_payload.get("provider", "") or "")
+        payload["fallback_reason"] = reason
+        return payload
+    return None
 
 
 def ok_item_count(items: list[dict[str, Any]] | None = None, *, status_key: str = "status", ok_values: set[str] | None = None) -> int:

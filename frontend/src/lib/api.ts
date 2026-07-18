@@ -1,5 +1,14 @@
-import { copilotResponseSchema } from "./schemas";
-import type { ApiEnvelope, CopilotRequest, CopilotResponse, FundDetailPayload, MemoryAction, Snapshot } from "./types";
+import { copilotResponseSchema, fundLookupResponseSchema, screenshotPreviewSchema } from "./schemas";
+import type {
+  ApiEnvelope,
+  CopilotRequest,
+  CopilotResponse,
+  FundDetailPayload,
+  FundLookupResponse,
+  MemoryAction,
+  ScreenshotPreview,
+  Snapshot
+} from "./types";
 import { getDesktopRuntimeConfig } from "./desktopRuntime";
 
 // Keep this module as the low-level HTTP boundary plus command-style mutations.
@@ -118,11 +127,40 @@ export function recordExecutionConversion(payload: Record<string, unknown>): Pro
   return request("/api/execution-sync/conversion", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function parseAlipayScreenshots(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return request("/api/execution-sync/alipay-screenshot/parse", { method: "POST", body: JSON.stringify(payload) });
+export async function parseAlipayScreenshots(payload: Record<string, unknown>): Promise<ScreenshotPreview> {
+  const result = await request<unknown>("/api/execution-sync/alipay-screenshot/parse", { method: "POST", body: JSON.stringify(payload) });
+  return screenshotPreviewSchema.parse(result) as ScreenshotPreview;
 }
 
-export function applyExecutionReconcile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function lookupExecutionFund(name: string): Promise<FundLookupResponse> {
+  const result = await request<unknown>("/api/execution-sync/fund/lookup", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+  return fundLookupResponseSchema.parse(result) as FundLookupResponse;
+}
+
+export async function registerExecutionFund(payload: {
+  reconcileId: string;
+  expectedPreviewSha256: string;
+  displayName: string;
+  fundCode: string;
+  userConfirmed: true;
+}): Promise<ScreenshotPreview> {
+  const result = await request<unknown>("/api/execution-sync/reconcile/register-fund", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return screenshotPreviewSchema.parse(result) as ScreenshotPreview;
+}
+
+export function applyExecutionReconcile(payload: {
+  reconcileId: string;
+  previewSha256: string;
+  expectedPortfolioStateSha256: string;
+  dropMissing: boolean;
+  confirmReplace?: string;
+}): Promise<Record<string, unknown>> {
   return request("/api/execution-sync/reconcile/apply", { method: "POST", body: JSON.stringify(payload) });
 }
 

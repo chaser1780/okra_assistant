@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -102,6 +103,31 @@ class ConfigWiringTests(unittest.TestCase):
             check_names = {item["name"] for item in result["checks"]}
             self.assertIn("schedule:intraday", check_names)
             self.assertIn("llm:probe", check_names)
+            python_check = next(item for item in result["checks"] if item["name"] == "python_config")
+            self.assertEqual("ok", python_check["status"])
+        finally:
+            os.environ.pop("OPENAI_API_KEY", None)
+            temp.cleanup()
+
+    def test_preflight_blocks_live_pipeline_when_llm_probe_fails(self):
+        temp = TempAgentHome()
+        try:
+            os.environ["OPENAI_API_KEY"] = "test-key"
+            with patch(
+                "preflight_check.probe_llm_model",
+                return_value={
+                    "status": "error",
+                    "detail": "HTTP 404 model_not_found",
+                    "retryable": False,
+                    "attempts": [{"status_code": 404, "retryable": False}],
+                },
+            ):
+                result = perform_preflight(temp.root, "intraday", probe_llm=True)
+
+            self.assertEqual(result["status"], "failed")
+            probe = next(item for item in result["checks"] if item["name"] == "llm:probe")
+            self.assertEqual(probe["status"], "error")
+            self.assertFalse(probe["retryable"])
         finally:
             os.environ.pop("OPENAI_API_KEY", None)
             temp.cleanup()

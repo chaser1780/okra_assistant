@@ -1,15 +1,26 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { AlertTriangle, Check, ExternalLink, Loader2, RefreshCw, Search } from "lucide-react";
 import {
   applyExecutionReconcile,
+  lookupExecutionFund,
   parseAlipayScreenshots,
   recordExecutionConversion,
   recordExecutionTrade,
+  registerExecutionFund,
   updateExecutionConfirmations
 } from "../../lib/api";
-import type { ExecutionSyncPayload, PortfolioItem, PortfolioPayload } from "../../lib/types";
+import type {
+  ExecutionSyncPayload,
+  FundLookupCandidate,
+  PortfolioItem,
+  PortfolioPayload,
+  ScreenshotPreview,
+  ScreenshotPreviewRow,
+  UnmatchedHolding
+} from "../../lib/types";
 import { signedMoney, text } from "../../lib/format";
-import { asList, cleanPayload, extractPreviewRows, fileToDataUrl, operationText, statusText, tradeTitle } from "../../lib/executionSync";
+import { cleanPayload, extractPreviewRows, fileToDataUrl, hasValidPreviewIntegrity, operationText, statusText, tradeTitle } from "../../lib/executionSync";
 import { Badge, Button, Card, SectionTitle } from "../../components/ui";
 
 type Props = {
@@ -20,6 +31,12 @@ type Props = {
 
 type TradeKind = "buy" | "sell" | "convert";
 type ScreenshotMode = "update" | "replace";
+type FundLookupState = {
+  status: "loading" | "ready" | "error";
+  candidates: FundLookupCandidate[];
+  warnings: string[];
+  error: string;
+};
 type TradeFormValue = {
   trade_date: string;
   trade_time: string;
@@ -68,6 +85,20 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || "Request failed");
 }
 
+function unmatchedHoldingKey(item: UnmatchedHolding) {
+  return `${item.display_name}::${item.page_index ?? "page"}::${item.row_index ?? "row"}`;
+}
+
+function previewBlockers(preview: ScreenshotPreview, rows: ScreenshotPreviewRow[]) {
+  const blockers: string[] = [];
+  if (preview.unmatched_detected.length) blockers.push(`还有 ${preview.unmatched_detected.length} 只截图持仓未匹配基金。`);
+  if (!rows.length) blockers.push("没有可写入的已识别持仓。");
+  if (!/^[0-9a-f]{64}$/.test(preview.preview_sha256)) blockers.push("预览完整性哈希缺失或格式无效，请重新解析截图。");
+  if (!/^[0-9a-f]{64}$/.test(preview.portfolio_state_sha256)) blockers.push("组合状态哈希缺失或格式无效，请重新解析截图。");
+  if (preview.apply_ready !== true) blockers.push("后端尚未将本次预览标记为可应用。");
+  return blockers;
+}
+
 export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   const today = new Date().toLocaleDateString("sv-SE");
   const firstFund = portfolio.items[0];
@@ -75,8 +106,11 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [tradeKind, setTradeKind] = useState<TradeKind>("buy");
-  const [screenshotPreview, setScreenshotPreview] = useState<Record<string, unknown> | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<ScreenshotPreview | null>(null);
   const [replaceConfirm, setReplaceConfirm] = useState("");
+  const [fundLookups, setFundLookups] = useState<Record<string, FundLookupState>>({});
+  const [registeringKey, setRegisteringKey] = useState("");
+  const lookupInFlight = useRef(new Set<string>());
   const [trade, setTrade] = useState<TradeFormValue>({
     trade_date: today,
     trade_time: "14:50",
@@ -110,7 +144,47 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     user_note: ""
   });
   const recognizedRows = useMemo(() => extractPreviewRows(screenshotPreview), [screenshotPreview]);
-  const screenshotApplyReady = screenshotPreview ? screenshotPreview.apply_ready !== false && recognizedRows.length > 0 : false;
+  const screenshotBlockers = useMemo(
+    () => (screenshotPreview ? previewBlockers(screenshotPreview, recognizedRows) : []),
+    [recognizedRows, screenshotPreview]
+  );
+  const screenshotApplyReady = screenshotPreview
+    ? screenshotPreview.apply_ready === true
+      && recognizedRows.length > 0
+      && screenshotPreview.unmatched_detected.length === 0
+      && hasValidPreviewIntegrity(screenshotPreview)
+    : false;
+
+  const loadFundCandidates = useCallback(async (holding: UnmatchedHolding, key: string) => {
+    if (lookupInFlight.current.has(key)) return;
+    lookupInFlight.current.add(key);
+    setFundLookups((current) => ({
+      ...current,
+      [key]: { status: "loading", candidates: current[key]?.candidates ?? [], warnings: [], error: "" }
+    }));
+    try {
+      const result = await lookupExecutionFund(holding.display_name);
+      setFundLookups((current) => ({
+        ...current,
+        [key]: { status: "ready", candidates: result.candidates, warnings: result.warnings, error: "" }
+      }));
+    } catch (error) {
+      setFundLookups((current) => ({
+        ...current,
+        [key]: { status: "error", candidates: [], warnings: [], error: errorMessage(error) }
+      }));
+    } finally {
+      lookupInFlight.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!screenshotPreview) return;
+    screenshotPreview.unmatched_detected.forEach((holding) => {
+      const key = unmatchedHoldingKey(holding);
+      if (!fundLookups[key]) void loadFundCandidates(holding, key);
+    });
+  }, [fundLookups, loadFundCandidates, screenshotPreview]);
 
   async function submitTrade() {
     if (tradeKind === "convert") {
@@ -168,14 +242,17 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       const result = await parseAlipayScreenshots({ snapshot_date: today, files: encoded });
       setScreenshotPreview(result);
       setReplaceConfirm("");
+      setFundLookups({});
       const rows = extractPreviewRows(result);
-      const autoParseAttempted = Boolean(result.auto_parse_attempted);
-      const autoParseOk = Boolean(result.auto_parse_ok);
-      const autoParseError = text(result.auto_parse_error);
-      if (autoParseAttempted && !autoParseOk) {
-        setMessage(`截图已保存，但自动识别失败：${autoParseError || "LLM 视觉接口未返回可用结果"}`);
+      if (result.auto_parse_attempted && !result.auto_parse_ok) {
+        setMessage(`截图已保存，但自动识别失败：${result.auto_parse_error || "LLM 视觉接口未返回可用结果"}`);
+      } else if (result.unmatched_detected.length) {
+        setMessage(`截图已识别到 ${rows.length} 只基金，另有 ${result.unmatched_detected.length} 只未匹配持仓，正在查询官方基金候选。`);
       } else if (rows.length) {
-        setMessage("截图已识别，请核对识别结果，然后选择“更新”或“全部替换”。");
+        setMessage(hasValidPreviewIntegrity(result) && result.apply_ready === true
+          ? "截图已识别并通过完整性检查，请核对后选择“更新”或“全部替换”。"
+          : "截图已识别，但缺少应用所需的完整性信息，请查看阻断原因并重新解析。"
+        );
       } else {
         setMessage("截图已保存，但没有识别到可同步的持仓。");
       }
@@ -186,10 +263,49 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     }
   }
 
+  async function confirmFundRegistration(holding: UnmatchedHolding, candidate: FundLookupCandidate, key: string) {
+    if (!screenshotPreview) return;
+    if (!screenshotPreview.reconcile_id || !/^[0-9a-f]{64}$/.test(screenshotPreview.preview_sha256)) {
+      setMessage("当前预览缺少有效的预览哈希，不能安全添加基金；请重新解析截图。");
+      return;
+    }
+    if (!hasValidPreviewIntegrity(screenshotPreview)) {
+      setMessage("当前预览缺少有效的完整性哈希，不能安全添加基金；请重新解析截图。");
+      return;
+    }
+    if (!/^\d{6}$/.test(candidate.fund_code)) {
+      setMessage("候选基金代码格式无效，不能添加。");
+      return;
+    }
+    setRegisteringKey(key);
+    setMessage(`正在确认并添加 ${candidate.fund_name}...`);
+    try {
+      const refreshedPreview = await registerExecutionFund({
+        reconcileId: screenshotPreview.reconcile_id,
+        expectedPreviewSha256: screenshotPreview.preview_sha256,
+        displayName: holding.display_name,
+        fundCode: candidate.fund_code,
+        userConfirmed: true
+      });
+      setScreenshotPreview(refreshedPreview);
+      setReplaceConfirm("");
+      setFundLookups({});
+      const remaining = refreshedPreview.unmatched_detected.length;
+      setMessage(remaining
+        ? `${candidate.fund_name} 已添加并重新生成预览；还有 ${remaining} 只未匹配持仓，正在继续查询。`
+        : `${candidate.fund_name} 已添加，新的预览已生成，请核对后再应用。`
+      );
+    } catch (error) {
+      setMessage(`添加基金失败：${errorMessage(error)}`);
+    } finally {
+      setRegisteringKey("");
+    }
+  }
+
   async function applyScreenshot(mode: ScreenshotMode) {
     if (!screenshotPreview) return;
     if (!screenshotApplyReady) {
-      setMessage("截图中还有未匹配持仓，请先完成新基金建档/分类后再写入真实持仓。");
+      setMessage(`当前预览不能应用：${screenshotBlockers.join(" ") || "完整性检查未通过。"}`);
       return;
     }
     if (mode === "replace" && replaceConfirm.trim().toUpperCase() !== "REPLACE") {
@@ -200,14 +316,15 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     setMessage(mode === "replace" ? "正在按截图全部替换真实仓位..." : "正在按截图更新真实仓位...");
     try {
       await applyExecutionReconcile({
-        reconcileId: text(screenshotPreview.reconcile_id),
-        previewSha256: text(screenshotPreview.preview_sha256),
-        expectedPortfolioStateSha256: text(screenshotPreview.portfolio_state_sha256),
+        reconcileId: screenshotPreview.reconcile_id,
+        previewSha256: screenshotPreview.preview_sha256,
+        expectedPortfolioStateSha256: screenshotPreview.portfolio_state_sha256,
         dropMissing: mode === "replace",
         confirmReplace: mode === "replace" ? replaceConfirm.trim().toUpperCase() : undefined
       });
       setScreenshotPreview(null);
       setReplaceConfirm("");
+      setFundLookups({});
       setMessage(mode === "replace" ? "真实仓位已完全按截图替换。" : "真实仓位已按截图更新，未出现在截图中的持仓已保留。");
       onRefresh();
     } catch (error) {
@@ -286,7 +403,16 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
           </p>
           {screenshotPreview ? (
             <div className="mt-4 space-y-3">
-              <PreviewSummary preview={screenshotPreview} rows={recognizedRows} />
+              <PreviewSummary
+                preview={screenshotPreview}
+                rows={recognizedRows}
+                applyReady={screenshotApplyReady}
+                blockers={screenshotBlockers}
+                lookups={fundLookups}
+                registeringKey={registeringKey}
+                onRetry={(holding) => void loadFundCandidates(holding, unmatchedHoldingKey(holding))}
+                onRegister={(holding, candidate) => void confirmFundRegistration(holding, candidate, unmatchedHoldingKey(holding))}
+              />
               <div className="rounded-md border border-rose-500/30 bg-rose-950/20 p-3">
                 <div className="text-xs font-semibold text-rose-100">全部替换确认</div>
                 <p className="mt-1 text-xs leading-5 text-rose-100/80">只有选择“全部替换”时需要输入 REPLACE。该操作会把截图未出现的当前持仓归零。</p>
@@ -304,7 +430,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
                 <Button variant="danger" disabled={busy || !screenshotApplyReady || replaceConfirm.trim().toUpperCase() !== "REPLACE"} onClick={() => void applyScreenshot("replace")}>
                   全部替换
                 </Button>
-                <Button variant="ghost" disabled={busy} onClick={() => { setScreenshotPreview(null); setReplaceConfirm(""); }}>
+                <Button variant="ghost" disabled={busy || Boolean(registeringKey)} onClick={() => { setScreenshotPreview(null); setReplaceConfirm(""); setFundLookups({}); }}>
                   取消
                 </Button>
               </div>
@@ -427,15 +553,32 @@ function ConversionForm({
   );
 }
 
-function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; rows: Record<string, unknown>[] }) {
-  const warnings = [...asList(preview.warnings), ...asList(preview.vision_warnings)];
-  const missing = asList(preview.missing_items).length || asList(preview.missing_portfolio_funds).length;
-  const unmatched = asList(preview.unmatched_detected);
+function PreviewSummary({
+  preview,
+  rows,
+  applyReady,
+  blockers,
+  lookups,
+  registeringKey,
+  onRetry,
+  onRegister
+}: {
+  preview: ScreenshotPreview;
+  rows: ScreenshotPreviewRow[];
+  applyReady: boolean;
+  blockers: string[];
+  lookups: Record<string, FundLookupState>;
+  registeringKey: string;
+  onRetry: (holding: UnmatchedHolding) => void;
+  onRegister: (holding: UnmatchedHolding, candidate: FundLookupCandidate) => void;
+}) {
+  const warnings = [...preview.warnings, ...preview.vision_warnings];
+  const missing = preview.missing_items.length || preview.missing_portfolio_funds.length;
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm">
+    <div className="space-y-3 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="font-semibold text-slate-100">识别到 {rows.length} 只基金</span>
-        <Badge tone={rows.length ? "success" : "warning"}>{rows.length ? "可确认" : "未识别"}</Badge>
+        <Badge tone={applyReady ? "success" : "warning"}>{applyReady ? "可以应用" : "暂不可应用"}</Badge>
       </div>
       <div className="max-h-64 space-y-2 overflow-auto">
         {rows.map((row, index) => (
@@ -448,21 +591,139 @@ function PreviewSummary({ preview, rows }: { preview: Record<string, unknown>; r
         ))}
       </div>
       {missing ? <div className="mt-3 text-xs text-amber-200">有 {missing} 只当前持仓未出现在截图中；选择“全部替换”时会归零。</div> : null}
-      {unmatched.length ? (
-        <div className="mt-3 rounded border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs leading-5 text-amber-100">
-          <div className="font-semibold">截图中有 {unmatched.length} 只未匹配持仓，当前不会写入持仓。</div>
-          {unmatched.slice(0, 4).map((item, index) => (
-            <div key={index}>
-              {text(item.display_name)} | 市值 {signedMoney(item.current_value)}
-            </div>
+      {blockers.length ? (
+        <div className="rounded border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs leading-5 text-amber-100">
+          <div className="flex items-center gap-2 font-semibold">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            应用前需要解决
+          </div>
+          {blockers.map((blocker) => (
+            <div key={blocker} className="mt-1 pl-6">{blocker}</div>
           ))}
         </div>
       ) : null}
+      {preview.unmatched_detected.map((holding) => {
+        const key = unmatchedHoldingKey(holding);
+        const lookup = lookups[key];
+        return (
+          <div key={key} className="border-t border-slate-800 pt-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="font-semibold text-slate-100">{holding.display_name}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  截图市值 {signedMoney(holding.current_value)} | 持仓收益 {signedMoney(holding.holding_pnl)}
+                </div>
+              </div>
+              <Badge tone="warning">未匹配</Badge>
+            </div>
+
+            {!lookup || lookup.status === "loading" ? (
+              <div className="mt-3 flex items-center gap-2 text-xs text-cyan-200">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在查询官方基金候选
+              </div>
+            ) : null}
+
+            {lookup?.status === "error" ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded border border-rose-500/30 bg-rose-950/20 px-3 py-2 text-xs text-rose-100">
+                <span>候选查询失败：{lookup.error}</span>
+                <Button variant="secondary" className="h-8 gap-2" onClick={() => onRetry(holding)}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  重试
+                </Button>
+              </div>
+            ) : null}
+
+            {lookup?.status === "ready" && !lookup.candidates.length ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                <span>{lookup.warnings.join(" ") || "没有找到可核验的基金候选。"}</span>
+                <Button variant="secondary" className="h-8 gap-2" onClick={() => onRetry(holding)}>
+                  <Search className="h-3.5 w-3.5" />
+                  重新查询
+                </Button>
+              </div>
+            ) : null}
+
+            {lookup?.candidates.map((candidate) => (
+              <FundCandidate
+                key={`${key}-${candidate.fund_code}`}
+                candidate={candidate}
+                disabled={Boolean(registeringKey) || !preview.reconcile_id || !/^\d{6}$/.test(candidate.fund_code) || !hasValidPreviewIntegrity(preview)}
+                registering={registeringKey === key}
+                onConfirm={() => onRegister(holding, candidate)}
+              />
+            ))}
+          </div>
+        );
+      })}
       {warnings.map((item, index) => (
         <div key={index} className="mt-2 text-xs leading-5 text-slate-500">
-          {text(item)}
+          {item}
         </div>
       ))}
+    </div>
+  );
+}
+
+function FundCandidate({
+  candidate,
+  disabled,
+  registering,
+  onConfirm
+}: {
+  candidate: FundLookupCandidate;
+  disabled: boolean;
+  registering: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="mt-3 rounded border border-slate-700 bg-slate-900/50 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="break-words font-semibold text-slate-100">{candidate.fund_name || "官方名称暂无"}</div>
+          <div className="mt-1 text-xs text-cyan-200">基金代码 {candidate.fund_code || "暂无"}</div>
+        </div>
+        {candidate.match_score !== null ? <Badge tone="accent">匹配度 {Math.round(candidate.match_score * 100)}%</Badge> : null}
+      </div>
+      <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
+        <CandidateField label="基金类型" value={candidate.fund_type} />
+        <CandidateField label="基金公司" value={candidate.company_name} />
+        <CandidateField label="基金经理" value={candidate.manager_name} />
+        <CandidateField
+          label="最新净值"
+          value={candidate.latest_nav === null ? "" : `${candidate.latest_nav}${candidate.nav_date ? ` (${candidate.nav_date})` : ""}`}
+        />
+      </dl>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
+        <div className="flex flex-wrap gap-3 text-xs">
+          {candidate.source_links.map((link) => (
+            <a
+              key={link.url}
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-100"
+            >
+              {link.label}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          ))}
+          {!candidate.source_links.length ? <span className="text-slate-500">暂无可核验来源链接</span> : null}
+        </div>
+        <Button variant="primary" className="gap-2" disabled={disabled} onClick={onConfirm}>
+          {registering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          {registering ? "正在添加" : "确认添加"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function CandidateField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="mt-0.5 break-words text-slate-200">{value || "暂无"}</dd>
     </div>
   );
 }

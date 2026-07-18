@@ -277,6 +277,22 @@ def context_fund(context: dict[str, Any], fund_code: str) -> dict[str, Any]:
     return {}
 
 
+def market_payload_is_stale(payload: dict[str, Any]) -> bool:
+    if payload.get("stale"):
+        return True
+    freshness_values = [payload.get("freshness_status")]
+    if "estimate_freshness_status" in payload:
+        freshness_values.append(payload.get("estimate_freshness_status"))
+    else:
+        freshness_values.append(payload.get("official_nav_freshness_status"))
+    stale_markers = {"stale", "delayed", "fallback", "missing", "unknown", "unavailable"}
+    return any(
+        any(marker in str(value or "").lower() for marker in stale_markers)
+        for value in freshness_values
+        if value is not None
+    )
+
+
 def market_facts_from_context(ticket: dict[str, Any], context: dict[str, Any], report_date: str) -> list[LayeredContextItem]:
     fund_code = str(ticket.get("fund_code", "") or "")
     fund = context_fund(context, fund_code)
@@ -321,6 +337,8 @@ def derived_signals_from_context(ticket: dict[str, Any], context: dict[str, Any]
         payload = fund.get(source_field, {}) if isinstance(fund.get(source_field), dict) else {}
         if not payload:
             continue
+        if market_payload_is_stale(payload):
+            continue
         direction_value = payload.get("change_pct", payload.get("estimate_change_pct", payload.get("day_change_pct", 0.0)))
         direction = "positive" if safe_float(direction_value) > 0 else "negative" if safe_float(direction_value) < 0 else "neutral"
         signals.append(
@@ -332,7 +350,7 @@ def derived_signals_from_context(ticket: dict[str, Any], context: dict[str, Any]
                 source_record_id=f"{fund_code}:{source_field}",
                 as_of_date_value=as_of_date(payload, report_date),
                 available_from=as_available_from(payload, generated_at),
-                status="stale" if payload.get("stale") else "present",
+                status="present",
                 summary=f"{source_field} signal is {direction}; value={direction_value}.",
                 domain="market",
                 fund_code=fund_code,
@@ -561,6 +579,20 @@ def missing_data_for_pack(ticket: dict[str, Any], portfolio_fact_item: LayeredCo
         missing.append(MissingDataItem("llm_context_fund", "missing", "No matching fund in llm_context.", "Market and evidence context are unavailable.", False))
     if not (fund.get("recent_news") if fund else None):
         missing.append(MissingDataItem("fund_recent_news", "missing", "No recent fund news in llm_context.", "Long-text evidence relies on RAG or remains empty.", False))
+    for source_field in ("intraday_proxy", "estimated_nav", "quote"):
+        payload = fund.get(source_field, {}) if isinstance(fund.get(source_field), dict) else {}
+        if not payload or not market_payload_is_stale(payload):
+            continue
+        missing.append(
+            MissingDataItem(
+                f"{source_field}_direction_signal",
+                "stale",
+                f"{source_field} is marked stale, delayed, fallback, or unavailable.",
+                "Excluded from directional support signals; retained only as a stale canonical fact for risk context.",
+                False,
+                source_refs=[{"path": f"db/llm_context/{report_date}.json", "record_id": f"{ticket.get('fund_code')}:{source_field}"}],
+            )
+        )
     missing.append(
         MissingDataItem(
             f"official_nav_for_{report_date}",
@@ -667,7 +699,11 @@ def build_retrieval_pack_artifact(agent_home: Path, report_date: str, *, generat
     action_artifact = action_ticket_artifact(agent_home, report_date, generated_at=generated_at, source_mode=source_mode)
     action_path = action_ticket_path(agent_home, report_date)
     validated_path = validated_advice_path(agent_home, report_date)
-    portfolio_path, portfolio = load_portfolio_state_for_report(agent_home, report_date)
+    portfolio_path, portfolio = load_portfolio_state_for_report(
+        agent_home,
+        report_date,
+        allow_prior_current=source_mode == "native",
+    )
     context_path = llm_context_path(agent_home, report_date)
     evidence_path = evidence_index_path(agent_home, report_date)
     memory_path = long_memory_export_path(agent_home)

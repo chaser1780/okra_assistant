@@ -26,6 +26,8 @@ from api_contracts import (
     ApiError,
     ApiMeta,
     ExecutionConversionRequestDto,
+    ExecutionFundLookupRequestDto,
+    ExecutionFundRegisterRequestDto,
     ExecutionReconcileApplyRequestDto,
     ExecutionReconcilePreviewRequestDto,
     ExecutionScreenshotParseRequestDto,
@@ -411,6 +413,12 @@ class OkraWebApi:
 
     def execution_screenshot_parse(self, payload: dict) -> dict:
         return self.execution_controller.execution_screenshot_parse(payload)
+
+    def execution_fund_lookup(self, payload: dict) -> dict:
+        return self.execution_controller.execution_fund_lookup(payload)
+
+    def execution_fund_register(self, payload: dict) -> dict:
+        return self.execution_controller.execution_fund_register(payload)
 
     def execution_reconcile_preview(self, payload: dict) -> dict:
         return self.execution_controller.execution_reconcile_preview(payload)
@@ -994,6 +1002,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.api.execution_conversion(payload))
             elif parsed.path == "/api/execution-sync/alipay-screenshot/parse":
                 self._send_json(self.api.execution_screenshot_parse(payload))
+            elif parsed.path == "/api/execution-sync/fund/lookup":
+                self._send_json(self.api.execution_fund_lookup(payload))
+            elif parsed.path == "/api/execution-sync/reconcile/register-fund":
+                self._send_json(self.api.execution_fund_register(payload))
             elif parsed.path == "/api/execution-sync/reconcile/preview":
                 self._send_json(self.api.execution_reconcile_preview(payload))
             elif parsed.path == "/api/execution-sync/reconcile/apply":
@@ -1155,6 +1167,10 @@ class ContractRequestHandler(RequestHandler):
                 payload = coerce_model(ExecutionReconcilePreviewRequestDto, payload)
             elif endpoint_path == "/api/execution-sync/confirmation/update":
                 payload = coerce_model(ExecutionConfirmationUpdateRequestDto, payload)
+            elif endpoint_path == "/api/execution-sync/fund/lookup":
+                payload = coerce_model(ExecutionFundLookupRequestDto, payload)
+            elif endpoint_path == "/api/execution-sync/reconcile/register-fund":
+                payload = coerce_model(ExecutionFundRegisterRequestDto, payload)
             elif endpoint_path == "/api/open-url":
                 payload = coerce_model(OpenUrlRequestDto, payload)
             elif endpoint_path == "/api/rag/search":
@@ -1180,6 +1196,10 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.execution_conversion(coerce_model(ExecutionConversionRequestDto, payload)))
             elif endpoint_path == "/api/execution-sync/alipay-screenshot/parse":
                 self._send_envelope(self.api.execution_screenshot_parse(coerce_model(ExecutionScreenshotParseRequestDto, payload)))
+            elif endpoint_path == "/api/execution-sync/fund/lookup":
+                self._send_envelope(self.api.execution_fund_lookup(payload))
+            elif endpoint_path == "/api/execution-sync/reconcile/register-fund":
+                self._send_envelope(self.api.execution_fund_register(payload))
             elif endpoint_path == "/api/execution-sync/reconcile/preview":
                 self._send_envelope(self.api.execution_reconcile_preview(payload))
             elif endpoint_path == "/api/execution-sync/reconcile/apply":

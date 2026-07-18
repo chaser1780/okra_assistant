@@ -290,7 +290,9 @@ def build_validated_payload(
     previous_actions = previous_actions if previous_actions is not None else previous_validated_by_code(agent_home, report_date)
     decision_mode = str(committee_bundle.get("decision_mode", "") or "canonical")
     degradation_mode = str(committee_bundle.get("degradation_mode", "") or "none")
-    execution_eligible = bool(committee_bundle.get("execution_eligible", True))
+    promoted_chain = llm_raw.get("promoted_chain", {}) if isinstance(llm_raw.get("promoted_chain"), dict) else {}
+    is_mock = bool(llm_raw.get("is_mock") or promoted_chain.get("is_mock") or committee_bundle.get("is_mock"))
+    execution_eligible = bool(committee_bundle.get("execution_eligible", True)) and not is_mock
     delayed_sell_proceeds_total = round(
         sum(float((item or {}).get("delayed_sell_proceeds", 0.0) or 0.0) for item in (constraint_map or {}).values()),
         2,
@@ -338,6 +340,24 @@ def build_validated_payload(
             },
         )
         constraint = constraint_map.get(fund["fund_code"], {})
+        if not execution_eligible and fund["role"] in {"core_dca", "tactical"}:
+            hold_actions.append(
+                build_record(
+                    report_date,
+                    fund,
+                    model,
+                    validated_action="hold",
+                    validated_amount=0.0,
+                    previous=previous_actions.get(fund["fund_code"]),
+                    allocation_plan=allocation_plan,
+                    execution_friction=execution_friction_notes(constraint),
+                    policy_rule_hits=["committee_bundle_global_gate"],
+                    constraint_hits=["mock_output" if is_mock else "execution_not_eligible"],
+                    validation_notes=["Mock output is non-executable; forced hold." if is_mock else "Committee bundle disabled execution globally; forced hold."],
+                    cash_note="committee_bundle_global_gate",
+                )
+            )
+            continue
         if fund["role"] == "core_dca":
             amount = float(fund.get("fixed_daily_buy_amount", strategy["core_dca"]["amount_per_fund"]))
             fixed_dca_total += amount
@@ -527,7 +547,7 @@ def build_validated_payload(
         "strategy_bucket_summary": exposure.get("by_strategy_bucket", []),
         "advice_mode": llm_raw.get("mode", ""),
         "advice_is_fallback": llm_raw.get("mode") == "committee_fallback",
-        "advice_is_mock": llm_raw.get("mode") == "mock",
+        "advice_is_mock": is_mock,
         "decision_source": llm_raw.get("decision_source", ""),
         "decision_mode": decision_mode,
         "degradation_mode": degradation_mode,

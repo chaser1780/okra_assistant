@@ -145,6 +145,7 @@ primary = "fundgz_1234567"
 fallbacks = ["quote_nav_derived", "stale_snapshot"]
 timeout_seconds = 30
 allow_stale_fallback = true
+max_stale_business_days = 1
 health_threshold = "warning"
 source_role = "estimated_nav"
 

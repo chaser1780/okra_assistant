@@ -11,9 +11,18 @@ The current workbench is a React + Tauri desktop UI on top of the Python backend
 The launcher is the current user-facing entrypoint. It:
 
 - resolves the Python interpreter from `OKRA_PYTHON_EXE`, `project.toml`, `python`, or `py -3`
-- starts `app/web_api.py --home <project-root>`
-- builds or reuses the Tauri executable when Cargo is available
+- reuses the existing Tauri executable by default for fast startup
+- lets Tauri start and own `app/web_api.py --home <project-root>` in local mode
 - falls back to the React dev workbench at `http://127.0.0.1:5173` when Cargo is unavailable
+
+Use an explicit rebuild after frontend or Tauri source changes:
+
+```powershell
+.\run_desktop_app.ps1 -Rebuild
+```
+
+`-AutoRebuildWhenChanged` is available as an opt-in developer workflow. It is
+not the default because a release rebuild can take several minutes.
 
 Primary local API:
 

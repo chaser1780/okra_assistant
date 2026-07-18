@@ -82,6 +82,63 @@ class ProviderAdaptersTests(unittest.TestCase):
         finally:
             agent.cleanup()
 
+    def test_stale_fallback_does_not_reuse_target_or_fallback_payload(self):
+        agent = TempAgentHome()
+        try:
+            target_path = agent.root / "db" / "estimated_nav" / "2026-03-11.json"
+            agent.write_json(
+                "db/estimated_nav/2026-03-11.json",
+                {"report_date": "2026-03-11", "provider": "fundgz_1234567", "items": [{"estimate_date": "2026-03-11"}]},
+            )
+            agent.write_json(
+                "db/estimated_nav/2026-03-10.json",
+                {
+                    "report_date": "2026-03-10",
+                    "provider": "stale_snapshot",
+                    "fallback_reason": "network",
+                    "items": [{"estimate_date": "2026-03-01", "stale": True}],
+                },
+            )
+
+            payload = stale_fallback_from_recent_snapshot(
+                target_path,
+                "2026-03-11",
+                "stale_snapshot",
+                "items",
+                "network",
+                max_business_day_gap=1,
+            )
+
+            self.assertIsNone(payload)
+        finally:
+            agent.cleanup()
+
+    def test_stale_fallback_enforces_item_age(self):
+        agent = TempAgentHome()
+        try:
+            target_path = agent.root / "db" / "estimated_nav" / "2026-03-11.json"
+            agent.write_json(
+                "db/estimated_nav/2026-03-10.json",
+                {
+                    "report_date": "2026-03-10",
+                    "provider": "fundgz_1234567",
+                    "items": [{"estimate_date": "2026-03-02", "stale": False}],
+                },
+            )
+
+            payload = stale_fallback_from_recent_snapshot(
+                target_path,
+                "2026-03-11",
+                "stale_snapshot",
+                "items",
+                "network",
+                max_business_day_gap=1,
+            )
+
+            self.assertIsNone(payload)
+        finally:
+            agent.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()
