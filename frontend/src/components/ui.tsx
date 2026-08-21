@@ -15,8 +15,10 @@ const toneClass: Record<Tone, string> = {
 };
 
 export function Badge({ children, tone = "neutral", className }: { children: ReactNode; tone?: Tone; className?: string }) {
-  return <span className={clsx("inline-flex items-center rounded-md border px-2 py-1 text-xs font-semibold", toneClass[tone], className)}>{children}</span>;
+  return <span className={clsx("inline-flex items-center rounded-sm border px-2 py-1 text-xs font-semibold tracking-wide", toneClass[tone], className)}>{children}</span>;
 }
+
+export const StatusBadge = Badge;
 
 export function Button({
   children,
@@ -31,7 +33,7 @@ export function Button({
   return (
     <button
       className={clsx(
-        "inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-semibold transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30",
         variant === "secondary" && "border-slate-700 bg-slate-900 text-slate-100 hover:border-cyan-700",
         variant === "ghost" && "border-transparent bg-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-100",
@@ -49,6 +51,10 @@ export function Card({ children, className }: { children: ReactNode; className?:
   return <section className={clsx("okra-card", className)}>{children}</section>;
 }
 
+export function Surface({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={clsx("okra-surface", className)}>{children}</div>;
+}
+
 export function SectionTitle({ title, meta }: { title: string; meta?: string }) {
   return (
     <div className="mb-3 flex items-end justify-between gap-3">
@@ -57,6 +63,8 @@ export function SectionTitle({ title, meta }: { title: string; meta?: string }) 
     </div>
   );
 }
+
+export const SectionHeader = SectionTitle;
 
 export function MetricCard({ title, value, body, tone = "neutral" }: { title: string; value: string; body: string; tone?: Tone }) {
   const toneLabel: Record<Tone, string> = {

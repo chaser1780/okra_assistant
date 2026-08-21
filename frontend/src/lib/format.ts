@@ -1,5 +1,13 @@
 export function text(value: unknown, fallback = "暂无"): string {
   if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["label", "summary", "status", "state", "message", "text", "name", "title"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return fallback;
+  }
   return String(value);
 }
 

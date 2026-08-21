@@ -4,18 +4,26 @@
 
 :root {
   color-scheme: dark;
-  --background: 220 28% 5%;
-  --foreground: 210 30% 96%;
-  --card: 219 26% 9%;
-  --card-foreground: 210 30% 96%;
-  --muted: 218 22% 13%;
-  --muted-foreground: 215 14% 66%;
-  --accent: 188 94% 43%;
+  --background: 220 28% 6%;
+  --foreground: 210 24% 96%;
+  --card: 220 24% 10%;
+  --card-foreground: 210 24% 96%;
+  --muted: 218 22% 14%;
+  --muted-foreground: 215 16% 68%;
+  --accent: 191 92% 55%;
   --accent-foreground: 210 30% 98%;
-  --border: 216 22% 18%;
-  --success: 160 78% 45%;
-  --warning: 39 95% 55%;
-  --danger: 349 89% 64%;
+  --border: 216 22% 22%;
+  --success: 158 68% 48%;
+  --warning: 38 94% 58%;
+  --danger: 4 78% 64%;
+  --info: 214 84% 68%;
+  --market-up: 4 78% 64%;
+  --market-down: 158 68% 48%;
+  --surface-0: 220 28% 6%;
+  --surface-1: 220 24% 10%;
+  --surface-2: 219 25% 14%;
+  --surface-3: 216 27% 18%;
+  --shadow-color: 220 45% 3%;
 }
 
 * {
@@ -30,8 +38,9 @@ body,
 }
 
 body {
-  background: radial-gradient(circle at 20% 0%, rgba(8, 145, 178, 0.12), transparent 34%),
-    linear-gradient(135deg, #090d14 0%, #060910 48%, #02040a 100%);
+  background: hsl(var(--background));
+  background-image: linear-gradient(180deg, rgba(21, 37, 55, 0.16), transparent 30%),
+    radial-gradient(circle at 78% -12%, rgba(34, 211, 238, 0.08), transparent 28%);
   color: hsl(var(--foreground));
   font-family: "Inter", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   letter-spacing: 0;
@@ -53,22 +62,62 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #263345;
-  border-radius: 999px;
+  background: #2a3a4c;
+  border-radius: 6px;
 }
 
 .okra-card {
   border: 1px solid hsl(var(--border));
-  background: linear-gradient(145deg, rgba(20, 29, 44, 0.92), rgba(10, 15, 24, 0.96));
+  background: hsl(var(--surface-1));
   border-radius: 8px;
+  box-shadow: 0 12px 28px hsl(var(--shadow-color) / 0.18);
 }
 
 .okra-panel {
   border: 1px solid hsl(var(--border));
-  background: rgba(9, 14, 23, 0.86);
+  background: hsl(var(--surface-0) / 0.88);
   border-radius: 8px;
+}
+
+.okra-surface {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--surface-2));
+  border-radius: 6px;
+}
+
+.okra-divider {
+  border-color: hsl(var(--border));
 }
 
 .metric-number {
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.market-up {
+  color: hsl(var(--market-up));
+}
+
+.market-down {
+  color: hsl(var(--market-down));
+}
+
+.focus-ring:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid hsl(var(--accent) / 0.72);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

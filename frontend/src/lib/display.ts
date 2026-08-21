@@ -37,7 +37,8 @@ const actionLabels: Record<string, string> = {
   scheduled_dca: "计划定投",
   planned_dca: "计划定投",
   not_applicable: "不适用",
-  switch: "转换"
+  switch: "转换",
+  switch_out: "换出"
 };
 
 const statusLabels: Record<string, string> = {
@@ -101,7 +102,8 @@ const textLabels: Record<string, string> = {
   "Do not reduce positions unless expected edge survives redemption fee and settlement friction.":
     "除非预期收益能够覆盖赎回费和到账摩擦，否则不要减仓。",
   "Track actual trades separately from system advice so execution drift does not contaminate advice accuracy.":
-    "真实交易要和系统建议分开记录，避免执行偏差污染建议胜率。"
+    "真实交易要和系统建议分开记录，避免执行偏差污染建议胜率。",
+  "Execute scheduled DCA plan.": "执行固定定投计划。"
 };
 
 const wordLabels: Record<string, string> = {
@@ -288,9 +290,20 @@ export function valueLabel(value: unknown): string {
     daily: "今日分析",
     realtime: "实时刷新",
     nightly: "夜间复盘",
-    proxy_fallback: "代理行情兜底",
+    proxy_fallback: "代理行情（备用）",
     estimate: "基金估值",
-    official_nav: "官方净值"
+    official_nav: "官方净值",
+    action_debate_promoted: "委员会决策已生成",
+    action_debate_preview: "委员会决策预览",
+    proxy_primary: "代理行情（主用）",
+    unavailable: "暂无可用估值",
+    stale_snapshot: "快照已滞后",
+    degraded: "降级运行",
+    blocked: "已阻断",
+    ready: "就绪",
+    not_run: "未运行",
+    display_only: "仅供审查",
+    non_executable: "不可执行"
   };
   return (
     map[raw] ||
