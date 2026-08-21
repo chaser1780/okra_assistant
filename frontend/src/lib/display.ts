@@ -426,5 +426,10 @@ function translateCommonSentence(raw: string) {
     .replace(/\bsignal\b/gi, "信号")
     .replace(/\bproxy\b/gi, "代理指数")
     .replace(/\bestimate\b/gi, "估算净值")
-    .replace(/\bconfidence\b/gi, "置信度");
+    .replace(/\bconfidence\b/gi, "置信度")
+    .replace(/\bswitch_out\b/gi, "换出")
+    .replace(/\bglobal_growth\b/gi, "全球成长")
+    .replace(/\bexecution_eligible=false\b/gi, "当前不可执行")
+    .replace(/\baction_debate_promoted\b/gi, "委员会决策已生成")
+    .replace(/\bpreflight\b/gi, "运行预检");
 }
