@@ -1,4 +1,5 @@
 const styleLabels: Record<string, string> = {
+  unknown: "未归类",
   industrial_metal: "工业金属",
   tech_growth: "科技成长",
   carbon_neutral: "碳中和",
@@ -207,6 +208,32 @@ export function memoryText(value: unknown) {
   return translateCommonSentence(raw);
 }
 
+export function narrativeText(value: unknown, fallback = "暂无说明") {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value !== "string") return textValue(value, fallback);
+  const raw = value.trim();
+  if (!raw) return fallback;
+  const exact = textLabels[raw];
+  if (exact) return exact;
+  return raw
+    .replace(/Native chain proposes risk reduction for/gi, "系统建议降低风险：")
+    .replace(/Native chain keeps watch for/gi, "系统建议继续观察：")
+    .replace(/Native chain proposes a small add for/gi, "系统建议小额加仓：")
+    .replace(/Shadow action-ticket chain produced an adapter-shape advice preview/gi, "影子动作链生成了非执行预览")
+    .replace(/Execute scheduled DCA plan\.?/gi, "执行固定定投计划。")
+    .replace(/action_debate_promoted/gi, "委员会决策已生成")
+    .replace(/action_debate_preview/gi, "委员会决策预览")
+    .replace(/execution_eligible=false/gi, "当前不可执行")
+    .replace(/degraded\/mock/gi, "降级或模拟输出")
+    .replace(/preflight/gi, "运行预检")
+    .replace(/Settings/gi, "运行中心")
+    .replace(/\bmixed\b/gi, "混合震荡")
+    .replace(/\bresearch\b/gi, "研究模式")
+    .replace(/\bswitch_out\b/gi, "换出")
+    .replace(/\bstale\b/gi, "滞后")
+    .replace(/\bproxy future-date\b/gi, "代理行情日期异常");
+}
+
 export function evidencePathLabel(path: unknown) {
   const raw = String(path ?? "").trim();
   if (!raw) return "证据";
@@ -321,6 +348,17 @@ function mappedLabel(value: unknown, mapping: Record<string, string>, fallback: 
   const key = String(value ?? "").trim();
   if (!key) return fallback;
   return mapping[key] || titleFromIdentifier(key);
+}
+
+function textValue(value: unknown, fallback: string) {
+  if (typeof value === "object" && value) {
+    const record = value as Record<string, unknown>;
+    for (const key of ["summary", "message", "text", "label", "title", "status"]) {
+      if (typeof record[key] === "string" && record[key].trim()) return record[key].trim();
+    }
+    return fallback;
+  }
+  return String(value);
 }
 
 function normalizeIdentifier(value: string) {

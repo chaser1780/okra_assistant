@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import type { FundResearchCard, LongMemoryRecord, TodayPagePayload, Tone } from "../../lib/types";
 import { compactMoney, lines, text } from "../../lib/format";
 import { Badge, Button, Card, MetricCard, SectionTitle } from "../../components/ui";
-import { actionLabel, memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
+import { actionLabel, memoryText, memoryTitle, narrativeText, statusLabel, valueLabel } from "../../lib/display";
 import { getTodayAnalysis, getTodayAnalysisSystem, pickAnalysisValue } from "../../lib/todayAnalysis";
 import { routeForPage } from "../routeMeta";
 
@@ -22,7 +22,11 @@ const toneLabels: Record<string, string> = {
 
 export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
   const navigate = useNavigate();
-  const metrics = snapshot.dashboard.metrics;
+  const metrics = snapshot.dashboard.metrics.map((metric) => ({
+    ...metric,
+    value: narrativeText(metric.value, "暂无"),
+    body: narrativeText(metric.body, "暂无说明")
+  }));
   const main = metrics[0];
   const fundTickets = snapshot.research?.fund_cards ?? [];
   const todayAnalysis = getTodayAnalysis(snapshot);
@@ -66,14 +70,25 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
   return (
     <div className="space-y-4">
       <section className="grid grid-cols-1 gap-4">
-        <Card className="min-h-[246px] p-5">
-          <div className="flex items-center justify-between">
-            <div className="text-xs font-black text-cyan-300">今日分析决策</div>
+        <Card className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-black tracking-wide text-cyan-300">
+                <span className="h-2 w-2 rounded-sm bg-cyan-300" />
+                今日分析决策
+              </div>
+              <div className="mt-4 max-w-3xl text-2xl font-black leading-tight text-slate-50 lg:text-3xl">{main?.value ?? "暂无主动作"}</div>
+              <div className="mt-2 text-sm font-semibold text-slate-300">{main?.title ?? "今日判断"}</div>
+            </div>
             <Badge tone={main?.tone ?? "accent"}>{toneLabels[main?.tone ?? "accent"] ?? "就绪"}</Badge>
           </div>
-          <div className="mt-8 text-4xl font-black text-slate-50">{main?.value ?? "暂无主动作"}</div>
-          <div className="mt-3 text-sm font-semibold text-slate-300">{main?.title ?? "今日判断"}</div>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-400">{main?.body ?? "暂无需要立刻执行的动作。"}</p>
+          <div className="mt-5 grid gap-3 border-t border-slate-800/80 pt-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-end">
+            <p className="max-w-3xl text-sm leading-7 text-slate-400">{narrativeText(main?.body, "暂无需要立刻执行的动作。")}</p>
+            <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-500">
+              <div>执行判断</div>
+              <div className="mt-1 font-semibold text-slate-200">{main?.tone === "danger" ? "存在风险限制" : main?.tone === "accent" ? "等待决策确认" : "继续观察"}</div>
+            </div>
+          </div>
         </Card>
         <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-3">
           {metrics.slice(1, 4).map((metric) => (
@@ -168,7 +183,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="p-4">
-          <SectionTitle title="今日摘要" meta="today_analysis_brief" />
+          <SectionTitle title="今日摘要" meta="分析摘要" />
           <ul className="space-y-2 text-sm leading-6 text-slate-400">
             {briefLines.slice(0, 10).map((item) => (
               <li key={item}>{item}</li>
@@ -177,7 +192,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
         </Card>
         <Card className="p-4">
           <SectionTitle title="投委会结论" />
-          <pre className="whitespace-pre-wrap text-sm leading-6 text-slate-400">{snapshot.dashboard.committee_text || "暂无投委会结论。"}</pre>
+          <pre className="whitespace-pre-wrap text-sm leading-6 text-slate-400">{narrativeText(snapshot.dashboard.committee_text, "暂无投委会结论。")}</pre>
         </Card>
       </section>
     </div>
@@ -205,7 +220,7 @@ function TicketPreview({ card }: { card: FundResearchCard }) {
         <TicketMini label="收益" value={text(card.portfolio.holdingPnlText, "0.00")} tone={pnlTone} />
         <TicketMini label="新闻" value={String(card.news.count ?? 0)} tone={newsRisk ? "warning" : "neutral"} />
       </div>
-      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{card.thesis}</p>
+      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{narrativeText(card.thesis)}</p>
     </div>
   );
 }
@@ -277,7 +292,7 @@ function ActionList({ items, tone }: { items: string[]; tone: "danger" | "succes
       {items.slice(0, 5).map((item, index) => (
         <li key={`${item}-${index}`} className="flex gap-2 text-sm leading-6 text-slate-400">
           <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${tone === "danger" ? "bg-rose-300" : "bg-emerald-300"}`} />
-          {item}
+          {narrativeText(item, item)}
         </li>
       ))}
     </ul>

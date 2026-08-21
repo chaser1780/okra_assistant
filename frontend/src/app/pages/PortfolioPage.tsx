@@ -6,8 +6,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -85,31 +83,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
 
         <Card className="col-span-12 p-4 xl:col-span-5">
           <SectionTitle title="持仓风格分布" meta="按当前市值汇总" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={portfolio.styleAllocation} dataKey="value" nameKey="name" innerRadius={48} outerRadius={82} paddingAngle={2}>
-                    {portfolio.styleAllocation.map((entry, index) => (
-                      <Cell key={entry.name} fill={palette[index % palette.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8 }} formatter={(value, _name, item) => [compactMoney(value), styleLabel(item.payload.name)]} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="space-y-2">
-              {portfolio.styleAllocation.slice(0, 6).map((item, index) => (
-                <div key={item.name} className="flex items-center justify-between gap-2 text-sm">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: palette[index % palette.length] }} />
-                    <span className="truncate text-slate-300">{styleLabel(item.name)}</span>
-                  </div>
-                  <span className="metric-number text-slate-500">{item.weightText}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <AllocationBars items={portfolio.styleAllocation} />
         </Card>
       </section>
 
@@ -148,7 +122,7 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
                 />
                 <Bar dataKey="value" name="持有收益率" radius={[4, 4, 0, 0]}>
                   {returnBars.map((entry) => (
-                    <Cell key={entry.code} fill={entry.value >= 0 ? "#34d399" : "#fb7185"} />
+                    <Cell key={entry.code} fill={entry.value >= 0 ? "#fb7185" : "#34d399"} />
                   ))}
                 </Bar>
               </BarChart>
@@ -213,6 +187,32 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
       <DetailDrawer open={Boolean(selected)} title={selected?.fundName || selected?.fundCode || "持仓详情"} subtitle={selected ? `${selected.fundCode} | ${styleLabel(selected.styleGroup || "未分组")}` : ""} onClose={() => setSelected(null)}>
         {selected ? <PortfolioDetail item={selected} onOpenFundDetail={onOpenFundDetail} /> : null}
       </DetailDrawer>
+    </div>
+  );
+}
+
+function AllocationBars({ items }: { items: PortfolioPayload["styleAllocation"] }) {
+  const visible = items.slice(0, 8);
+  return (
+    <div className="space-y-3 pt-2">
+      {visible.length ? visible.map((item, index) => {
+        const weight = Math.max(0, Math.min(100, Number.parseFloat(String(item.weightText).replace("%", "")) || 0));
+        return (
+          <div key={item.name}>
+            <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: palette[index % palette.length] }} />
+                <span className="truncate text-slate-300">{styleLabel(item.name)}</span>
+              </div>
+              <span className="metric-number shrink-0 font-semibold text-slate-300">{item.weightText}</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-sm bg-slate-900">
+              <div className="h-full rounded-sm" style={{ width: `${weight}%`, background: palette[index % palette.length] }} />
+            </div>
+          </div>
+        );
+      }) : <EmptyState title="暂无风格分布" body="当前组合没有可展示的风格配置。" />}
+      {items.length > visible.length ? <div className="pt-1 text-xs text-slate-600">其余 {items.length - visible.length} 个风格已收起</div> : null}
     </div>
   );
 }

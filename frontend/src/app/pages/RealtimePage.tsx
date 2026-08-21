@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { RealtimePayload } from "../../lib/types";
 import { asNumber, lines, signedMoney, signedPct, text } from "../../lib/format";
-import { styleLabel, valueLabel } from "../../lib/display";
+import { narrativeText, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
 type RealtimeViewRow = {
@@ -20,6 +20,7 @@ type RealtimeViewRow = {
   pnlText: string;
   weightText: string;
   anomalyText: string;
+  freshnessText: string;
 };
 
 const chartColors = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#818cf8", "#2dd4bf"];
@@ -62,8 +63,9 @@ export function RealtimePage({
           changeText: signedPct(item.effective_change_pct),
           pnlText: signedMoney(item.estimated_intraday_pnl_amount),
           weightText: signedPct(item.position_weight_pct).replace("+", ""),
-          anomalyText: asNumber(item.anomaly_score).toFixed(2)
-        }))
+           anomalyText: asNumber(item.anomaly_score).toFixed(2),
+           freshnessText: item.stale ? `滞后${Math.max(1, asNumber(item.freshness_age_business_days))}日` : "最新"
+         }))
         .sort((a, b) => Math.abs(b.change) - Math.abs(a.change)),
     [rows]
   );
@@ -75,9 +77,9 @@ export function RealtimePage({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {realtime.metrics.map((metric) => (
-          <MetricCard key={metric.title} {...metric} />
+          <MetricCard key={metric.title} {...metric} body={narrativeText(metric.body, "暂无说明")} value={narrativeText(metric.value, "暂无")} />
         ))}
       </div>
 
@@ -112,7 +114,7 @@ export function RealtimePage({
                     <th className="px-3 py-3 text-right">今日收益金额</th>
                     <th className="px-3 py-3 text-right">权重</th>
                     <th className="px-3 py-3 text-right">异常分数</th>
-                    <th className="px-3 py-3 text-left">状态</th>
+                    <th className="px-3 py-3 text-left">数据时效</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -137,7 +139,7 @@ export function RealtimePage({
                       <td className="metric-number px-3 py-3 text-right">{item.weightText}</td>
                       <td className="metric-number px-3 py-3 text-right">{item.anomalyText}</td>
                       <td className="px-3 py-3">
-                        <Badge tone={item.stale ? "warning" : "success"}>{item.stale ? "滞后" : "新鲜"}</Badge>
+                        <Badge tone={item.stale ? "warning" : "success"}>{item.freshnessText}</Badge>
                       </td>
                     </tr>
                   ))}
@@ -215,7 +217,7 @@ function RealtimeStripChart({
               >
                 <span
                   className={`absolute left-1/2 -translate-x-1/2 rounded-sm transition ${
-                    positive ? "bottom-1/2 bg-emerald-400" : "top-1/2 bg-rose-400"
+                    positive ? "bottom-1/2 bg-rose-400" : "top-1/2 bg-emerald-400"
                   } ${isHovered ? "ring-2 ring-white" : "group-hover:ring-2 group-hover:ring-white"}`}
                   style={{ height, width: "clamp(10px, 72%, 34px)" }}
                 />
@@ -226,8 +228,8 @@ function RealtimeStripChart({
       </div>
       <div className="flex items-start justify-between gap-3 text-xs text-slate-400">
         <div className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm border border-slate-600" style={{ background: "linear-gradient(135deg, #34d399 0 50%, #fb7185 50% 100%)" }} />
-          <span className="text-cyan-100">采用涨跌幅</span>
+          <span className="h-3 w-3 rounded-sm border border-slate-600" style={{ background: "linear-gradient(135deg, #fb7185 0 50%, #34d399 50% 100%)" }} />
+          <span className="text-cyan-100">红涨 / 绿跌</span>
         </div>
         <div className="min-h-12 max-w-[68%] rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-right leading-5">
           {hovered ? (
@@ -236,7 +238,7 @@ function RealtimeStripChart({
                 {hovered.name} ({hovered.code})
               </div>
               <div>
-                <span className={hovered.change >= 0 ? "text-emerald-300" : "text-rose-300"}>采用涨跌幅 {hovered.changeText}</span>
+                <span className={hovered.change >= 0 ? "market-up" : "market-down"}>采用涨跌幅 {hovered.changeText}</span>
                 <span className="mx-2 text-slate-600">|</span>
                 <span className="text-cyan-200">今日收益 {hovered.pnlText}</span>
               </div>
@@ -290,7 +292,7 @@ function RealtimeDetail({
       </div>
       <Card className="p-4">
         <SectionTitle title="估值依据" />
-        <p className="text-sm leading-6 text-slate-300">{valueLabel(item.reason)}</p>
+        <p className="text-sm leading-6 text-slate-300">{narrativeText(item.reason, "暂无估值说明")}</p>
       </Card>
       <Card className="p-4">
         <SectionTitle title="完整字段" meta="用于排查估值来源和时效" />
