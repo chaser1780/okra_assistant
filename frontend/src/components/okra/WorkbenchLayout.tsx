@@ -83,6 +83,8 @@ export function WorkbenchLayout({
       ? runtimeStatusMeta("idle")
       : rawRuntimeMeta;
   const todayRunLabel = `${hasRunToday && runtimeMeta.kind === "success" ? "已运行" : runtimeMeta.label}${todayAnalysis?.runTime ? ` · ${todayAnalysis.runTime}` : ""}`;
+  const isHistoricalView = dailyRunTarget && dailyRunTarget !== new Date().toLocaleDateString("sv-SE");
+  const sidebarRunLabel = isHistoricalView ? "历史数据" : todayRunLabel;
   const todayRunColor =
     runtimeMeta.tone === "danger"
       ? "text-rose-300"
@@ -93,6 +95,7 @@ export function WorkbenchLayout({
           : runtimeMeta.tone === "accent"
             ? "text-cyan-300"
             : "text-slate-400";
+  const sidebarRunColor = isHistoricalView ? "text-slate-400" : todayRunColor;
   const selectedDateQuery = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
   const contextualCopilot = page === "research" || page === "intelligence" || page === "fundDetail";
   const [copilotOpen, setCopilotOpen] = useState(contextualCopilot);
@@ -148,8 +151,8 @@ export function WorkbenchLayout({
             </div>
             <div className="mt-2 flex items-center justify-between gap-3">
               <span className="text-[11px] font-bold text-slate-500">今日分析</span>
-              <span className={`text-right text-[11px] font-bold ${todayRunColor}`}>
-                {todayRunLabel}
+              <span className={`text-right text-[11px] font-bold ${sidebarRunColor}`}>
+                {sidebarRunLabel}
               </span>
             </div>
           </div>

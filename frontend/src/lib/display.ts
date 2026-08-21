@@ -242,6 +242,7 @@ export function evidencePathLabel(path: unknown) {
 
 export function fieldLabel(value: unknown) {
   const key = String(value ?? "").trim();
+  const normalizedKey = key.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
   const map: Record<string, string> = {
     selected_date: "查看日期",
     advice_mode: "建议模式",
@@ -267,6 +268,19 @@ export function fieldLabel(value: unknown) {
     error_count: "错误数量",
     updated_at: "更新时间",
     created_at: "创建时间",
+    started_at: "启动时间",
+    ended_at: "结束时间",
+    activated_at: "生效时间",
+    run_id: "运行 ID",
+    manifest_id: "清单 ID",
+    source_count: "来源数量",
+    doc_count: "文档数量",
+    chunk_count: "分块数量",
+    status_mode: "状态模式",
+    auto_run_needed: "需要自动运行",
+    today_analysis: "今日分析",
+    memory_cycle: "记忆周期",
+    provider: "数据提供方",
     run_date: "运行日期",
     fund_code: "基金代码",
     fund_name: "基金名称",
@@ -289,7 +303,7 @@ export function fieldLabel(value: unknown) {
     task: "任务",
     date: "日期"
   };
-  return map[key] || entityLabel(key);
+  return map[key] || map[normalizedKey] || entityLabel(normalizedKey);
 }
 
 export function valueLabel(value: unknown): string {

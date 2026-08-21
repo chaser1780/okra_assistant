@@ -16,7 +16,7 @@ import {
 import type { FundAnalysisAgentCard, LongMemoryRecord } from "../../lib/types";
 import { useFundDetailQuery } from "../../lib/workbenchQuery";
 import { asNumber, compactMoney, lines, signedMoney, signedPct, text } from "../../lib/format";
-import { actionLabel, evidencePathLabel, memoryText, memoryTitle, roleLabel, statusLabel, styleLabel } from "../../lib/display";
+import { actionLabel, evidencePathLabel, memoryText, memoryTitle, narrativeText, roleLabel, statusLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, SectionTitle } from "../../components/ui";
 
 const ranges = ["近1月", "近3月", "近6月", "近1年", "成立以来"];
@@ -89,7 +89,7 @@ export function FundDetailPage({
             <ArrowLeft className="h-4 w-4" />
             返回上一页
           </Button>
-          <div className="text-xs font-bold uppercase tracking-normal text-cyan-300">基金详情</div>
+          <div className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">基金详情 / FUND</div>
           <h1 className="mt-1 text-2xl font-black text-slate-50">{detail.fundName}</h1>
           <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
             <span>{detail.fundCode}</span>
@@ -151,7 +151,7 @@ export function FundDetailPage({
         </Card>
 
         <Card className="col-span-4 p-4">
-          <SectionTitle title="实时估值" meta={text(realtime.mode, "暂无模式")} />
+          <SectionTitle title="实时估值" meta={valueLabel(realtime.mode)} />
           <div className="space-y-3">
             <InfoRow label="采用涨跌" value={signedPct(realtime.effective_change_pct)} tone={pnlTone(realtime.effective_change_pct)} />
             <InfoRow label="估算涨跌" value={signedPct(realtime.estimate_change_pct)} />
@@ -160,7 +160,7 @@ export function FundDetailPage({
             <InfoRow label="异常分数" value={asNumber(realtime.anomaly_score).toFixed(2)} />
             <InfoRow label="置信度" value={asNumber(realtime.confidence).toFixed(2)} />
           </div>
-          <p className="mt-4 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm leading-6 text-slate-400">{text(realtime.reason, "暂无估值说明。")}</p>
+          <p className="mt-4 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm leading-6 text-slate-400">{narrativeText(realtime.reason, "暂无估值说明。")}</p>
         </Card>
       </section>
 
@@ -227,11 +227,11 @@ export function FundDetailPage({
         </Card>
 
         <Card className="col-span-7 p-4">
-          <SectionTitle title="AI 建议上下文" meta={text(research.validated_action, text(research._section, "暂无建议"))} />
+          <SectionTitle title="AI 建议上下文" meta={actionLabel(research.validated_action || research._section || "hold")} />
           <div className="space-y-3">
-            <p className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">{text(research.thesis || research.reason, "暂无建议理由")}</p>
+            <p className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">{narrativeText(research.thesis || research.reason, "暂无建议理由")}</p>
             <div className="grid grid-cols-2 gap-3">
-              <InfoRow label="建议动作" value={text(research.validated_action, "暂无")} />
+              <InfoRow label="建议动作" value={actionLabel(research.validated_action || "hold")} />
               <InfoRow label="建议金额" value={text(research.validated_amount, "0")} />
               <InfoRow label="AI 共识" value={text(research._consensus_text, "暂无")} />
               <InfoRow label="冲突提示" value={research._has_conflict ? "存在分歧" : "无明显分歧"} />
@@ -316,15 +316,15 @@ function AgentCard({ card }: { card: FundAnalysisAgentCard }) {
   const fundView = card.fundViews?.[0] ?? {};
   const signalCard = card.signalCards?.[0] ?? {};
   const decisionCard = card.decisionCards?.[0] ?? {};
-  const thesis = text(fundView.thesis || signalCard.thesis || decisionCard.why_now || card.summary, "暂无分析");
-  const comment = text(fundView.comment || signalCard.comment || decisionCard.manager_notes, "");
+  const thesis = narrativeText(fundView.thesis || signalCard.thesis || decisionCard.why_now || card.summary, "暂无分析");
+  const comment = narrativeText(fundView.comment || signalCard.comment || decisionCard.manager_notes, "");
   const risks = lines((fundView.risks as string[] | string | undefined) ?? (signalCard.risks as string[] | string | undefined), "暂无风险");
   const catalysts = lines((fundView.catalysts as string[] | string | undefined) ?? (signalCard.catalysts as string[] | string | undefined), "");
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-bold text-slate-100">{card.agent_name}</div>
+          <div className="text-sm font-bold text-slate-100">{valueLabel(card.agent_name)}</div>
           <div className="mt-1 text-xs text-slate-500">{text(card.stageLabel, card.stage)} | 置信度 {asNumber(card.confidence).toFixed(2)}</div>
         </div>
         <div className="flex items-center gap-2">

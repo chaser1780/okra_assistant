@@ -89,6 +89,15 @@ export function CopilotPanel({
 
   const citations = Array.isArray(lastResult?.citations) ? lastResult.citations : [];
   const retrieval = lastResult?.retrieval;
+  const quickPrompts = page === "today"
+    ? ["今天有哪些可执行动作？", "组合当前最大的风险是什么？"]
+    : page === "portfolio"
+      ? ["组合的最大风格暴露是什么？", "哪些持仓需要重点关注？"]
+      : page === "realtime"
+        ? ["哪些估值已经滞后？", "当前实时收益最主要由谁贡献？"]
+        : page === "research"
+          ? ["为什么建议这只基金？", "哪些规则阻止了加仓？"]
+          : ["请解释当前页面的重点。", "有哪些证据值得优先查看？"];
 
   if (!open) {
     return (
@@ -119,6 +128,18 @@ export function CopilotPanel({
         <p className="mt-2 text-xs leading-5 text-slate-500">{context}</p>
       </div>
       <div className="flex-1 space-y-3 overflow-auto p-4">
+        {messages.length === 1 && !busy ? (
+          <div className="rounded-md border border-cyan-500/20 bg-cyan-950/15 p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-300/80">快速提问</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {quickPrompts.map((prompt) => (
+                <button key={prompt} type="button" className="rounded-sm border border-slate-700 bg-slate-950/70 px-2 py-1.5 text-xs text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-100" onClick={() => setQuestion(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {messages.map((message) => (
           <div key={message.id} className={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
             <div

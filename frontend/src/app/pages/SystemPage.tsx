@@ -47,11 +47,11 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
         <SectionTitle title="RAG 检索状态" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <StatusTile label="默认接入" value={enabledLabel(ragRuntime.enabled)} tone={ragRuntime.enabled ? "success" : "info"} />
-          <StatusTile label="Agent Default" value={enabledLabel((ragRuntime.agentDefault ?? {}).enabled)} tone={(ragRuntime.agentDefault ?? {}).enabled ? "success" : "info"} />
-          <StatusTile label="Shadow" value={enabledLabel((ragRuntime.agentShadow ?? {}).enabled)} tone={(ragRuntime.agentShadow ?? {}).enabled ? "success" : "info"} />
-          <StatusTile label="Legacy fallback" value={enabledLabel(ragRuntime.fallbackToLegacy)} tone={ragRuntime.fallbackToLegacy ? "success" : "warning"} />
+          <StatusTile label="默认 Agent 接入" value={enabledLabel((ragRuntime.agentDefault ?? {}).enabled)} tone={(ragRuntime.agentDefault ?? {}).enabled ? "success" : "info"} />
+          <StatusTile label="影子 Agent" value={enabledLabel((ragRuntime.agentShadow ?? {}).enabled)} tone={(ragRuntime.agentShadow ?? {}).enabled ? "success" : "info"} />
+          <StatusTile label="旧链路备用" value={enabledLabel(ragRuntime.fallbackToLegacy)} tone={ragRuntime.fallbackToLegacy ? "success" : "warning"} />
           <StatusTile label="文档 / 分块" value={`${countValue(ragRuntime.counts, "documents")} / ${countValue(ragRuntime.counts, "chunks")}`} tone="accent" />
-          <StatusTile label="Embedding 待处理 / 错误" value={`${countValue(ragRuntime.embeddingStatus, "pending")} / ${countValue(ragRuntime.embeddingStatus, "error")}`} tone={countValue(ragRuntime.embeddingStatus, "error") ? "warning" : "info"} />
+          <StatusTile label="向量待处理 / 错误" value={`${countValue(ragRuntime.embeddingStatus, "pending")} / ${countValue(ragRuntime.embeddingStatus, "error")}`} tone={countValue(ragRuntime.embeddingStatus, "error") ? "warning" : "info"} />
         </div>
         {ragRuntime.statusError ? <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-950/25 p-3 text-sm text-amber-100">{String(ragRuntime.statusError)}</div> : null}
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -106,13 +106,17 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
       </Card>
 
       <Card className="p-4">
-        <SectionTitle title="系统摘要" />
-        <KeyValueTree value={summary} />
+        <details>
+          <summary className="cursor-pointer text-sm font-bold text-slate-100">系统摘要 / 高级诊断</summary>
+          <div className="mt-4"><KeyValueTree value={summary} /></div>
+        </details>
       </Card>
 
       <Card className="p-4">
-        <SectionTitle title="原始系统信息" />
-        <KeyValueTree value={system} />
+        <details>
+          <summary className="cursor-pointer text-sm font-bold text-slate-100">原始系统信息 / 高级诊断</summary>
+          <div className="mt-4"><KeyValueTree value={system} /></div>
+        </details>
       </Card>
     </div>
   );
@@ -154,21 +158,20 @@ function RuntimeBlock({ payload }: { payload: Record<string, unknown> }) {
   const degradedAgents = Array.isArray(payload.degradedAgents) ? payload.degradedAgents : [];
   return (
     <div className="space-y-1 text-sm text-slate-400">
-      <div>status: {String(payload.status ?? "暂无")}</div>
-      <div>phase: {String(payload.phase ?? "暂无")}</div>
-      <div>run_id: {String(payload.runId ?? "暂无")}</div>
-      <div>report_date: {String(payload.reportDate ?? "暂无")}</div>
-      <div>started_at: {String(payload.startedAt ?? "暂无")}</div>
-      <div>elapsed_seconds: {String(payload.elapsedSeconds ?? 0)}</div>
-      <div>current_step: {String(payload.currentStep ?? "暂无")}</div>
-      <div>current_agent: {String(payload.currentAgent ?? "暂无")}</div>
-      <div>current_agent_stage: {String(payload.currentAgentStage ?? "暂无")}</div>
-      <div>running_agents: {runningAgents.length ? runningAgents.map((item) => String(item)).join(" / ") : "暂无"}</div>
-      <div>failed_agents: {failedAgents.length}</div>
-      <div>degraded_agents: {degradedAgents.length}</div>
-      <div>last_error: {String(payload.lastError ?? "暂无")}</div>
-      {"analysisQuality" in payload ? <div>analysis_quality: {String(payload.analysisQuality ?? "暂无")}</div> : null}
-      {"memoryEligible" in payload ? <div>memory_eligible: {String(payload.memoryEligible ?? "暂无")}</div> : null}
+      <div>状态：{valueLabel(payload.status)}</div>
+      <div>阶段：{valueLabel(payload.phase)}</div>
+      <div>运行日期：{valueLabel(payload.reportDate)}</div>
+      <div>启动时间：{valueLabel(payload.startedAt)}</div>
+      <div>已运行：{String(payload.elapsedSeconds ?? 0)} 秒</div>
+      <div>当前步骤：{valueLabel(payload.currentStep)}</div>
+      <div>当前 Agent：{valueLabel(payload.currentAgent)}</div>
+      <div>当前阶段：{valueLabel(payload.currentAgentStage)}</div>
+      <div>运行中 Agent：{runningAgents.length ? runningAgents.map((item) => valueLabel(item)).join(" / ") : "暂无"}</div>
+      <div>失败 Agent：{failedAgents.length}</div>
+      <div>降级 Agent：{degradedAgents.length}</div>
+      <div>最近错误：{valueLabel(payload.lastError)}</div>
+      {"analysisQuality" in payload ? <div>分析质量：{valueLabel(payload.analysisQuality)}</div> : null}
+      {"memoryEligible" in payload ? <div>允许进入记忆：{valueLabel(payload.memoryEligible)}</div> : null}
     </div>
   );
 }

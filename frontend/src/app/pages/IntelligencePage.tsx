@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { NewsIntelligencePayload, ResearchDigestBreakdown, ResearchDigestEntry, Tone } from "../../lib/types";
 import { text } from "../../lib/format";
+import { narrativeText, valueLabel } from "../../lib/display";
 import { openExternalUrl } from "../../lib/api";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
@@ -64,7 +65,7 @@ export function IntelligencePage({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard title="唯一新闻" value={text(metrics.unique_news_count, "0")} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
         <MetricCard title="重要新闻" value={text(metrics.important_news_count, String(importantNews.length))} body="高热度、政策或风险事件" tone="warning" />
-        <MetricCard title="监管信息" value={text(metrics.regulatory_count, String(regulatoryItems.length))} body={`SZSE ${text(metrics.szse_count, String(szseItems.length))} 条`} tone="info" />
+        <MetricCard title="监管信息" value={text(metrics.regulatory_count, String(regulatoryItems.length))} body={`深交所 ${text(metrics.szse_count, String(szseItems.length))} 条`} tone="info" />
         <MetricCard title="文本情绪" value={scoreText(metrics.text_sentiment_score)} body={`热度 ${scoreText(metrics.heat_score)} / 派生 ${scoreText(metrics.derived_sentiment_score)}`} tone={sentimentTone(metrics.text_sentiment_score)} />
         <MetricCard title="来源健康" value={text(metrics.source_count, String(healthItems.length))} body={`需关注 ${text(metrics.warning_source_count, String(warningItems.length))} 个来源`} tone={warningItems.length ? "warning" : "success"} />
       </div>
@@ -122,7 +123,7 @@ function DigestPanel({ title, icon, rows, empty }: { title: string; icon: ReactN
         <div className="mt-3 space-y-2">
           {rows.slice(0, 6).map((row) => (
             <div key={row} className="flex items-center justify-between gap-3 text-sm">
-              <span className="truncate text-slate-300">{row.split(" ").slice(0, -1).join(" ")}</span>
+              <span className="truncate text-slate-300">{sourceLabel(row.split(" ").slice(0, -1).join(" "))}</span>
               <Badge tone="neutral">{row.split(" ").slice(-1)[0]}</Badge>
             </div>
           ))}
@@ -165,10 +166,10 @@ function HealthPanel({ items, warnings }: { items: ResearchDigestEntry[]; warnin
           {rows.map((item, index) => (
             <div key={`${text(item.source_key, "source")}-${index}`} className="flex items-start justify-between gap-3 text-sm">
               <div className="min-w-0">
-                <div className="truncate font-semibold text-slate-300">{providerName(item)}</div>
-                <div className="truncate text-xs text-slate-500">{notes(item)}</div>
+                <div className="truncate font-semibold text-slate-300">{sourceLabel(providerName(item))}</div>
+                <div className="truncate text-xs text-slate-500">{narrativeText(notes(item), "暂无备注")}</div>
               </div>
-              <Badge tone={text(item.status, "") === "ok" ? "success" : "warning"}>{text(item.status, "unknown")}</Badge>
+              <Badge tone={text(item.status, "") === "ok" ? "success" : "warning"}>{valueLabel(item.status)}</Badge>
             </div>
           ))}
         </div>
@@ -197,20 +198,20 @@ function NewsList({ title, icon, items, empty, onOpenNews }: { title: string; ic
 }
 
 function NewsLine({ item, compact = false, onOpen }: { item: ResearchDigestEntry; compact?: boolean; onOpen: (item: ResearchDigestEntry) => void }) {
-  const title = text(item.title, "暂无标题");
+  const title = narrativeText(item.title, "暂无标题");
   const risk = text(item.risk_level ?? item.severity, "");
   return (
     <button type="button" onClick={() => onOpen(item)} className="block w-full rounded-md border border-slate-800 bg-slate-950/40 p-3 text-left transition hover:border-cyan-700/70 hover:bg-slate-900/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/40">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="line-clamp-2 text-sm font-semibold text-slate-100">{title}</div>
-          {!compact ? <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{text(item.summary, "暂无摘要")}</div> : null}
+          {!compact ? <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{narrativeText(item.summary, "暂无摘要")}</div> : null}
         </div>
-        <Badge tone={risk === "high" ? "danger" : risk === "medium" ? "warning" : "neutral"}>{risk || text(item.source_role, "news")}</Badge>
+        <Badge tone={risk === "high" ? "danger" : risk === "medium" ? "warning" : "neutral"}>{valueLabel(risk || item.source_role || "news")}</Badge>
       </div>
       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
         <span>{text(item.published_at, "暂无时间")}</span>
-        <span>{providerName(item)}</span>
+        <span>{sourceLabel(providerName(item))}</span>
         {text(item.heat_score, "") ? <span>热度 {scoreText(item.heat_score)}</span> : null}
       </div>
     </button>
@@ -229,7 +230,7 @@ function NewsDetailDrawer({
   const [openingUrl, setOpeningUrl] = useState(false);
   const [openError, setOpenError] = useState("");
   if (!item) return null;
-  const title = text(item.title, "暂无标题");
+  const title = narrativeText(item.title, "暂无标题");
   const sourceUrl = text(item.canonical_url ?? item.source_url ?? item.url ?? item.evidence_url, "");
   const canOpenSource = isHttpUrl(sourceUrl);
   const fundCode = text(item.code ?? item.fund_code, "");
@@ -261,7 +262,7 @@ function NewsDetailDrawer({
       <aside className="relative ml-auto flex h-full w-full max-w-[540px] flex-col border-l border-slate-800 bg-[#080d16] shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
           <div className="min-w-0">
-            <div className="text-xs font-bold uppercase tracking-normal text-cyan-300">News Detail</div>
+            <div className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">资讯详情 / NEWS</div>
             <h2 className="mt-1 line-clamp-2 text-base font-bold text-slate-50">{title}</h2>
           </div>
           <Button variant="ghost" className="h-8 shrink-0 gap-2 px-2" onClick={onClose}>
@@ -271,20 +272,20 @@ function NewsDetailDrawer({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           <div className="mb-4 flex flex-wrap gap-2">
-            <Badge tone={risk === "high" ? "danger" : risk === "medium" ? "warning" : "neutral"}>{risk || text(item.source_role, "news")}</Badge>
-            <Badge tone="info">{providerName(item)}</Badge>
+            <Badge tone={risk === "high" ? "danger" : risk === "medium" ? "warning" : "neutral"}>{valueLabel(risk || item.source_role || "news")}</Badge>
+            <Badge tone="info">{sourceLabel(providerName(item))}</Badge>
             {text(item.evidence_type, "") ? <Badge tone="accent">{text(item.evidence_type, "")}</Badge> : null}
             {text(item.sentiment_label, "") ? <Badge tone={sentimentTone(item.sentiment_score)}>{text(item.sentiment_label, "")}</Badge> : null}
           </div>
 
           <section className="rounded-md border border-slate-800 bg-slate-950/50 p-4">
             <div className="text-sm font-bold text-slate-100">摘要</div>
-            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{text(item.summary, "暂无摘要")}</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{narrativeText(item.summary, "暂无摘要")}</p>
           </section>
 
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <DetailRow label="发布时间" value={text(item.published_at, "暂无")} />
-            <DetailRow label="来源角色" value={text(item.source_role, "暂无")} />
+            <DetailRow label="来源角色" value={valueLabel(item.source_role)} />
             <DetailRow label="热度分" value={scoreText(item.heat_score)} />
             <DetailRow label="情绪分" value={scoreText(item.sentiment_score)} />
             <DetailRow label="查询类型" value={text(item.query_type, "暂无")} />
@@ -373,11 +374,30 @@ function breakdownRows(value: ResearchDigestBreakdown | undefined): string[] {
   if (Array.isArray(value)) {
     return value.map((item) => `${providerName(item)} ${text(item.count ?? item.item_count, "0")}`).filter(Boolean);
   }
-  return Object.entries(value).map(([key, count]) => `${key} ${text(count, "0")}`);
+  return Object.entries(value).map(([key, count]) => `${sourceLabel(key)} ${text(count, "0")}`);
 }
 
 function providerName(item: ResearchDigestEntry): string {
   return text(item.provider ?? item.source_name ?? item.source_key ?? item.name ?? item.label, "unknown");
+}
+
+const sourceLabels: Record<string, string> = {
+  eastmoney_notice_and_articles: "东方财富公告与资讯",
+  "rss:chinanews_finance": "中国新闻网财经",
+  eastmoney_search_api: "东方财富检索",
+  "rss:chinanews_importnews": "中新网要闻",
+  "rss:xinhuanet_fortune": "新华财经",
+  "reg:sse_general": "上交所监管公告",
+  eastmoney_nav_api: "东方财富净值接口",
+  stale_snapshot: "快照滞后",
+  fundgz_1234567: "基金估值接口",
+  "rss:sina_fund": "新浪基金 RSS",
+  xueqiu_web: "雪球网页"
+};
+
+function sourceLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return sourceLabels[raw] || raw.replace(/^rss:/, "").replace(/^reg:/, "监管 / ").replace(/_/g, " ") || "未知来源";
 }
 
 function notes(item: ResearchDigestEntry): string {

@@ -73,7 +73,7 @@ type ConversionFormValue = {
 const tradeLabels: Record<TradeKind, string> = {
   buy: "买入",
   sell: "卖出",
-  convert: "转换"
+  convert: "换基"
 };
 
 function positiveInput(value: string) {
@@ -360,7 +360,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-7">
-          <SectionTitle title="交易记录" meta="手动录入后直接写入真实执行账本" />
+          <SectionTitle title="记录真实操作" meta="手动录入后写入真实执行账本" />
           <div className="mb-4 inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
             {(["buy", "sell", "convert"] as TradeKind[]).map((kind) => (
               <button
@@ -390,7 +390,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
         </Card>
 
         <Card className="col-span-12 p-4 xl:col-span-5">
-          <SectionTitle title="支付宝截图上传" meta="识别后确认更新真实仓位" />
+          <SectionTitle title="同步支付宝持仓" meta="识别后确认更新真实仓位" />
           <input
             type="file"
             multiple

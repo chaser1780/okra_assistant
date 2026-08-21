@@ -213,7 +213,7 @@ function TicketPreview({ card }: { card: FundResearchCard }) {
             <span>{card.selectedDate}</span>
           </div>
         </div>
-        <Badge tone={actionTone(card.action)}>{card.actionLabel || actionLabel(card.action)}</Badge>
+        <Badge tone={actionTone(card.action)}>{actionLabel(card.action)}</Badge>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <TicketMini label="金额" value={card.amountText || "不可用"} />
@@ -237,7 +237,7 @@ function TicketMini({ label, value, tone = "neutral" }: { label: string; value: 
 
 function actionTone(action: string): Tone {
   if (["buy", "add", "scheduled_dca", "planned_dca"].includes(action)) return "accent";
-  if (["sell", "reduce", "switch"].includes(action)) return "danger";
+  if (["sell", "reduce", "switch", "switch_out"].includes(action)) return "danger";
   if (["locked", "not_applicable"].includes(action)) return "warning";
   return "neutral";
 }

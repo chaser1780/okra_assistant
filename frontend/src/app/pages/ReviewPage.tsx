@@ -2,7 +2,7 @@ import { Check, ExternalLink, RotateCcw, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { LongMemoryPayload, LongMemoryRecord, MemoryAction, ReviewPayload, Tone } from "../../lib/types";
 import { lines } from "../../lib/format";
-import { domainLabel, entityLabel, evidencePathLabel, memoryText, memoryTitle, statusLabel } from "../../lib/display";
+import { domainLabel, entityLabel, evidencePathLabel, memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
 type TabKey = "fund" | "market" | "execution" | "pending";
@@ -47,12 +47,12 @@ export function ReviewPage({
         <div>
           <div className="text-sm font-bold text-slate-100">学习可信状态</div>
           <div className="mt-1 text-xs text-slate-500">
-            {trust?.latestReplayAuditPath || trust?.manifestPath || "尚无历史回放信任清单"}
+            {trust?.latestReplayAuditPath || trust?.manifestPath ? "已加载审计依据" : "尚无历史回放信任清单"}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={trust?.mode === "trusted" ? "success" : trust?.mode === "structural_only" ? "warning" : "danger"}>
-            {trust?.mode || "blocked"}
+            {valueLabel(trust?.mode || "blocked")}
           </Badge>
           <Badge tone={trust?.learningEligible ? "info" : "neutral"}>
             {trust?.learningEligible ? "可进入学习候选" : "不可学习"}
@@ -208,17 +208,20 @@ function MemoryCard({
       </div>
 
       {evidence.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {evidence.slice(0, 4).map((item, index) => {
-            const path = evidencePathLabel(item.path ?? item.file ?? item.source);
-            return (
-              <Badge key={`${path}-${index}`} tone="purple" className="max-w-full truncate">
-                <ExternalLink className="mr-1 h-3 w-3" />
-                {path || `证据 ${index + 1}`}
-              </Badge>
-            );
-          })}
-        </div>
+        <details className="mt-3 rounded-md border border-slate-800 bg-slate-950/45 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-400">证据 {evidence.length} 条</summary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {evidence.slice(0, 4).map((item, index) => {
+              const path = evidencePathLabel(item.path ?? item.file ?? item.source);
+              return (
+                <Badge key={`${path}-${index}`} tone="purple" className="max-w-full truncate">
+                  <ExternalLink className="mr-1 h-3 w-3" />
+                  {path || `证据 ${index + 1}`}
+                </Badge>
+              );
+            })}
+          </div>
+        </details>
       ) : null}
 
       {pending ? (

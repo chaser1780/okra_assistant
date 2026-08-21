@@ -2,19 +2,23 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { FundResearchCard, ResearchDigestBreakdown, ResearchDigestEntry, ResearchPayload, ResearchSentimentBlock, Tone } from "../../lib/types";
 import { asNullableNumber, asNumber, text } from "../../lib/format";
-import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
+import { actionLabel, narrativeText, roleLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Activity, ArrowRight, FileText, Newspaper, RadioTower, Search, ShieldAlert } from "lucide-react";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 
 export function ResearchPage({ research, onOpenFundDetail }: { research: ResearchPayload; onOpenFundDetail?: (fundCode: string) => void }) {
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "actionable" | "watch" | "conflict">("all");
   const [selectedTicketId, setSelectedTicketId] = useState("");
   const cards = useMemo(() => {
     const source = research.fund_cards?.length ? research.fund_cards : research.rows.map(rowToFundCard);
     const needle = query.trim().toLowerCase();
-    if (!needle) return source;
-    return source.filter((card) => JSON.stringify(card).toLowerCase().includes(needle));
-  }, [query, research.fund_cards, research.rows]);
+    return source.filter((card) => {
+      const matchesQuery = !needle || JSON.stringify(card).toLowerCase().includes(needle);
+      const matchesFilter = filter === "all" || (filter === "actionable" ? card.isActionable : filter === "watch" ? !card.isActionable : card.hasConflict);
+      return matchesQuery && matchesFilter;
+    });
+  }, [filter, query, research.fund_cards, research.rows]);
   const selectedCard = useMemo(() => {
     if (!cards.length) return null;
     return cards.find((card) => card.ticketId === selectedTicketId) ?? cards[0];
@@ -24,7 +28,7 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {research.metrics.map((metric) => (
-          <MetricCard key={metric.title} {...metric} />
+          <MetricCard key={metric.title} {...metric} value={narrativeText(metric.value, "0")} body={narrativeText(metric.body, "暂无说明")} />
         ))}
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -37,7 +41,7 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
         <div className="grid min-h-[640px] grid-cols-1 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
           <aside className="border-b border-slate-800 bg-slate-950/35 lg:border-b-0 lg:border-r">
             <div className="border-b border-slate-800 p-4">
-              <SectionTitle title="基金 Ticket" meta={research.meta} />
+              <SectionTitle title="建议卡" meta={research.meta} />
               <div className="flex h-9 items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm text-slate-400 focus-within:border-cyan-700">
                 <Search className="h-4 w-4 shrink-0" />
                 <input
@@ -46,6 +50,23 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
                   placeholder="搜索基金、动作、风险"
                   className="h-full min-w-0 flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600"
                 />
+              </div>
+              <div className="mt-3 grid grid-cols-4 gap-1 rounded-md border border-slate-800 bg-slate-950 p-1">
+                {([
+                  ["all", "全部"],
+                  ["actionable", "可执行"],
+                  ["watch", "观察"],
+                  ["conflict", "分歧"]
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setFilter(key)}
+                    className={`h-7 rounded-sm text-[11px] font-semibold transition ${filter === key ? "bg-cyan-500/20 text-cyan-100" : "text-slate-500 hover:text-slate-200"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
             {cards.length ? (
@@ -98,14 +119,14 @@ function TicketButton({ card, selected, onClick }: { card: FundResearchCard; sel
             <span>{styleLabel(card.portfolio.styleGroup)}</span>
           </div>
         </div>
-        <Badge tone={actionTone(card.action)}>{card.actionLabel || actionLabel(card.action)}</Badge>
+        <Badge tone={actionTone(card.action)}>{actionLabel(card.action)}</Badge>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <TicketStat label="金额" value={card.amountText || "0.00"} />
         <TicketStat label="收益" value={text(card.portfolio.holdingPnlText, "0.00")} tone={pnlTone} />
         <TicketStat label="信号" value={text(card.market.estimateChangePctText, text(card.market.dayChangePctText, "暂无"))} tone={changeTone} />
       </div>
-      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{card.thesis}</p>
+      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{narrativeText(card.thesis)}</p>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {card.hasConflict ? <Badge tone="warning">分歧</Badge> : <Badge tone="success">{card.consensusText || "共识"}</Badge>}
         {card.news.riskCount ? <Badge tone="danger">新闻风险 {card.news.riskCount}</Badge> : null}
@@ -133,7 +154,7 @@ function FundTicketWorkspace({ card, onOpenFundDetail }: { card: FundResearchCar
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={actionTone(card.action)}>{card.actionLabel || actionLabel(card.action)}</Badge>
+              <Badge tone={actionTone(card.action)}>{actionLabel(card.action)}</Badge>
               <Badge tone={card.hasConflict ? "warning" : "success"}>{card.consensusText || "暂无共识"}</Badge>
               {card.news.riskCount ? <Badge tone="danger">新闻风险 {card.news.riskCount}</Badge> : null}
               {card.portfolio.allowTrade === false ? <Badge tone="warning">不可交易</Badge> : null}
@@ -183,9 +204,9 @@ function FundTicketWorkspace({ card, onOpenFundDetail }: { card: FundResearchCar
       <div className="grid grid-cols-12 gap-4 p-5">
         <section className="col-span-12 space-y-4 xl:col-span-7">
           <Panel title="建议卡" icon={<FileText className="h-4 w-4" />}>
-            <p className="text-sm leading-7 text-slate-300">{card.thesis}</p>
+            <p className="text-sm leading-7 text-slate-300">{narrativeText(card.thesis)}</p>
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-              <KeyValue label="动作" value={card.actionLabel || actionLabel(card.action)} />
+            <KeyValue label="动作" value={actionLabel(card.action)} />
               <KeyValue label="置信度" value={card.confidenceText || "暂无"} />
               <KeyValue label="组合市值" value={text(card.portfolio.currentValueText, "0.00")} />
               <KeyValue label="官方净值" value={`${text(card.market.officialNav, "暂无")} ${card.market.officialNavDate ? `(${card.market.officialNavDate})` : ""}`} />
@@ -278,7 +299,7 @@ function CompactList({ title, items, empty, code = false }: { title: string; ite
       <ul className="space-y-2 text-sm leading-6 text-slate-400">
         {rows.slice(0, 6).map((item, index) => (
           <li key={`${title}-${index}`} className={code ? "break-all font-mono text-xs text-slate-500" : ""}>
-            - {item}
+            - {code ? narrativeText(item, item) : narrativeText(item, item)}
           </li>
         ))}
       </ul>
@@ -292,12 +313,12 @@ function NewsList({ items }: { items: ResearchDigestEntry[] }) {
     <div className="space-y-3">
       {items.slice(0, 4).map((item, index) => (
         <div key={text(item.news_id ?? item.id, `news-${index}`)} className="rounded border border-slate-800 bg-slate-950/55 p-3">
-          <div className="line-clamp-2 text-sm font-semibold leading-6 text-slate-200">{text(item.title, "暂无标题")}</div>
+            <div className="line-clamp-2 text-sm font-semibold leading-6 text-slate-200">{narrativeText(item.title, "暂无标题")}</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Badge tone={newsTone(item)}>{text(item.risk_level ?? item.impact ?? item.sentiment_label, "news")}</Badge>
             {item.heat_score !== undefined ? <Badge tone="info">热度 {text(item.heat_score, "0")}</Badge> : null}
           </div>
-          <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{text(item.summary, "暂无摘要")}</p>
+            <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{narrativeText(item.summary, "暂无摘要")}</p>
         </div>
       ))}
     </div>
@@ -318,8 +339,8 @@ function SourceHealthPanel({ sourceHealth }: { sourceHealth?: ResearchPayload["s
       badge={<Badge tone={tone}>{errorCount > 0 ? "错误" : warningCount > 0 ? "注意" : "正常"}</Badge>}
       rows={[
         `来源 ${text(summary.source_count, String(items.length))} 个`,
-        `warning ${warningCount} / error ${errorCount}`,
-        ...warningItems.map((item) => `${text(item.source_key, "source")}: ${text(item.status, "unknown")}`)
+        `预警 ${warningCount} / 错误 ${errorCount}`,
+        ...warningItems.map((item) => `${sourceLabel(item.source_key)}：${valueLabel(item.status)}`)
       ]}
     />
   );
@@ -343,7 +364,7 @@ function NewsDigestPanel({ digest, eventRisks }: { digest?: Record<string, unkno
       icon={<Newspaper className="h-4 w-4" />}
       title="新闻证据"
       badge={<Badge tone={risks.length ? "warning" : "info"}>{uniqueCount} 条</Badge>}
-      rows={[
+       rows={[
         `唯一 ${uniqueCount} / 映射 ${mappedCount}${duplicateCount ? ` / 重复 ${duplicateCount}` : ""}`,
         sourceBreakdown
           ? `来源分布 ${sourceBreakdown}`
@@ -394,7 +415,7 @@ function SentimentDigestPanel({ digest }: { digest?: Record<string, unknown> }) 
               : disabledSources.length
                 ? `默认停用 ${disabledSources.join(", ")}`
                 : "暂无有效情绪源",
-        health.length ? `${providerName(health[0])}: ${text(health[0].status, "unknown")}` : disabledSources.length ? `停用来源 ${disabledSources.join(", ")}` : ""
+         health.length ? `${sourceLabel(providerName(health[0]))}：${valueLabel(health[0].status)}` : disabledSources.length ? `停用来源 ${disabledSources.map(sourceLabel).join("、")}` : ""
       ]}
     />
   );
@@ -413,7 +434,7 @@ function InfoPanel({ icon, title, badge, rows }: { icon: ReactNode; title: strin
       <ul className="space-y-1 text-sm leading-6 text-slate-400">
         {rows.filter(Boolean).slice(0, 4).map((row, index) => (
           <li key={`${title}-${index}`} className="line-clamp-2">
-            {row}
+            {humanizeSourceText(row)}
           </li>
         ))}
       </ul>
@@ -466,7 +487,7 @@ function normalizeStringArray(value: unknown): string[] {
 
 function actionTone(action: string): Tone {
   if (["buy", "add", "scheduled_dca", "planned_dca"].includes(action)) return "accent";
-  if (["sell", "reduce", "switch"].includes(action)) return "danger";
+  if (["sell", "reduce", "switch", "switch_out"].includes(action)) return "danger";
   if (action === "locked" || action === "not_applicable") return "warning";
   return "neutral";
 }
@@ -476,6 +497,41 @@ function toneFromNumber(value: unknown): Tone {
   if (parsed > 0) return "success";
   if (parsed < 0) return "danger";
   return "neutral";
+}
+
+const sourceLabels: Record<string, string> = {
+  eastmoney_notice_and_articles: "东方财富公告与资讯",
+  "rss:chinanews_finance": "中国新闻网财经",
+  eastmoney_search_api: "东方财富检索",
+  "rss:chinanews_importnews": "中新网要闻",
+  "rss:xinhuanet_fortune": "新华财经",
+  "reg:sse_general": "上交所监管公告",
+  eastmoney_nav_api: "东方财富净值接口",
+  fundgz_1234567: "基金估值接口",
+  "rss:sina_fund": "新浪基金 RSS",
+  xueqiu_web: "雪球网页"
+};
+
+function sourceLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return sourceLabels[raw] || raw.replace(/^rss:/, "").replace(/^reg:/, "监管 / ").replace(/_/g, " ") || "未知来源";
+}
+
+function humanizeSourceText(value: string) {
+  let result = narrativeText(value, value);
+  for (const [key, label] of Object.entries(sourceLabels)) result = result.split(key).join(label);
+  return result
+    .replace(/quotes:/gi, "行情 / ")
+    .replace(/\bnone\b/gi, "未分类")
+    .replace(/\btheme\b/gi, "主题")
+    .replace(/\bdirect\b/gi, "直接")
+    .replace(/\bmarket_derived\b/gi, "市场派生")
+    .replace(/\bllm_first\b/gi, "模型优先")
+    .replace(/\benabled\b/gi, "已启用")
+    .replace(/\bdisabled\b/gi, "已停用")
+    .replace(/\bwarning\b/gi, "预警")
+    .replace(/\berror\b/gi, "错误")
+    .replace(/\bok\b/gi, "正常");
 }
 
 function newsTone(item: ResearchDigestEntry): Tone {
