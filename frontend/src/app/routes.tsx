@@ -1,10 +1,10 @@
-import { AlertTriangle, RefreshCcw } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { WorkbenchLayout, type PageKey } from "../components/okra/WorkbenchLayout";
-import { Button, Card, EmptyState } from "../components/ui";
+import { Card, EmptyState } from "../components/ui";
 import { runLongMemoryAction, runTask } from "../lib/api";
 import {
   useExecutionPageQuery,
@@ -168,15 +168,12 @@ function WorkbenchShell() {
       fundCode={pageKey === "fundDetail" ? location.pathname.split("/").pop() : undefined}
     >
       {pageKey !== "fundDetail" ? (
-        <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <div className="mb-4 flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-end sm:gap-4">
           <div>
-            <div className="text-xs font-bold uppercase tracking-normal text-cyan-300">{title.eyebrow}</div>
-            <h1 className="mt-1 text-2xl font-black text-slate-50">{title.title}</h1>
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/80">{title.eyebrow}</div>
+            <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-50">{title.title}</h1>
           </div>
-          <Button variant="secondary" className="gap-2" onClick={() => void refreshAll()} disabled={shellQuery.isFetching}>
-            <RefreshCcw className="h-4 w-4" />
-            {shellQuery.isFetching ? "刷新中" : "刷新"}
-          </Button>
+          <div className="text-xs text-slate-500">{shellQuery.isFetching ? "同步中" : `报告日期 ${selectedDate || "暂无"}`}</div>
         </div>
       ) : null}
       {error ? (

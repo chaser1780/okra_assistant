@@ -1,4 +1,4 @@
-import { SendHorizontal, Sparkles, Square } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, SendHorizontal, Sparkles, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { askCopilot } from "../../lib/api";
 import type { CopilotMessage, CopilotResponse } from "../../lib/types";
@@ -24,11 +24,15 @@ function newMessageId() {
 }
 
 export function CopilotPanel({
+  open,
+  onToggle,
   context,
   page,
   selectedDate,
   fundCode
 }: {
+  open: boolean;
+  onToggle: () => void;
   context: string;
   page: string;
   selectedDate?: string;
@@ -86,12 +90,31 @@ export function CopilotPanel({
   const citations = Array.isArray(lastResult?.citations) ? lastResult.citations : [];
   const retrieval = lastResult?.retrieval;
 
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="hidden h-full w-11 shrink-0 items-start justify-center border-l border-slate-800 bg-slate-950/80 pt-5 text-slate-400 transition hover:bg-slate-900 hover:text-cyan-200 xl:flex"
+        onClick={onToggle}
+        aria-label="展开智能问答"
+        title="展开智能问答"
+      >
+        <PanelRightOpen className="h-4 w-4" />
+      </button>
+    );
+  }
+
   return (
-    <aside className="hidden h-full w-[360px] shrink-0 flex-col border-l border-slate-800 bg-slate-950/70 xl:flex">
+    <aside className="hidden h-full w-[320px] shrink-0 flex-col border-l border-slate-800 bg-slate-950/80 xl:flex">
       <div className="border-b border-slate-800 p-4">
-        <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
           <Sparkles className="h-4 w-4 text-cyan-300" />
           OKRA {ASSISTANT_TITLE}
+          </div>
+          <button type="button" className="rounded-sm p-1.5 text-slate-500 transition hover:bg-slate-900 hover:text-slate-100" onClick={onToggle} aria-label="收起智能问答" title="收起智能问答">
+            <PanelRightClose className="h-4 w-4" />
+          </button>
         </div>
         <p className="mt-2 text-xs leading-5 text-slate-500">{context}</p>
       </div>

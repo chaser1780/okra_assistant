@@ -1,16 +1,16 @@
 import type { PageKey } from "../components/okra/WorkbenchLayout";
 
 export const pageTitles: Record<PageKey, { eyebrow: string; title: string }> = {
-  today: { eyebrow: "OKRA", title: "长期记忆投资工作台" },
-  portfolio: { eyebrow: "Portfolio", title: "组合与持仓" },
-  execution: { eyebrow: "Execution", title: "实际执行同步" },
-  research: { eyebrow: "Research", title: "研究建议看板" },
-  intelligence: { eyebrow: "Intelligence", title: "资讯与情绪面板" },
-  realtime: { eyebrow: "Realtime", title: "实时估值监控" },
-  review: { eyebrow: "Memory", title: "长期记忆与复盘" },
-  shadowReview: { eyebrow: "Shadow Review", title: "影子决策只读审查" },
-  system: { eyebrow: "System", title: "系统运行状态" },
-  fundDetail: { eyebrow: "Fund", title: "基金详情" }
+  today: { eyebrow: "总览 / OVERVIEW", title: "今日决策总览" },
+  portfolio: { eyebrow: "资产 / ASSETS", title: "组合与持仓" },
+  execution: { eyebrow: "资产 / EXECUTION", title: "交易执行台" },
+  research: { eyebrow: "研究 / RESEARCH", title: "研究建议" },
+  intelligence: { eyebrow: "研究 / INTELLIGENCE", title: "市场情报" },
+  realtime: { eyebrow: "研究 / REALTIME", title: "实时估值" },
+  review: { eyebrow: "审计 / MEMORY", title: "策略记忆" },
+  shadowReview: { eyebrow: "审计 / SHADOW", title: "影子审查" },
+  system: { eyebrow: "运行 / RUNTIME", title: "运行中心" },
+  fundDetail: { eyebrow: "基金 / FUND DETAIL", title: "基金详情" }
 };
 
 export function pageKeyFromPath(pathname: string): PageKey {
