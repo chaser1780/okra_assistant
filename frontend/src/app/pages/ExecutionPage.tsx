@@ -22,6 +22,7 @@ import type {
 import { signedMoney, text } from "../../lib/format";
 import { cleanPayload, extractPreviewRows, fileToDataUrl, hasValidPreviewIntegrity, operationText, statusText, tradeTitle } from "../../lib/executionSync";
 import { Badge, Button, Card, SectionTitle } from "../../components/ui";
+import { TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
 
 type Props = {
   executionSync: ExecutionSyncPayload;
@@ -356,6 +357,13 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
         <Metric title="同步报告" value={executionSync.counts.reports ?? 0} body="截图或快照更新真实仓位后的记录" />
       </section>
 
+      <TerminalPanel title="执行状态轨道" meta={`UPDATED ${executionSync.updatedAt || "暂无"}`} className="grid grid-cols-2 gap-px bg-slate-800/60 md:grid-cols-4">
+        <ExecutionState label="建议生成" value="已读取" tone="success" />
+        <ExecutionState label="交易录入" value={`${executionSync.counts.trades ?? 0} 笔`} tone="info" />
+        <ExecutionState label="待确认" value={`${executionSync.counts.pending ?? 0} 笔`} tone={executionSync.counts.pending ? "warning" : "success"} />
+        <ExecutionState label="真实落仓" value={`${executionSync.counts.reports ?? 0} 份同步`} tone="accent" />
+      </TerminalPanel>
+
       {message ? <div className="rounded-md border border-cyan-500/30 bg-cyan-950/25 px-4 py-3 text-sm text-cyan-100">{message}</div> : null}
 
       <section className="grid grid-cols-12 gap-4">
@@ -663,6 +671,10 @@ function PreviewSummary({
       ))}
     </div>
   );
+}
+
+function ExecutionState({ label, value, tone }: { label: string; value: string; tone: "success" | "warning" | "info" | "accent" }) {
+  return <div className="bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className="mt-2 flex items-center justify-between gap-2 text-sm font-semibold text-slate-200"><span>{value}</span><TerminalState label={tone === "warning" ? "待确认" : "正常"} tone={tone} /></div></div>;
 }
 
 function FundCandidate({

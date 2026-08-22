@@ -4,6 +4,7 @@ import type { LongMemoryPayload, LongMemoryRecord, MemoryAction, ReviewPayload, 
 import { lines } from "../../lib/format";
 import { domainLabel, entityLabel, evidencePathLabel, memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { TerminalPanel } from "../../components/okra/TerminalChrome";
 
 type TabKey = "fund" | "market" | "execution" | "pending";
 
@@ -67,6 +68,15 @@ export function ReviewPage({
           <MetricCard key={metric.title} {...metric} />
         ))}
       </div>
+      <TerminalPanel title="记忆生命周期" meta="候选 → 观察 → 策略 → 永久" className="p-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <LifecycleNode label="候选" value={longMemory.counts.pending ?? 0} tone="warning" />
+          <LifecycleNode label="观察" value={review.metrics.find((item) => item.title === "待确认策略")?.value ?? "0"} tone="info" />
+          <LifecycleNode label="策略" value={review.metrics.find((item) => item.title === "战略规则")?.value ?? "0"} tone="accent" />
+          <LifecycleNode label="永久" value={review.metrics.find((item) => item.title === "永久规则")?.value ?? "0"} tone="success" />
+          <LifecycleNode label="审计状态" value={trust?.trustedForLearning ? "通过" : "阻断"} tone={trust?.trustedForLearning ? "success" : "danger"} />
+        </div>
+      </TerminalPanel>
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-3">
@@ -154,6 +164,10 @@ export function ReviewPage({
       </Card>
     </div>
   );
+}
+
+function LifecycleNode({ label, value, tone }: { label: string; value: string | number; tone: Tone }) {
+  return <div className="border border-slate-800 bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className={`metric-number mt-2 text-xl font-semibold ${tone === "success" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : tone === "warning" ? "text-amber-300" : "text-cyan-200"}`}>{value}</div></div>;
 }
 
 function CountLine({ label, value, tone = "neutral" }: { label: string; value: number; tone?: Tone }) {
