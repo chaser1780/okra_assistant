@@ -15,6 +15,8 @@ import type { PortfolioItem, PortfolioPayload } from "../../lib/types";
 import { asNullableNumber, asNumber, compactMoney, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { DrawdownChart, RiskScatterChart, TrendChart } from "../../components/okra/ChartPrimitives";
+import { ChartFrame, TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
 
 const palette = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#818cf8", "#2dd4bf", "#a78bfa", "#f472b6"];
 
@@ -59,32 +61,38 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
         <MetricCard title="现金" value={portfolio.cashText} body="用于下一次再平衡或补仓" tone="success" />
       </div>
 
-      <section className="grid grid-cols-12 gap-4">
-        <Card className="col-span-12 p-4 xl:col-span-7">
-          <SectionTitle title="组合资产走势" meta="来自 portfolio_state 历史快照" />
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={portfolio.history.totalValue} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="assetValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.45} />
-                    <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={24} />
-                <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={compactMoney} />
-                <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8 }} formatter={(value) => [compactMoney(value), "总资产"]} />
-                <Area type="monotone" dataKey="value" stroke="#22d3ee" strokeWidth={2} fill="url(#assetValue)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+      <TerminalPanel title="组合摘要" meta={`SNAPSHOT / ${portfolio.asOfDate || "暂无日期"}`}>
+        <div className="grid grid-cols-2 gap-px bg-slate-800/60 lg:grid-cols-5">
+          <TerminalReadout label="组合净值" value={portfolio.totalValueText} />
+          <TerminalReadout label="持有盈亏" value={portfolio.holdingPnlText} tone={pnlTone(portfolio.holdingPnl)} />
+          <TerminalReadout label="当前回撤" value={portfolio.riskSnapshot?.currentDrawdownPct == null ? "暂无" : `${portfolio.riskSnapshot.currentDrawdownPct.toFixed(2)}%`} tone="danger" />
+          <TerminalReadout label="最大回撤" value={portfolio.riskSnapshot?.maxDrawdownPct == null ? "暂无" : `${portfolio.riskSnapshot.maxDrawdownPct.toFixed(2)}%`} tone="danger" />
+          <TerminalReadout label="现金缓冲" value={portfolio.riskSnapshot?.cashWeightPct == null ? "暂无" : `${portfolio.riskSnapshot.cashWeightPct.toFixed(2)}%`} tone="success" />
+        </div>
+      </TerminalPanel>
 
-        <Card className="col-span-12 p-4 xl:col-span-5">
+      <section className="grid grid-cols-12 gap-4">
+        <ChartFrame title="组合净值 / NORMALIZED" meta="portfolio_state 历史快照" height="h-80" className="col-span-12 xl:col-span-8">
+          <TrendChart data={portfolio.history.totalValueNormalized ?? portfolio.history.totalValue} benchmark={portfolio.benchmark?.normalized ?? []} yFormatter={(value) => value.toFixed(2)} />
+        </ChartFrame>
+
+        <Card className="col-span-12 p-4 xl:col-span-4">
           <SectionTitle title="持仓风格分布" meta="按当前市值汇总" />
           <AllocationBars items={portfolio.styleAllocation} />
+          <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-xs text-slate-500">
+            <span>基准状态</span>
+            <TerminalState label={portfolio.benchmark?.status === "available" ? "已配置" : "未配置组合基准"} tone={portfolio.benchmark?.status === "available" ? "success" : "neutral"} />
+          </div>
         </Card>
+      </section>
+
+      <section className="grid grid-cols-12 gap-4">
+        <ChartFrame title="回撤 / DRAWDOWN" meta={`最大 ${portfolio.riskSnapshot?.maxDrawdownPct?.toFixed(2) ?? "暂无"}%`} height="h-56" className="col-span-12 xl:col-span-7">
+          <DrawdownChart data={portfolio.history.drawdownPct ?? []} />
+        </ChartFrame>
+        <ChartFrame title="持仓权重 VS 异常分数" meta="点击散点查看基金" height="h-56" className="col-span-12 xl:col-span-5">
+          <RiskScatterChart points={portfolio.riskScatter ?? []} />
+        </ChartFrame>
       </section>
 
       <section className="grid grid-cols-12 gap-4">
@@ -215,6 +223,11 @@ function AllocationBars({ items }: { items: PortfolioPayload["styleAllocation"] 
       {items.length > visible.length ? <div className="pt-1 text-xs text-slate-600">其余 {items.length - visible.length} 个风格已收起</div> : null}
     </div>
   );
+}
+
+function TerminalReadout({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "success" | "danger" | "warning" }) {
+  const color = tone === "success" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : tone === "warning" ? "text-amber-300" : "text-slate-100";
+  return <div className="bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className={`metric-number mt-2 text-lg font-semibold ${color}`}>{value}</div></div>;
 }
 
 function PortfolioDetail({ item, onOpenFundDetail }: { item: PortfolioItem; onOpenFundDetail: (fundCode: string) => void }) {

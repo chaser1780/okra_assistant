@@ -3,7 +3,9 @@ import { ArrowRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { FundResearchCard, LongMemoryRecord, TodayPagePayload, Tone } from "../../lib/types";
 import { compactMoney, lines, text } from "../../lib/format";
-import { Badge, Button, Card, MetricCard, SectionTitle } from "../../components/ui";
+import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { DrawdownChart, RiskScatterChart, TrendChart } from "../../components/okra/ChartPrimitives";
+import { ChartFrame, TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
 import { actionLabel, memoryText, memoryTitle, narrativeText, statusLabel, valueLabel } from "../../lib/display";
 import { getTodayAnalysis, getTodayAnalysisSystem, pickAnalysisValue } from "../../lib/todayAnalysis";
 import { routeForPage } from "../routeMeta";
@@ -95,6 +97,28 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
             <MetricCard key={metric.title} {...metric} />
           ))}
         </div>
+      </section>
+
+      <section className="grid grid-cols-12 gap-4">
+        <ChartFrame title="组合净值 / COMMAND VIEW" meta={`SNAPSHOT ${snapshot.portfolio.asOfDate || snapshot.selectedDate}`} height="h-72" className="col-span-12 xl:col-span-8">
+          <TrendChart data={snapshot.portfolio.history.totalValueNormalized ?? snapshot.portfolio.history.totalValue} benchmark={snapshot.portfolio.benchmark?.normalized ?? []} yFormatter={(value) => value.toFixed(2)} />
+        </ChartFrame>
+        <TerminalPanel title="今日动作 / ACTION STREAM" meta={`${fundTickets.length} 项`} className="col-span-12 p-0 xl:col-span-4">
+          <div className="max-h-72 overflow-auto p-3">
+            {fundTickets.length ? fundTickets.slice(0, 7).map((ticket, index) => (
+              <div key={ticket.ticketId} className="flex items-start gap-3 border-b border-slate-800/70 py-3 last:border-b-0">
+                <span className="mt-1 text-[10px] tabular-nums text-slate-600">{String(index + 1).padStart(2, "0")}</span>
+                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold text-slate-200">{ticket.fundName}</div><div className="mt-1 line-clamp-2 text-[11px] text-slate-500">{narrativeText(ticket.thesis)}</div></div>
+                <TerminalState label={actionLabel(ticket.action)} tone={actionTone(ticket.action) === "danger" ? "danger" : actionTone(ticket.action) === "accent" ? "accent" : "neutral"} />
+              </div>
+            )) : <EmptyState title="暂无动作轨迹" body="运行今日分析后，这里会显示基金建议和执行状态。" />}
+          </div>
+        </TerminalPanel>
+      </section>
+
+      <section className="grid grid-cols-12 gap-4">
+        <ChartFrame title="回撤 / RISK DEPTH" meta="历史快照" height="h-52" className="col-span-12 xl:col-span-7"><DrawdownChart data={snapshot.portfolio.history.drawdownPct ?? []} /></ChartFrame>
+        <ChartFrame title="风险暴露 / WEIGHT VS ANOMALY" meta="权重 × 异常" height="h-52" className="col-span-12 xl:col-span-5"><RiskScatterChart points={snapshot.portfolio.riskScatter ?? []} /></ChartFrame>
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
