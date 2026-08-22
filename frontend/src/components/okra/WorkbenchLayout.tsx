@@ -5,6 +5,7 @@ import type { SystemPayload } from "../../lib/types";
 import { getTodayAnalysisRuntime, getTodayAnalysisSystem, runtimeStatusMeta } from "../../lib/todayAnalysis";
 import { Button } from "../ui";
 import { CopilotPanel } from "./CopilotPanel";
+import { TerminalFooter, TerminalRail } from "./TerminalChrome";
 
 export type PageKey = "today" | "portfolio" | "execution" | "research" | "intelligence" | "realtime" | "review" | "shadowReview" | "system" | "fundDetail";
 
@@ -105,7 +106,8 @@ export function WorkbenchLayout({
   }, [contextualCopilot]);
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-[hsl(var(--surface-0))] xl:flex-row">
+    <div className="terminal-grid-shell flex h-full w-full min-w-0 flex-col overflow-hidden xl:flex-row">
+      <div className="terminal-scanline" />
       <aside className="flex shrink-0 flex-col border-b border-slate-800 bg-[hsl(var(--surface-0))] p-3 xl:h-full xl:w-[220px] xl:border-b-0 xl:border-r xl:p-4">
         <div className="mb-4 xl:mb-7">
           <div className="flex items-center gap-2">
@@ -159,6 +161,7 @@ export function WorkbenchLayout({
         </div>
       </aside>
       <main className="w-full min-w-0 flex-1 overflow-auto overflow-x-hidden p-3 xl:p-5">
+        <TerminalRail selectedDate={selectedDate} status={systemRunning ? "RUNNING" : "LIVE"} freshness={isHistoricalView ? "SNAPSHOT" : "LIVE"} />
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/90 pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
             <span className="font-bold uppercase tracking-[0.16em] text-slate-500">数据日期</span>
@@ -194,6 +197,7 @@ export function WorkbenchLayout({
           </div>
         </div>
         {children}
+        <TerminalFooter status={systemRunning ? "RUNNING" : "NORMAL"} />
       </main>
       <CopilotPanel open={copilotOpen} onToggle={() => setCopilotOpen((current) => !current)} context={context} page={page} selectedDate={selectedDate} fundCode={fundCode} />
     </div>
