@@ -63,6 +63,37 @@ export type AllocationRow = {
   weightText: string;
 };
 
+export type AllocationHistoryPoint = {
+  date: string;
+  values: Array<{ name: string; weight: number | null }>;
+};
+
+export type PortfolioRiskSnapshot = {
+  currentDrawdownPct: number | null;
+  maxDrawdownPct: number | null;
+  cashWeightPct: number | null;
+  topHoldingWeightPct: number | null;
+  topStyleWeightPct: number | null;
+  asOfDate: string;
+};
+
+export type PortfolioRiskPoint = {
+  fundCode: string;
+  fundName: string;
+  weightPct: number | null;
+  anomalyScore: number | null;
+  holdingPnl: number | null;
+  styleGroup: string;
+};
+
+export type PortfolioBenchmark = {
+  status: "available" | "not_configured" | "missing_data" | string;
+  name?: string;
+  key?: string;
+  normalized: ChartPoint[];
+  excessReturnPct: ChartPoint[];
+};
+
 export type PortfolioPayload = {
   asOfDate: string;
   totalValue: number | null;
@@ -79,7 +110,15 @@ export type PortfolioPayload = {
     totalValue: ChartPoint[];
     holdingPnl: ChartPoint[];
     holdingReturnPct: ChartPoint[];
+    totalValueNormalized?: ChartPoint[];
+    dailyReturnPct?: ChartPoint[];
+    drawdownPct?: ChartPoint[];
+    styleAllocationHistory?: AllocationHistoryPoint[];
+    roleAllocationHistory?: AllocationHistoryPoint[];
   };
+  riskSnapshot?: PortfolioRiskSnapshot;
+  riskScatter?: PortfolioRiskPoint[];
+  benchmark?: PortfolioBenchmark;
   items: PortfolioItem[];
 };
 
@@ -732,6 +771,14 @@ export type TradeMarker = {
   source: string;
 };
 
+export type DecisionMarker = {
+  date: string;
+  type: "buy" | "sell" | "dca" | "hold" | "rule" | string;
+  label: string;
+  amount?: number | null;
+  source: string;
+};
+
 export type FundLongMemoryPayload = {
   fund: LongMemoryRecord[];
   execution: LongMemoryRecord[];
@@ -760,12 +807,20 @@ export type FundDetailPayload = {
     holdingPnl: ChartPoint[];
     holdingReturnPct: ChartPoint[];
     holdingUnits: ChartPoint[];
+    benchmarkNormalized?: ChartPoint[];
+    benchmarkDayChangePct?: ChartPoint[];
+    drawdownPct?: ChartPoint[];
+    excessReturnPct?: ChartPoint[];
+    decisionMarkers?: DecisionMarker[];
   };
   performance: {
     stageReturn: string;
     navSource: string;
     proxySource: string;
     proxyName: string;
+    benchmarkName?: string;
+    benchmarkKey?: string;
+    benchmarkStatus?: string;
   };
   tradeMarkers: TradeMarker[];
   longMemory: FundLongMemoryPayload;

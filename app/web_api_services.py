@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from common import timestamp_now
+from common import is_trading_day, timestamp_now
 from execution_sync import (
     apply_saved_reconciliation,
     build_execution_sync_payload,
@@ -32,12 +32,20 @@ from web_api_format import markers as _markers
 from web_api_format import series as _series
 from web_api_format import to_jsonable as _to_jsonable
 from workbench_history import (
+    SeriesPoint,
+    allocation_history,
+    cap_points,
+    collect_benchmark_history,
     collect_estimate_history,
     collect_holding_history,
     collect_portfolio_history,
     collect_proxy_history,
     collect_quote_history,
     collect_trade_markers,
+    daily_return_series,
+    drawdown_series,
+    load_benchmark_mapping,
+    normalized_series,
     stage_return,
 )
 from workbench_state import WorkbenchStateService
@@ -92,6 +100,42 @@ def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
         value = str(item.get(key, "") or "unknown")
         counts[value] = counts.get(value, 0) + 1
     return counts
+
+
+def _cap_history_payload(payload: dict[str, Any], end_date: str) -> dict[str, Any]:
+    capped: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, list) and value and isinstance(value[0], SeriesPoint):
+            capped[key] = cap_points(value, end_date)
+        else:
+            capped[key] = value
+    return capped
+
+
+def _excess_series(fund_points: list[SeriesPoint], benchmark_points: list[SeriesPoint]) -> list[SeriesPoint]:
+    benchmark_by_date = {point.date: point.value for point in benchmark_points}
+    return [
+        SeriesPoint(point.date, round(point.value - benchmark_by_date[point.date], 4))
+        for point in fund_points
+        if point.date in benchmark_by_date
+    ]
+
+
+def _decision_markers(research_item: dict[str, Any] | None, trade_markers: list[dict[str, Any]], selected_date: str) -> list[dict[str, Any]]:
+    markers = list(trade_markers)
+    if research_item:
+        action = str(research_item.get("validated_action") or research_item.get("action") or "hold")
+        if action:
+            markers.append(
+                {
+                    "date": selected_date,
+                    "type": "dca" if action in {"planned_dca", "scheduled_dca"} else "hold" if action in {"hold", "locked", "not_applicable"} else "sell" if action in {"sell", "reduce", "switch_out"} else "buy",
+                    "label": str(research_item.get("_action_label") or action),
+                    "amount": research_item.get("validated_amount") or research_item.get("amount"),
+                    "source": "validated_advice",
+                }
+            )
+    return sorted(markers, key=lambda item: str(item.get("date", "")))
 
 
 def _positive_number(payload: dict[str, Any], *keys: str) -> bool:
@@ -191,7 +235,7 @@ class TaskController:
                 "logPath": str(log_path),
             }
 
-    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None) -> dict[str, Any]:
+    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None, automatic: bool = False) -> dict[str, Any]:
         with self._run_lock:
             run_date = _coerce_task_date(run_date)
             if kind == "daily":
@@ -206,6 +250,20 @@ class TaskController:
                 task_name = "today_analysis"
             elif kind == "realtime":
                 run_date = today_str()
+                if automatic and not is_trading_day(self.home, run_date):
+                    return {
+                        "ok": True,
+                        "task": "realtime",
+                        "pid": 0,
+                        "runId": "",
+                        "runDate": run_date,
+                        "force": False,
+                        "logPath": "",
+                        "portfolioAlignment": {},
+                        "alreadyRunning": False,
+                        "skipped": True,
+                        "reason": "non_trading_day",
+                    }
                 if self._realtime_process is not None and self._realtime_process.poll() is None:
                     return {
                         "ok": True,
@@ -488,8 +546,23 @@ class PageService:
         holding_history = collect_holding_history(self.home, fund_code, range_label)
         estimate_history = collect_estimate_history(self.home, fund_code, range_label)
         trade_markers = collect_trade_markers(self.home, fund_code, range_label)
+        end_date = snapshot.selected_date
+        quote_history = _cap_history_payload(quote_history, end_date)
+        proxy_history = _cap_history_payload(proxy_history, end_date)
+        holding_history = _cap_history_payload(holding_history, end_date)
+        estimate_history = cap_points(estimate_history, end_date)
+        trade_markers = [marker for marker in trade_markers if str(marker.date or "")[:10] <= end_date]
         nav_points = quote_history.get("nav", []) or []
+        benchmark_mapping = load_benchmark_mapping(self.home, fund_code)
+        benchmark_key = str(benchmark_mapping.get("benchmark_key") or "").strip()
+        benchmark_history = collect_benchmark_history(self.home, benchmark_key, range_label) if benchmark_key else {"normalized": [], "day_change_pct": [], "name": ""}
+        benchmark_points = cap_points(benchmark_history.get("normalized", []) or [], end_date)
+        benchmark_day_points = cap_points(benchmark_history.get("change_pct", []) or [], end_date)
+        excess_points = _excess_series(quote_history.get("nav_normalized", []) or [], benchmark_points)
+        benchmark_status = "available" if benchmark_points else "missing_data" if benchmark_key else "not_configured"
         planned_dca_markers = self._planned_dca_markers(fund_code, portfolio_item or {}, snapshot.dates, range_label)
+        planned_dca_markers = [item for item in planned_dca_markers if str(item.get("date", ""))[:10] <= end_date]
+        decision_markers = _decision_markers(research_item, _markers(trade_markers) + planned_dca_markers, end_date)
         fund_name = (
             (portfolio_item or {}).get("fundName")
             or (realtime_item or {}).get("fund_name")
@@ -518,12 +591,20 @@ class PageService:
                 "holdingPnl": _series(holding_history.get("holding_pnl", [])),
                 "holdingReturnPct": _series(holding_history.get("holding_return_pct", [])),
                 "holdingUnits": _series(holding_history.get("holding_units", [])),
+                "benchmarkNormalized": _series(benchmark_points),
+                "benchmarkDayChangePct": _series(benchmark_day_points),
+                "drawdownPct": _series(drawdown_series(nav_points)),
+                "excessReturnPct": _series(excess_points),
+                "decisionMarkers": decision_markers,
             },
             "performance": {
                 "stageReturn": stage_return(nav_points),
                 "navSource": quote_history.get("source", ""),
                 "proxySource": proxy_history.get("source", ""),
                 "proxyName": proxy_history.get("name", ""),
+                "benchmarkName": benchmark_history.get("name", "") or benchmark_mapping.get("benchmark_name", ""),
+                "benchmarkKey": benchmark_key,
+                "benchmarkStatus": benchmark_status,
             },
             "tradeMarkers": sorted(_markers(trade_markers) + planned_dca_markers, key=lambda item: item.get("date", "")),
             "longMemory": self.fund_long_memory_payload(fund_code),
@@ -622,7 +703,40 @@ class PageService:
                 }
             )
         items.sort(key=lambda item: float(item.get("amount") or 0), reverse=True)
-        history = collect_portfolio_history(self.home, "成立以来")
+        history_end_date = str(portfolio.get("as_of_date") or state.get("portfolio_date") or "")
+        history = collect_portfolio_history(self.home, "成立以来", end_date=history_end_date)
+        total_points = history.get("total_value", []) or []
+        normalized_points = normalized_series(total_points)
+        daily_points = daily_return_series(total_points)
+        drawdown_points = drawdown_series(total_points)
+        style_history = allocation_history(self.home, "style_group", "成立以来", end_date=history_end_date)
+        role_history = allocation_history(self.home, "role", "成立以来", end_date=history_end_date)
+        realtime = state.get("live_realtime", {}) or state.get("realtime", {}) or {}
+        realtime_map = {str(item.get("fund_code") or ""): item for item in realtime.get("items", []) or []}
+        risk_scatter = []
+        for item in items:
+            realtime_item = realtime_map.get(str(item.get("fundCode") or ""), {})
+            weight = float(item.get("weight") or 0)
+            if abs(weight) <= 1:
+                weight *= 100.0
+            risk_scatter.append(
+                {
+                    "fundCode": item.get("fundCode", ""),
+                    "fundName": item.get("fundName", ""),
+                    "weightPct": round(weight, 4),
+                    "anomalyScore": round(float(realtime_item.get("anomaly_score", 0) or 0), 4),
+                    "holdingPnl": round(float(item.get("holdingPnl") or 0), 4),
+                    "styleGroup": item.get("styleGroup") or "未归类",
+                }
+            )
+        top_style_weight = max((float(row.get("weight") or 0) for row in self.group_items(items, "styleGroup", total_value)), default=0.0)
+        top_holding_weight = max(
+            ((float(item.get("weight") or 0) * 100.0 if abs(float(item.get("weight") or 0)) <= 1 else float(item.get("weight") or 0)) for item in items),
+            default=None,
+        )
+        current_drawdown = drawdown_points[-1].value if drawdown_points else None
+        max_drawdown = min((point.value for point in drawdown_points), default=None)
+        cash_weight = float(cash or 0) / float(total_value or 1) * 100.0 if total_value else None
         return {
             "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             "totalValue": total_value,
@@ -639,7 +753,22 @@ class PageService:
                 "totalValue": _series(history.get("total_value", [])),
                 "holdingPnl": _series(history.get("holding_pnl", [])),
                 "holdingReturnPct": _series(history.get("holding_return_pct", [])),
+                "totalValueNormalized": _series(normalized_points),
+                "dailyReturnPct": _series(daily_points),
+                "drawdownPct": _series(drawdown_points),
+                "styleAllocationHistory": style_history,
+                "roleAllocationHistory": role_history,
             },
+            "riskSnapshot": {
+                "currentDrawdownPct": current_drawdown,
+                "maxDrawdownPct": max_drawdown,
+                "cashWeightPct": round(cash_weight, 4) if cash_weight is not None else None,
+                "topHoldingWeightPct": round(top_holding_weight, 4) if top_holding_weight is not None else None,
+                "topStyleWeightPct": round(top_style_weight, 4),
+                "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
+            },
+            "riskScatter": risk_scatter,
+            "benchmark": {"status": "not_configured", "normalized": [], "excessReturnPct": []},
             "items": items,
         }
 

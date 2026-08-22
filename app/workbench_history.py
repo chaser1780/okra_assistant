@@ -40,6 +40,76 @@ class TradeMarker:
     fund_name: str
 
 
+def normalized_series(points: list[SeriesPoint], base: float = 100.0) -> list[SeriesPoint]:
+    """Return a normalized copy without mutating the source history."""
+    return _normalize(points, base=base)
+
+
+def daily_return_series(points: list[SeriesPoint]) -> list[SeriesPoint]:
+    if not points:
+        return []
+    result: list[SeriesPoint] = []
+    previous: float | None = None
+    for point in points:
+        if previous in (None, 0):
+            result.append(SeriesPoint(point.date, 0.0))
+        else:
+            result.append(SeriesPoint(point.date, round((point.value / previous - 1.0) * 100.0, 4)))
+        previous = point.value
+    return result
+
+
+def drawdown_series(points: list[SeriesPoint]) -> list[SeriesPoint]:
+    if not points:
+        return []
+    result: list[SeriesPoint] = []
+    peak: float | None = None
+    for point in points:
+        peak = point.value if peak is None else max(peak, point.value)
+        drawdown = ((point.value / peak) - 1.0) * 100.0 if peak else 0.0
+        result.append(SeriesPoint(point.date, round(drawdown, 4)))
+    return result
+
+
+def allocation_history(home: Path, key: str, range_label: str = "成立以来", end_date: str | None = None) -> list[dict]:
+    """Build date-aligned allocation weights from immutable portfolio snapshots."""
+    rows: list[dict] = []
+    paths = sorted((home / "db" / "portfolio_state" / "snapshots").glob("*.json"))
+    for path in paths:
+        payload = read_json(path, {})
+        total = float(payload.get("total_value", 0) or 0)
+        funds = payload.get("funds", []) or []
+        grouped: dict[str, float] = {}
+        for fund in funds:
+            label = str(fund.get(key) or "未归类")
+            grouped[label] = grouped.get(label, 0.0) + float(fund.get("current_value", 0) or 0)
+        values = [
+            {"name": label, "weight": round(value / total * 100.0, 4) if total else 0.0}
+            for label, value in sorted(grouped.items(), key=lambda item: item[1], reverse=True)
+        ]
+        rows.append({"date": path.stem[:10], "values": values})
+    if end_date:
+        cutoff = _parse_date(end_date)
+        if cutoff is not None:
+            rows = [row for row in rows if (_parse_date(row["date"]) or cutoff) <= cutoff]
+    if range_label not in RANGE_DAYS or RANGE_DAYS[range_label] is None or not rows:
+        return rows
+    end = _parse_date(rows[-1]["date"])
+    if end is None:
+        return rows
+    start = end - timedelta(days=RANGE_DAYS[range_label])
+    return [row for row in rows if (_parse_date(row["date"]) or end) >= start]
+
+
+def cap_points(points: list[SeriesPoint], end_date: str | None) -> list[SeriesPoint]:
+    if not end_date:
+        return points
+    cutoff = _parse_date(end_date)
+    if cutoff is None:
+        return points
+    return [point for point in points if (_parse_date(point.date) or cutoff) <= cutoff]
+
+
 def _parse_date(text: str) -> date | None:
     try:
         return date.fromisoformat(text[:10])
@@ -193,7 +263,7 @@ def collect_estimate_history(home: Path, fund_code: str, range_label: str = "成
     return _filter_points(points, range_label)
 
 
-def collect_portfolio_history(home: Path, range_label: str = "成立以来") -> dict:
+def collect_portfolio_history(home: Path, range_label: str = "成立以来", end_date: str | None = None) -> dict:
     total_value: list[SeriesPoint] = []
     pnl: list[SeriesPoint] = []
     return_pct: list[SeriesPoint] = []
@@ -207,10 +277,13 @@ def collect_portfolio_history(home: Path, range_label: str = "成立以来") -> 
         pnl.append(SeriesPoint(path.stem[:10], current_pnl))
         return_pct.append(SeriesPoint(path.stem[:10], current_return))
     total_value = _filter_points(total_value, range_label)
+    total_value = cap_points(total_value, end_date)
+    pnl = cap_points(_filter_points(pnl, range_label), end_date)
+    return_pct = cap_points(_filter_points(return_pct, range_label), end_date)
     return {
         "total_value": total_value,
-        "holding_pnl": _filter_points(pnl, range_label),
-        "holding_return_pct": _filter_points(return_pct, range_label),
+        "holding_pnl": pnl,
+        "holding_return_pct": return_pct,
         "total_value_normalized": _normalize(total_value),
     }
 

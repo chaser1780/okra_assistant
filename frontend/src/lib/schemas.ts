@@ -68,6 +68,27 @@ const allocationRowSchema = z.object({
   weightText: z.string()
 }).passthrough();
 
+const allocationHistoryPointSchema = z.object({
+  date: z.string(),
+  values: z.array(z.object({ name: z.string(), weight: financialNumberSchema })).catch([])
+}).passthrough();
+const portfolioRiskSnapshotSchema = z.object({
+  currentDrawdownPct: financialNumberSchema,
+  maxDrawdownPct: financialNumberSchema,
+  cashWeightPct: financialNumberSchema,
+  topHoldingWeightPct: financialNumberSchema,
+  topStyleWeightPct: financialNumberSchema,
+  asOfDate: z.string().catch("")
+}).passthrough();
+const portfolioRiskPointSchema = z.object({
+  fundCode: z.string(),
+  fundName: z.string(),
+  weightPct: financialNumberSchema,
+  anomalyScore: financialNumberSchema,
+  holdingPnl: financialNumberSchema,
+  styleGroup: z.string()
+}).passthrough();
+
 export const dashboardSchema = z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
@@ -96,8 +117,22 @@ export const portfolioSchema = z.object({
   history: z.object({
     totalValue: z.array(chartPointSchema),
     holdingPnl: z.array(chartPointSchema),
-    holdingReturnPct: z.array(chartPointSchema)
+    holdingReturnPct: z.array(chartPointSchema),
+    totalValueNormalized: z.array(chartPointSchema).optional(),
+    dailyReturnPct: z.array(chartPointSchema).optional(),
+    drawdownPct: z.array(chartPointSchema).optional(),
+    styleAllocationHistory: z.array(allocationHistoryPointSchema).optional(),
+    roleAllocationHistory: z.array(allocationHistoryPointSchema).optional()
   }).passthrough(),
+  riskSnapshot: portfolioRiskSnapshotSchema.optional(),
+  riskScatter: z.array(portfolioRiskPointSchema).optional(),
+  benchmark: z.object({
+    status: z.string(),
+    name: z.string().optional(),
+    key: z.string().optional(),
+    normalized: z.array(chartPointSchema),
+    excessReturnPct: z.array(chartPointSchema)
+  }).passthrough().optional(),
   items: z.array(portfolioItemSchema)
 }).passthrough();
 
@@ -251,7 +286,18 @@ const fundHistorySchema = z.object({
   holdingValue: z.array(chartPointSchema).catch([]),
   holdingPnl: z.array(chartPointSchema).catch([]),
   holdingReturnPct: z.array(chartPointSchema).catch([]),
-  holdingUnits: z.array(chartPointSchema).catch([])
+  holdingUnits: z.array(chartPointSchema).catch([]),
+  benchmarkNormalized: z.array(chartPointSchema).catch([]),
+  benchmarkDayChangePct: z.array(chartPointSchema).catch([]),
+  drawdownPct: z.array(chartPointSchema).catch([]),
+  excessReturnPct: z.array(chartPointSchema).catch([]),
+  decisionMarkers: z.array(z.object({
+    date: z.string(),
+    type: z.string(),
+    label: z.string(),
+    amount: financialNumberSchema.optional(),
+    source: z.string()
+  }).passthrough()).catch([])
 }).passthrough();
 
 const tradeMarkerSchema = z.object({
@@ -284,7 +330,10 @@ export const fundDetailSchema = z.object({
     stageReturn: z.string(),
     navSource: z.string().catch(""),
     proxySource: z.string().catch(""),
-    proxyName: z.string().catch("")
+    proxyName: z.string().catch(""),
+    benchmarkName: z.string().optional(),
+    benchmarkKey: z.string().optional(),
+    benchmarkStatus: z.string().optional()
   }).passthrough(),
   tradeMarkers: z.array(tradeMarkerSchema).catch([]),
   longMemory: fundLongMemorySchema
