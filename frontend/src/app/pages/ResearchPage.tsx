@@ -5,6 +5,7 @@ import { asNullableNumber, asNumber, text } from "../../lib/format";
 import { actionLabel, narrativeText, roleLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Activity, ArrowRight, FileText, Newspaper, RadioTower, Search, ShieldAlert } from "lucide-react";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
 
 export function ResearchPage({ research, onOpenFundDetail }: { research: ResearchPayload; onOpenFundDetail?: (fundCode: string) => void }) {
   const [query, setQuery] = useState("");
@@ -31,6 +32,7 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
           <MetricCard key={metric.title} {...metric} value={narrativeText(metric.value, "0")} body={narrativeText(metric.body, "暂无说明")} />
         ))}
       </div>
+      <ResearchAnalytics cards={cards} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <SourceHealthPanel sourceHealth={research.source_health} />
         <NewsDigestPanel digest={research.news_digest} eventRisks={research.event_risks} />
@@ -97,6 +99,19 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
         </div>
       </Card>
     </div>
+  );
+}
+
+function ResearchAnalytics({ cards }: { cards: FundResearchCard[] }) {
+  const counts = cards.reduce<Record<string, number>>((acc, card) => { const label = actionLabel(card.action); acc[label] = (acc[label] ?? 0) + 1; return acc; }, {});
+  const averageConfidence = cards.length ? cards.reduce((sum, card) => sum + Number(card.confidence || 0), 0) / cards.length : 0;
+  const evidenceCount = cards.reduce((sum, card) => sum + card.evidence.length, 0);
+  return (
+    <TerminalPanel title="研究信号" meta={`${cards.length} 张建议卡`} className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.2fr_1fr_1fr]">
+      <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">动作分布</div><div className="space-y-2">{Object.entries(counts).map(([label, count]) => <div key={label}><div className="mb-1 flex justify-between text-xs"><span className="text-slate-300">{label}</span><span className="tabular-nums text-slate-500">{count}</span></div><div className="h-1.5 bg-slate-900"><div className="h-full bg-cyan-300" style={{ width: `${cards.length ? count / cards.length * 100 : 0}%` }} /></div></div>)}{!cards.length ? <span className="text-xs text-slate-600">暂无动作数据</span> : null}</div></div>
+      <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">置信度</div><div className="metric-number text-3xl font-semibold text-cyan-200">{(averageConfidence * 100).toFixed(0)}%</div><div className="mt-3 h-2 bg-slate-900"><div className="h-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, averageConfidence * 100))}%` }} /></div><div className="mt-2 text-xs text-slate-600">建议卡平均置信度</div></div>
+      <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">证据密度</div><div className="metric-number text-3xl font-semibold text-slate-100">{evidenceCount}</div><div className="mt-2 text-xs text-slate-500">结构化证据</div><div className="mt-3"><TerminalState label={cards.some((card) => card.hasConflict) ? "存在分歧" : "无明显分歧"} tone={cards.some((card) => card.hasConflict) ? "warning" : "success"} /></div></div>
+    </TerminalPanel>
   );
 }
 

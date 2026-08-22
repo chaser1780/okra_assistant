@@ -18,6 +18,8 @@ import { useFundDetailQuery } from "../../lib/workbenchQuery";
 import { asNumber, compactMoney, lines, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, evidencePathLabel, memoryText, memoryTitle, narrativeText, roleLabel, statusLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, SectionTitle } from "../../components/ui";
+import { DrawdownChart, TrendChart } from "../../components/okra/ChartPrimitives";
+import { ChartFrame, TerminalPanel } from "../../components/okra/TerminalChrome";
 
 const ranges = ["近1月", "近3月", "近6月", "近1年", "成立以来"];
 
@@ -80,6 +82,9 @@ export function FundDetailPage({
   const realtime = detail.realtime ?? {};
   const research = detail.research ?? {};
   const analysisDetail = detail.analysisDetail ?? { agentCards: [], agentSummary: {}, stageSummary: {} };
+  const timelineMarkers = detail.history.decisionMarkers?.length
+    ? detail.history.decisionMarkers
+    : detail.tradeMarkers.map((marker) => ({ date: marker.date, type: marker.action, label: actionLabel(marker.action), amount: marker.amount, source: marker.source }));
 
   return (
     <div className="space-y-4">
@@ -132,6 +137,24 @@ export function FundDetailPage({
           <MemoryList records={[...detail.longMemory.rules, ...detail.longMemory.execution].slice(0, 6)} empty="暂无触发的执行纪律。" compact />
         </Card>
       </section>
+
+      <section className="grid grid-cols-12 gap-4">
+        <ChartFrame title="回撤 / DRAWDOWN" meta="相对区间高点" height="h-56" className="col-span-12 xl:col-span-7"><DrawdownChart data={detail.history.drawdownPct ?? []} /></ChartFrame>
+        <ChartFrame title="超额收益 / EXCESS" meta={detail.performance.benchmarkStatus === "available" ? detail.performance.benchmarkName : "基准未配置"} height="h-56" className="col-span-12 xl:col-span-5"><TrendChart data={detail.history.excessReturnPct ?? []} yFormatter={(value) => `${value.toFixed(2)}%`} showArea={false} /></ChartFrame>
+      </section>
+
+      <TerminalPanel title="交易与建议标记" meta="READ-ONLY TIMELINE" className="p-4">
+        <div className="flex flex-wrap gap-3">
+          {timelineMarkers.slice(-12).map((marker) => (
+            <div key={`${marker.date}-${marker.type}-${marker.source}`} className="flex items-center gap-2 border-b border-slate-800/80 pb-2 text-xs">
+              <span className={`h-2 w-2 rounded-full ${marker.type === "sell" ? "bg-emerald-400" : marker.type === "buy" || marker.type === "dca" ? "bg-rose-400" : "bg-cyan-300"}`} />
+              <span className="tabular-nums text-slate-500">{marker.date}</span>
+              <span className="font-semibold text-slate-200">{marker.label}</span>
+            </div>
+          ))}
+          {!timelineMarkers.length ? <span className="text-xs text-slate-600">暂无标记</span> : null}
+        </div>
+      </TerminalPanel>
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-8 p-4">

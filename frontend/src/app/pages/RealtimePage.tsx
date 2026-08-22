@@ -4,6 +4,8 @@ import type { RealtimePayload } from "../../lib/types";
 import { asNumber, lines, signedMoney, signedPct, text } from "../../lib/format";
 import { narrativeText, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { ContributionBars, RiskScatterChart } from "../../components/okra/ChartPrimitives";
+import { TerminalPanel } from "../../components/okra/TerminalChrome";
 
 type RealtimeViewRow = {
   raw: Record<string, unknown>;
@@ -82,6 +84,15 @@ export function RealtimePage({
           <MetricCard key={metric.title} {...metric} body={narrativeText(metric.body, "暂无说明")} value={narrativeText(metric.value, "暂无")} />
         ))}
       </div>
+
+      <section className="grid grid-cols-12 gap-4">
+        <TerminalPanel title="实时收益贡献" meta="按组合影响排序" className="col-span-12 p-0 xl:col-span-7">
+          <div className="h-64 p-3"><ContributionBars points={viewRows.slice(0, 10).map((item) => ({ name: item.code, value: item.pnl }))} /></div>
+        </TerminalPanel>
+        <TerminalPanel title="风险暴露" meta="权重 VS 异常分数" className="col-span-12 p-0 xl:col-span-5">
+          <div className="h-64 p-3"><RiskScatterChart points={viewRows.map((item) => ({ fundCode: item.code, fundName: item.name, weightPct: Number.parseFloat(item.weightText) || 0, anomalyScore: item.anomaly, holdingPnl: item.pnl, styleGroup: item.styleGroup }))} /></div>
+        </TerminalPanel>
+      </section>
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-5 p-4">

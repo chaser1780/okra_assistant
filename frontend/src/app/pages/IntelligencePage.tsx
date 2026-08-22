@@ -7,6 +7,7 @@ import { text } from "../../lib/format";
 import { narrativeText, valueLabel } from "../../lib/display";
 import { openExternalUrl } from "../../lib/api";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { TerminalPanel } from "../../components/okra/TerminalChrome";
 
 export function IntelligencePage({
   intelligence,
@@ -69,6 +70,7 @@ export function IntelligencePage({
         <MetricCard title="文本情绪" value={scoreText(metrics.text_sentiment_score)} body={`热度 ${scoreText(metrics.heat_score)} / 派生 ${scoreText(metrics.derived_sentiment_score)}`} tone={sentimentTone(metrics.text_sentiment_score)} />
         <MetricCard title="来源健康" value={text(metrics.source_count, String(healthItems.length))} body={`需关注 ${text(metrics.warning_source_count, String(warningItems.length))} 个来源`} tone={warningItems.length ? "warning" : "success"} />
       </div>
+      <IntelligenceTimeline importantNews={importantNews} eventRisks={eventRisks} sentiment={sentiment} />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <DigestPanel title="来源分布" icon={<Newspaper className="h-4 w-4" />} rows={breakdownRows(intelligence.source_breakdown)} empty="暂无来源统计" />
@@ -112,6 +114,18 @@ export function IntelligencePage({
       </Card>
       <NewsDetailDrawer item={drawerItem} onClose={closeNews} onOpenFundDetail={onOpenFundDetail} />
     </div>
+  );
+}
+
+function IntelligenceTimeline({ importantNews, eventRisks, sentiment }: { importantNews: ResearchDigestEntry[]; eventRisks: ResearchDigestEntry[]; sentiment: Record<string, unknown> }) {
+  const items = [...importantNews.slice(0, 3), ...eventRisks.slice(0, 2)].sort((a, b) => String(b.published_at ?? "").localeCompare(String(a.published_at ?? "")));
+  const score = Number(sentiment.text_sentiment_score ?? sentiment.sentiment_score ?? 0);
+  const direction = score > 0.15 ? "偏正" : score < -0.15 ? "偏负" : "中性";
+  return (
+    <TerminalPanel title="市场事件流" meta={`${items.length} 条重点事件`} className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="space-y-1">{items.length ? items.map((item, index) => <div key={`${newsId(item)}-${index}`} className="flex items-start gap-3 border-b border-slate-800/70 py-2 last:border-b-0"><span className="mt-1 h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.6)]" /><div className="min-w-0 flex-1"><div className="line-clamp-1 text-xs font-semibold text-slate-200">{narrativeText(item.title, "暂无标题")}</div><div className="mt-1 text-[10px] text-slate-600">{item.published_at ?? "暂无时间"} · {sourceLabel(providerName(item))}</div></div><Badge tone={item.risk_level === "high" || item.severity === "high" ? "danger" : "warning"}>重点</Badge></div>) : <EmptyState title="暂无事件流" body="抓取新闻后会在这里展示重点市场事件。" />}</div>
+      <div className="border-l border-slate-800 pl-4"><div className="text-xs uppercase tracking-[0.14em] text-slate-500">情绪温度</div><div className={`mt-3 text-3xl font-semibold ${score < -0.15 ? "text-rose-300" : score > 0.15 ? "text-emerald-300" : "text-cyan-200"}`}>{direction}</div><div className="mt-2 tabular-nums text-sm text-slate-300">{score.toFixed(2)}</div><div className="mt-4 h-2 bg-slate-900"><div className={`h-full ${score < -0.15 ? "bg-rose-400" : score > 0.15 ? "bg-emerald-400" : "bg-cyan-300"}`} style={{ width: `${Math.min(100, Math.max(4, Math.abs(score) * 100))}%` }} /></div><div className="mt-2 text-[10px] text-slate-600">样本 {text(sentiment.item_count, "0")} 条</div></div>
+    </TerminalPanel>
   );
 }
 
