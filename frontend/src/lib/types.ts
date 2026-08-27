@@ -627,6 +627,7 @@ export type RagRuntimePayload = Record<string, unknown> & {
   agentDefault: Record<string, unknown>;
   profileEvidence: Record<string, unknown>;
   embedding: Record<string, unknown>;
+  hybrid: Record<string, unknown>;
   vectorStore: Record<string, unknown>;
   latestEval: Record<string, unknown>;
   latestTraces: Array<Record<string, unknown>>;

@@ -426,6 +426,7 @@ export const ragRuntimeSchema = z.object({
   agentDefault: ragRuntimeSettingsSchema,
   profileEvidence: ragRuntimeSettingsSchema,
   embedding: ragRuntimeSettingsSchema,
+  hybrid: ragRuntimeSettingsSchema,
   vectorStore: ragRuntimeSettingsSchema,
   latestEval: unknownRecordSchema.catch({}),
   latestTraces: z.array(unknownRecordSchema).catch([]),

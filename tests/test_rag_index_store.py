@@ -58,6 +58,7 @@ class RagIndexStoreTests(unittest.TestCase):
         self.assertIn("chunks", tables)
         self.assertIn("source_manifests", tables)
         self.assertIn("query_traces", tables)
+        self.assertIn("embedding_vectors", tables)
 
     def test_upsert_documents_and_chunks_are_idempotent(self):
         self.assertEqual(1, upsert_documents(self.agent.root, [self._document()]))

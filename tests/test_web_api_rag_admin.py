@@ -102,8 +102,10 @@ class WebApiRagAdminTests(unittest.TestCase):
         payload = api.system_page("2026-05-20")
         rag_runtime = payload["system"]["ragRuntime"]
         self.assertFalse(rag_runtime["enabled"])
+        self.assertFalse(rag_runtime["hybrid"]["enabled"])
         self.assertEqual("full", rag_runtime["statusMode"])
         self.assertEqual(1, rag_runtime["counts"]["documents"])
+        self.assertEqual(0, rag_runtime["counts"]["embedding_vectors"])
 
     def test_shell_page_uses_lightweight_rag_runtime_status(self):
         self._insert_rag_doc()
@@ -135,6 +137,12 @@ class WebApiRagAdminTests(unittest.TestCase):
         trace = api.rag_trace(result["traceId"])
         self.assertTrue(trace["found"])
         self.assertEqual(result["traceId"], trace["traceId"])
+
+        runtime = api.system_page("2026-05-20")["system"]["ragRuntime"]
+        latest_trace = runtime["latestTraces"][0]
+        self.assertEqual(result["traceId"], latest_trace["traceId"])
+        self.assertEqual("lexical_rerank", latest_trace["mode"])
+        self.assertEqual("hybrid_disabled", latest_trace["semantic"]["reason"])
 
     def test_rag_search_requires_explicit_include_execution(self):
         self._insert_execution_doc()
