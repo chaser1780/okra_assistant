@@ -186,6 +186,7 @@ function HealthPanel({ items, warnings }: { items: ResearchDigestEntry[]; warnin
               <div className="min-w-0">
                 <div className="truncate font-semibold text-slate-300">{sourceLabel(providerName(item))}</div>
                 <div className="truncate text-xs text-slate-500">{narrativeText(notes(item), "暂无备注")}</div>
+                {runtimeLabel(item) ? <div className="mt-1 text-[10px] text-amber-300/80">{runtimeLabel(item)}</div> : null}
               </div>
               <Badge tone={text(item.status, "") === "ok" ? "success" : "warning"}>{valueLabel(item.status)}</Badge>
             </div>
@@ -435,6 +436,15 @@ function scoreText(value: unknown): string {
   const numeric = Number(value ?? 0);
   if (!Number.isFinite(numeric)) return "0.00";
   return numeric.toFixed(2);
+}
+
+function runtimeLabel(item: ResearchDigestEntry): string {
+  const runtime = asRecord(item.runtime);
+  const metrics = asRecord(item.metrics);
+  if (Number(metrics.request_skipped) > 0) return `本轮已跳过：${text(metrics.skip_reason, "来源冷却中")}`;
+  if (runtime.circuit_open === true) return `冷却至 ${text(runtime.circuit_open_until, "待恢复")}`;
+  const failures = Number(runtime.consecutive_failures ?? 0);
+  return failures > 0 ? `连续失败 ${failures}` : "";
 }
 
 function confidenceText(value: unknown): string {

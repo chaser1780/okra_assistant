@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import json
 import math
@@ -32,6 +33,7 @@ from news.providers.rss import fetch_rss_news as fetch_configured_rss_news, pars
 from news.providers.regulatory import fetch_regulatory_news as fetch_configured_regulatory_news
 from news.providers.eastmoney import fetch_query_news as fetch_configured_eastmoney_query_news, search_jsonp as fetch_configured_eastmoney_search_jsonp
 from news.providers.openai_web_search import fetch_web_search_news as fetch_configured_openai_web_search_news, select_queries as select_configured_openai_web_search_queries, tool_candidates as configured_openai_web_search_tool_candidates
+from news.provider_runtime import NewsProviderRuntime
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_source_health_item, normalize_provider_item, resolve_provider_chain
 
@@ -2210,6 +2212,41 @@ def disabled_social_source_health(provider: str) -> dict:
     )
 
 
+def _runtime_filtered_feed_settings(
+    settings: dict,
+    section: str,
+    source_prefix: str,
+    runtime: NewsProviderRuntime,
+) -> tuple[dict, list[dict]]:
+    scoped = copy.deepcopy(settings)
+    provider_settings = scoped.get("providers", {}).get(section, {}) or {}
+    feeds = list(provider_settings.get("feeds", []) or [])
+    selected = []
+    skipped = []
+    for feed in feeds:
+        if not isinstance(feed, dict) or not bool(feed.get("enabled", True)):
+            selected.append(feed)
+            continue
+        name = str(feed.get("name") or feed.get("url") or "feed")
+        provider = str(feed.get("provider") or f"{source_prefix.rstrip(':')}:{name}")
+        source_key = f"{source_prefix}{provider}"
+        allowed, reason = runtime.allow(source_key)
+        if allowed:
+            selected.append(feed)
+        else:
+            skipped.append(
+                runtime.skipped_health(
+                    source_key=source_key,
+                    source_role=str(feed.get("source_role") or ("regulatory_news" if section == "regulatory_news" else "theme_news")),
+                    provider=provider,
+                    reason=reason,
+                )
+            )
+    provider_settings["feeds"] = selected
+    scoped.setdefault("providers", {})[section] = provider_settings
+    return scoped, skipped
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch daily fund news and sentiment from configured providers or emit a demo payload.")
     parser.add_argument("--agent-home", help="Override FUND_AGENT_HOME.")
@@ -2229,6 +2266,10 @@ def main() -> None:
     sentiment_provider_chain = resolve_provider_chain(settings, "sentiment_news", None)
     provider_name = fund_provider_chain[0]
     source_health = []
+    runtime = NewsProviderRuntime(agent_home)
+    base_source_key = f"news:{provider_name}"
+    base_skip_reason = ""
+    base_error_count = 0
     query_plan = build_news_query_plan(portfolio, watchlist, settings, report_date)
     dump_json(news_query_plan_path(agent_home, report_date), query_plan)
     classification_summary = {"enabled": False, "mode": "disabled", "status": "disabled", "llm_batches": 0, "fallback_batches": 0}
@@ -2239,41 +2280,66 @@ def main() -> None:
         if provider_name not in {"eastmoney_notice_and_articles", "eastmoney"}:
             raise SystemExit(f"Unsupported news provider: {provider_name}")
         items = []
-        workers = min(6, max(1, len(watchlist["funds"])))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(fetch_one_fund_news, fund, settings, report_date, provider_name): fund for fund in watchlist["funds"]}
-            for future in as_completed(futures):
-                fund = futures[future]
-                try:
-                    items.extend(future.result())
-                except Exception as exc:
-                    items.append(
-                        annotate_news_item(
-                            {
-                                "published_at": timestamp_now(),
-                                "title": f"{fund['name']}：新闻抓取失败占位记录",
-                                "summary": f"抓取异常：{exc}",
-                                "source_name": "system_placeholder",
-                                "url": "",
-                                "relevance_score": 0.1,
-                            },
-                            fund,
-                            "system_placeholder",
-                            report_date,
+        base_allowed, base_skip_reason = runtime.allow(base_source_key)
+        if base_allowed:
+            workers = min(6, max(1, len(watchlist["funds"])))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(fetch_one_fund_news, fund, settings, report_date, provider_name): fund for fund in watchlist["funds"]}
+                for future in as_completed(futures):
+                    fund = futures[future]
+                    try:
+                        items.extend(future.result())
+                    except Exception as exc:
+                        base_error_count += 1
+                        items.append(
+                            annotate_news_item(
+                                {
+                                    "published_at": timestamp_now(),
+                                    "title": f"{fund['name']}：新闻抓取失败占位记录",
+                                    "summary": f"抓取异常：{exc}",
+                                    "source_name": "system_placeholder",
+                                    "url": "",
+                                    "relevance_score": 0.1,
+                                },
+                                fund,
+                                "system_placeholder",
+                                report_date,
+                            )
                         )
-                    )
-        query_items, query_health = fetch_eastmoney_query_news(settings, report_date, query_plan)
-        items.extend(query_items)
-        source_health.append(query_health)
-        rss_items, rss_health = fetch_rss_news(settings, report_date, query_plan)
-        items.extend(rss_items)
-        source_health.extend(rss_health)
-        regulatory_items, regulatory_health = fetch_regulatory_news(settings, report_date)
-        items.extend(regulatory_items)
-        source_health.extend(regulatory_health)
-        web_search_items, web_search_health = fetch_openai_web_search_news(agent_home, settings, report_date, query_plan)
-        items.extend(web_search_items)
-        source_health.append(web_search_health)
+
+        query_key = "query_news:eastmoney_search_api"
+        query_allowed, query_reason = runtime.allow(query_key)
+        if query_allowed:
+            query_items, query_health = fetch_eastmoney_query_news(settings, report_date, query_plan)
+            items.extend(query_items)
+            source_health.append(query_health)
+        else:
+            source_health.append(runtime.skipped_health(source_key=query_key, source_role="theme_news", provider="eastmoney_search_api", reason=query_reason))
+
+        rss_settings, rss_skipped = _runtime_filtered_feed_settings(settings, "rss_news", "rss_news:", runtime)
+        source_health.extend(rss_skipped)
+        rss_feeds = list((rss_settings.get("providers", {}).get("rss_news", {}) or {}).get("feeds", []) or [])
+        if any(isinstance(feed, dict) and bool(feed.get("enabled", True)) for feed in rss_feeds):
+            rss_items, rss_health = fetch_rss_news(rss_settings, report_date, query_plan)
+            items.extend(rss_items)
+            source_health.extend(rss_health)
+
+        regulatory_settings, regulatory_skipped = _runtime_filtered_feed_settings(settings, "regulatory_news", "regulatory_news:", runtime)
+        source_health.extend(regulatory_skipped)
+        regulatory_feeds = list((regulatory_settings.get("providers", {}).get("regulatory_news", {}) or {}).get("feeds", []) or [])
+        if any(isinstance(feed, dict) and bool(feed.get("enabled", True)) for feed in regulatory_feeds):
+            regulatory_items, regulatory_health = fetch_regulatory_news(regulatory_settings, report_date)
+            items.extend(regulatory_items)
+            source_health.extend(regulatory_health)
+
+        web_search_key = "openai_web_search:openai_web_search"
+        web_allowed, web_reason = runtime.allow(web_search_key)
+        if web_allowed:
+            web_search_items, web_search_health = fetch_openai_web_search_news(agent_home, settings, report_date, query_plan)
+            items.extend(web_search_items)
+            source_health.append(web_search_health)
+        else:
+            source_health.append(runtime.skipped_health(source_key=web_search_key, source_role="theme_news", provider="openai_web_search", reason=web_reason))
     if args.decision_cutoff:
         cutoff = parse_iso_datetime(args.decision_cutoff)
         if cutoff is None or cutoff.tzinfo is None or cutoff.date().isoformat() != report_date:
@@ -2292,11 +2358,14 @@ def main() -> None:
     provider_dedup_stats = news_dedup_summary(provider_items, dedup_window_hours=dedup_window_hours)
     source_health.append(
         build_source_health_item(
-            source_key=f"news:{provider_name}",
+            source_key=base_source_key,
             source_role="fund_news",
             provider=provider_name,
             items=provider_items,
-            status="warning" if any(item.get("stale", False) for item in items if item.get("provider") == provider_name) else "ok",
+            status="warning" if base_skip_reason or base_error_count or any(item.get("stale", False) for item in items if item.get("provider") == provider_name) else "ok",
+            notes=[f"provider request skipped: {base_skip_reason}"] if base_skip_reason else [],
+            error_count=base_error_count,
+            warning_count=1 if base_skip_reason else 0,
             metrics={
                 "mapped_item_count": provider_dedup_stats["mapped_item_count"],
                 "unique_item_count": provider_dedup_stats["unique_item_count"],
@@ -2310,17 +2379,29 @@ def main() -> None:
     if sentiment_enabled:
         for sentiment_provider in sentiment_provider_chain:
             if sentiment_provider == "xueqiu_web":
-                extra_items, health = fetch_xueqiu_items(agent_home, settings, report_date, sentiment_queries)
-                items.extend(extra_items)
-                source_health.append(health)
+                source_key = "sentiment:xueqiu_web"
+                allowed, reason = runtime.allow(source_key)
+                if allowed:
+                    extra_items, health = fetch_xueqiu_items(agent_home, settings, report_date, sentiment_queries)
+                    items.extend(extra_items)
+                    source_health.append(health)
+                else:
+                    source_health.append(runtime.skipped_health(source_key=source_key, source_role="sentiment_news", provider="xueqiu_web", reason=reason))
             elif sentiment_provider == "douyin_web":
-                extra_items, health = fetch_douyin_items(agent_home, settings, report_date, sentiment_queries)
-                items.extend(extra_items)
-                source_health.append(health)
+                source_key = "sentiment:douyin_web"
+                allowed, reason = runtime.allow(source_key)
+                if allowed:
+                    extra_items, health = fetch_douyin_items(agent_home, settings, report_date, sentiment_queries)
+                    items.extend(extra_items)
+                    source_health.append(health)
+                else:
+                    source_health.append(runtime.skipped_health(source_key=source_key, source_role="sentiment_news", provider="douyin_web", reason=reason))
     else:
         source_health.extend(disabled_social_source_health(provider) for provider in sentiment_provider_chain if provider in {"xueqiu_web", "douyin_web"})
 
     items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
+    source_health = [runtime.record(item) for item in source_health]
+    runtime.save()
     global_dedup_summary = news_dedup_summary(items, dedup_window_hours=dedup_window_hours)
     payload = build_news_repository_payload(
         report_date=report_date,
