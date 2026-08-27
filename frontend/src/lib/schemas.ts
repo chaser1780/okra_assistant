@@ -130,6 +130,37 @@ const portfolioRiskPointSchema = z.object({
   holdingPnl: financialNumberSchema,
   styleGroup: z.string()
 }).passthrough();
+const portfolioRiskBreakdownSchema = z.object({
+  fundCode: z.string(),
+  fundName: z.string(),
+  weightPct: financialNumberSchema,
+  freshnessRisk: financialNumberSchema,
+  dataConflictRisk: financialNumberSchema,
+  volatilityRisk: financialNumberSchema,
+  crowdingRisk: financialNumberSchema,
+  newsRisk: financialNumberSchema,
+  executionFrictionRisk: financialNumberSchema,
+  totalAnomalyScore: financialNumberSchema,
+  observedAnomalyScore: financialNumberSchema,
+  historicalPercentile: financialNumberSchema,
+  historicalSampleCount: z.number().catch(0),
+  dataCoverage: z.object({
+    availableComponentCount: z.number().catch(0),
+    componentCount: z.number().catch(0),
+    isPartial: z.boolean().catch(true)
+  }).passthrough(),
+  reasons: z.record(z.string(), z.string()).catch({}),
+  methodology: z.string().catch("")
+}).passthrough();
+const portfolioRiskSummarySchema = z.object({
+  selectedDate: z.string().catch(""),
+  methodology: z.string().catch(""),
+  scoredFundCount: z.number().catch(0),
+  fundCount: z.number().catch(0),
+  weightedTotalAnomalyScore: financialNumberSchema,
+  partialCoverageFundCount: z.number().catch(0),
+  historicalPercentileAvailableCount: z.number().catch(0)
+}).passthrough();
 
 export const dashboardSchema = z.object({
   meta: z.string(),
@@ -168,6 +199,8 @@ export const portfolioSchema = z.object({
   }).passthrough(),
   riskSnapshot: portfolioRiskSnapshotSchema.optional(),
   riskScatter: z.array(portfolioRiskPointSchema).optional(),
+  riskBreakdown: z.array(portfolioRiskBreakdownSchema).optional(),
+  riskSummary: portfolioRiskSummarySchema.optional(),
   benchmark: z.object({
     status: z.string(),
     name: z.string().optional(),

@@ -148,6 +148,35 @@ export type PortfolioRiskPoint = {
   styleGroup: string;
 };
 
+export type PortfolioRiskBreakdown = {
+  fundCode: string;
+  fundName: string;
+  weightPct: number | null;
+  freshnessRisk: number | null;
+  dataConflictRisk: number | null;
+  volatilityRisk: number | null;
+  crowdingRisk: number | null;
+  newsRisk: number | null;
+  executionFrictionRisk: number | null;
+  totalAnomalyScore: number | null;
+  observedAnomalyScore: number | null;
+  historicalPercentile: number | null;
+  historicalSampleCount: number;
+  dataCoverage: { availableComponentCount: number; componentCount: number; isPartial: boolean };
+  reasons: Record<string, string>;
+  methodology: string;
+};
+
+export type PortfolioRiskSummary = {
+  selectedDate: string;
+  methodology: string;
+  scoredFundCount: number;
+  fundCount: number;
+  weightedTotalAnomalyScore: number | null;
+  partialCoverageFundCount: number;
+  historicalPercentileAvailableCount: number;
+};
+
 export type PortfolioBenchmark = {
   status: "available" | "not_configured" | "missing_data" | string;
   name?: string;
@@ -191,6 +220,8 @@ export type PortfolioPayload = {
   };
   riskSnapshot?: PortfolioRiskSnapshot;
   riskScatter?: PortfolioRiskPoint[];
+  riskBreakdown?: PortfolioRiskBreakdown[];
+  riskSummary?: PortfolioRiskSummary;
   benchmark?: PortfolioBenchmark;
   performanceMetrics?: PortfolioPerformanceMetrics;
   dataContext?: DataContext;

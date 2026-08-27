@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import type { PortfolioItem, PortfolioPayload } from "../../lib/types";
+import type { PortfolioItem, PortfolioPayload, PortfolioRiskBreakdown } from "../../lib/types";
 import { asNullableNumber, asNumber, compactMoney, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
@@ -105,6 +105,8 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
           <RiskScatterChart points={portfolio.riskScatter ?? []} />
         </ChartFrame>
       </section>
+
+      <RiskBreakdownPanel rows={portfolio.riskBreakdown ?? []} summary={portfolio.riskSummary} />
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 lg:col-span-4">
@@ -234,6 +236,76 @@ function AllocationBars({ items }: { items: PortfolioPayload["styleAllocation"] 
       {items.length > visible.length ? <div className="pt-1 text-xs text-slate-600">其余 {items.length - visible.length} 个风格已收起</div> : null}
     </div>
   );
+}
+
+function RiskBreakdownPanel({ rows, summary }: { rows: PortfolioRiskBreakdown[]; summary?: PortfolioPayload["riskSummary"] }) {
+  const weighted = summary?.weightedTotalAnomalyScore;
+  return (
+    <Card className="p-4">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <SectionTitle title="风险构成 / DIAGNOSTIC" meta="只读观察分解，不改变既有异常分数、约束或模拟动作" />
+        <div className="flex flex-wrap gap-2">
+          <Badge tone="info">组合观察 {weighted == null ? "不可用" : weighted.toFixed(1)}</Badge>
+          <Badge tone={summary?.partialCoverageFundCount ? "warning" : "success"}>部分覆盖 {summary?.partialCoverageFundCount ?? 0}</Badge>
+          <Badge tone="neutral">历史百分位 {summary?.historicalPercentileAvailableCount ?? 0} 只</Badge>
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="overflow-x-auto border border-slate-800">
+          <table className="min-w-[1040px] w-full border-collapse text-sm">
+            <thead className="bg-slate-950/80 text-xs text-slate-500">
+              <tr>
+                <th className="px-3 py-3 text-left">基金</th>
+                <th className="px-3 py-3 text-right">综合观察</th>
+                <th className="px-3 py-3 text-right">时效</th>
+                <th className="px-3 py-3 text-right">冲突</th>
+                <th className="px-3 py-3 text-right">波动</th>
+                <th className="px-3 py-3 text-right">拥挤</th>
+                <th className="px-3 py-3 text-right">新闻</th>
+                <th className="px-3 py-3 text-right">摩擦</th>
+                <th className="px-3 py-3 text-right">历史分位</th>
+                <th className="px-3 py-3 text-left">覆盖</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.fundCode} className="border-t border-slate-800/80 hover:bg-cyan-950/15">
+                  <td className="px-3 py-3"><div className="font-semibold text-slate-200">{row.fundName || row.fundCode}</div><div className="metric-number text-xs text-slate-500">{row.fundCode} · 权重 {row.weightPct?.toFixed(2) ?? "暂无"}%</div></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.totalAnomalyScore} strong /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.freshnessRisk} /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.dataConflictRisk} /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.volatilityRisk} /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.crowdingRisk} /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.newsRisk} /></td>
+                  <td className="px-3 py-3 text-right"><RiskValue value={row.executionFrictionRisk} /></td>
+                  <td className="metric-number px-3 py-3 text-right text-slate-300">{row.historicalPercentile == null ? "样本不足" : `${row.historicalPercentile.toFixed(0)}%`}</td>
+                  <td className="px-3 py-3"><details><summary className="cursor-pointer text-xs text-cyan-300">{row.dataCoverage.availableComponentCount}/{row.dataCoverage.componentCount} 项</summary><div className="mt-2 max-w-72 space-y-1 text-xs leading-5 text-slate-500">{Object.entries(row.reasons).map(([key, reason]) => <div key={key}><span className="text-slate-300">{riskLabel(key)}：</span>{reason}</div>)}</div></details></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <EmptyState title="暂无风险分解" body="缺少组合或实时观察数据时，不会生成虚假的风险构成。" />}
+    </Card>
+  );
+}
+
+function RiskValue({ value, strong = false }: { value: number | null; strong?: boolean }) {
+  if (value == null) return <span className="metric-number text-xs text-slate-600">不可用</span>;
+  const tone = value >= 70 ? "text-rose-300" : value >= 40 ? "text-amber-300" : "text-emerald-300";
+  return <span className={`metric-number ${strong ? "font-semibold" : ""} ${tone}`}>{value.toFixed(1)}</span>;
+}
+
+function riskLabel(value: string) {
+  const labels: Record<string, string> = {
+    freshnessRisk: "数据时效",
+    dataConflictRisk: "数据冲突",
+    volatilityRisk: "观察波动",
+    crowdingRisk: "拥挤信号",
+    newsRisk: "新闻事件",
+    executionFrictionRisk: "模拟摩擦"
+  };
+  return labels[value] ?? value;
 }
 
 function TerminalReadout({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "success" | "danger" | "warning" }) {

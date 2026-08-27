@@ -53,6 +53,7 @@ from workbench_history import (
 )
 from workbench_state import WorkbenchStateService
 from performance_metrics import calculate_portfolio_performance
+from risk_breakdown import build_risk_breakdowns
 
 
 def _coerce_task_date(value: Any) -> str:
@@ -749,6 +750,17 @@ class PageService:
                     "styleGroup": item.get("styleGroup") or "未归类",
                 }
             )
+        selected_realtime = state.get("realtime", {}) or realtime
+        context_funds = list((state.get("llm_context", {}) or {}).get("funds", []) or [])
+        execution_payload = build_execution_sync_payload(self.home)
+        risk_breakdown, risk_summary = build_risk_breakdowns(
+            self.home,
+            selected_date=str(state.get("selected_date") or history_end_date or ""),
+            portfolio_items=items,
+            realtime_items=list(selected_realtime.get("items", []) or []),
+            context_funds=context_funds,
+            pending_simulation_actions=list(execution_payload.get("pending", []) or []),
+        )
         top_style_weight = max((float(row.get("weight") or 0) for row in self.group_items(items, "styleGroup", total_value)), default=0.0)
         top_holding_weight = max(
             ((float(item.get("weight") or 0) * 100.0 if abs(float(item.get("weight") or 0)) <= 1 else float(item.get("weight") or 0)) for item in items),
@@ -789,6 +801,8 @@ class PageService:
                 "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             },
             "riskScatter": risk_scatter,
+            "riskBreakdown": risk_breakdown,
+            "riskSummary": risk_summary,
             "benchmark": {"status": "not_configured", "normalized": [], "excessReturnPct": []},
             "performanceMetrics": performance_metrics,
             "dataContext": data_context,
