@@ -18,6 +18,7 @@ from rag_profile_evidence import (
     build_memory_evidence_pack,
     build_review_evidence_pack,
 )
+from rag_eval import _summarize_hits  # noqa: E402
 
 
 PROFILE_RAG_TOML = """[rag]
@@ -244,6 +245,25 @@ class RagDecisionMemoryReviewTests(unittest.TestCase):
         self.assertTrue(pack["noFutureAudit"]["passed"])
         self.assertGreaterEqual(pack["noFutureAudit"]["futureRejectedCount"], 1)
         self.assertEqual(["past-doc"], [hit["docId"] for hit in pack["hits"]])
+
+    def test_eval_summary_reports_citation_completeness(self):
+        summary = _summarize_hits(
+            [
+                {
+                    "source_kind": "validated_advice",
+                    "source_path": "db/validated_advice/2026-05-20.json",
+                    "source_record_id": "action:F1",
+                    "as_of_date": "2026-05-20",
+                    "fund_codes": ["F1"],
+                    "entity_id": "F1",
+                    "metadata": {},
+                },
+                {"source_kind": "long_memory", "source_path": "", "source_record_id": "", "as_of_date": "", "metadata": {}},
+            ],
+            "F1",
+        )
+        self.assertEqual(1, summary["citation_complete_count"])
+        self.assertEqual(0.5, summary["fund_match_rate"])
 
 
 if __name__ == "__main__":

@@ -110,6 +110,13 @@ def _summarize_hits(hits: list[dict[str, Any]], target_fund: str | None) -> dict
         "fund_match_rate": round(fund_match_count / len(hits), 4) if hits and target_fund else None,
         "top_hit_ids": [str(hit.get("doc_id", "") or "") for hit in hits[:5]],
         "top_source_kinds": [str(hit.get("source_kind", "") or "") for hit in hits[:5]],
+        "citation_complete_count": sum(
+            1
+            for hit in hits
+            if str(hit.get("source_path", "") or "")
+            and str(hit.get("source_record_id", "") or hit.get("doc_id", "") or "")
+            and str(hit.get("as_of_date", "") or "")
+        ),
     }
 
 
@@ -134,6 +141,7 @@ def run_eval(agent_home: Path, report_date: str, *, compare_legacy: bool = True,
     agent_results: dict[str, Any] = {}
     totals = Counter()
     fallback_reasons: list[dict[str, Any]] = []
+    query_summaries: list[dict[str, Any]] = []
 
     for agent_name in agents:
         legacy_top_ids = _legacy_ids(legacy, agent_name, context, all_funds) if compare_legacy else set()
@@ -163,20 +171,30 @@ def run_eval(agent_home: Path, report_date: str, *, compare_legacy: bool = True,
                 totals["hit_count"] += summary["hit_count"]
                 totals["stale_hit_count"] += summary["stale_hit_count"]
                 totals["no_future_violation_count"] += summary["no_future_violation_count"]
+                totals["citation_complete_count"] += summary["citation_complete_count"]
+                totals["query_count"] += 1
+                if summary["hit_count"]:
+                    totals["queries_with_hits"] += 1
                 if summary["missing_data"]:
                     totals["missing_queries"] += 1
                 query_results.append(summary)
+                query_summaries.append(summary)
             except Exception as exc:
                 fallback = {"scope": query["scope"], "fund_code": query["fund_code"], "reason": str(exc)}
                 fallback_reasons.append({"agent_name": agent_name, **fallback})
                 query_results.append({"scope": query["scope"], "fund_code": query["fund_code"], "fallback_reason": str(exc)})
                 totals["fallback_count"] += 1
+                totals["query_count"] += 1
         agent_results[agent_name] = {
             "legacy_evidence_count": len(legacy_top_ids),
             "queries": query_results,
             "fund_codes": [code for code in fund_codes if code in funds_by_code],
         }
 
+    hit_count = int(totals.get("hit_count", 0))
+    query_count = int(totals.get("query_count", 0))
+    matched_rates = [float(item["fund_match_rate"]) for item in query_summaries if item.get("fund_match_rate") is not None]
+    source_kinds = {kind for item in query_summaries for kind in item.get("top_source_kinds", []) if kind}
     payload = {
         "report_date": report_date,
         "generated_at": timestamp_now(),
@@ -190,8 +208,21 @@ def run_eval(agent_home: Path, report_date: str, *, compare_legacy: bool = True,
             "write_trace": write_trace,
             "agent_count": len(agents),
             "fund_codes": fund_codes,
+            "retrieval_mode": "lexical_rerank",
+            "semantic_vector_enabled": False,
         },
-        "metrics": dict(totals),
+        "metrics": {
+            **dict(totals),
+            "hit_rate": round(int(totals.get("queries_with_hits", 0)) / query_count, 4) if query_count else 0.0,
+            "mean_hits_per_query": round(hit_count / query_count, 4) if query_count else 0.0,
+            "citation_completeness_rate": round(int(totals.get("citation_complete_count", 0)) / hit_count, 4) if hit_count else 0.0,
+            "mean_fund_match_rate": round(sum(matched_rates) / len(matched_rates), 4) if matched_rates else None,
+            "source_diversity": len(source_kinds),
+        },
+        "evaluationLimits": [
+            "当前没有人工标注的相关性金标准，因此不报告 Recall@K 或 nDCG。",
+            "当前检索模式为 lexical_rerank，不是生产向量语义检索。",
+        ],
         "fallback_reasons": fallback_reasons,
         "agents": agent_results,
     }

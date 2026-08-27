@@ -43,6 +43,8 @@ from api_contracts import (
     RagSearchRequestDto,
     RunTaskRequestDto,
     ShadowReviewPageDto,
+    StrategySimulationActionRequestDto,
+    StrategySimulationExperimentRequestDto,
     coerce_model,
     model_dump_compat,
 )
@@ -431,6 +433,21 @@ class OkraWebApi:
 
     def execution_confirmation_update(self, payload: dict) -> dict:
         return self.execution_controller.execution_confirmation_update(payload)
+
+    def strategy_simulation(self) -> dict:
+        from strategy_simulation import list_experiments
+
+        return {"simulationOnly": True, "formalTrack": "user_simulation", "experiments": list_experiments(self.home)}
+
+    def strategy_simulation_create(self, payload: dict) -> dict:
+        from strategy_simulation import create_experiment
+
+        return create_experiment(self.home, payload)
+
+    def strategy_simulation_action(self, payload: dict) -> dict:
+        from strategy_simulation import record_action
+
+        return record_action(self.home, payload)
 
     def open_url(self, payload: dict) -> dict:
         url = str(payload.get("url", "") or "").strip()
@@ -1137,6 +1154,8 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.fund_detail(fund_code, selected, range_label), page="fund", selected_date=selected)
             elif endpoint_path == "/api/execution-sync":
                 self._send_envelope(self.api.execution_sync_payload(), page="execution-sync")
+            elif endpoint_path == "/api/strategy-simulation":
+                self._send_envelope(self.api.strategy_simulation(), page="strategy-simulation")
             elif endpoint_path == "/api/rag/status":
                 self._send_envelope(self.api.rag_status(), page="rag")
             elif endpoint_path == "/api/rag/trace":
@@ -1219,6 +1238,16 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.rag_eval(payload), page="rag")
             elif endpoint_path == "/api/rag/maintenance":
                 self._send_envelope(self.api.rag_maintenance(payload), page="rag")
+            elif endpoint_path == "/api/strategy-simulation/experiment":
+                self._send_envelope(
+                    self.api.strategy_simulation_create(coerce_model(StrategySimulationExperimentRequestDto, payload)),
+                    page="strategy-simulation",
+                )
+            elif endpoint_path == "/api/strategy-simulation/action":
+                self._send_envelope(
+                    self.api.strategy_simulation_action(coerce_model(StrategySimulationActionRequestDto, payload)),
+                    page="strategy-simulation",
+                )
             else:
                 self._send_error(404, "not_found", f"Unknown POST endpoint: {parsed.path}", details={"path": parsed.path})
         except RequestBodyTooLargeError as exc:

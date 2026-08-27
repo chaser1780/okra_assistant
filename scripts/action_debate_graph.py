@@ -356,6 +356,7 @@ def call_debate_llm_node(
             max_output_tokens=max(3000, min(6000, len(requested_items) * 260)),
             temperature=0.0,
             timeout=(10, 120),
+            report_date=state.report_date,
         )
         responses.append(response)
         response_items = {

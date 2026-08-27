@@ -873,7 +873,7 @@ def build_news_classification_prompts(batch: list[dict]) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) -> tuple[list[dict], dict]:
+def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], *, report_date: str = "") -> tuple[list[dict], dict]:
     cfg = settings.get("providers", {}).get("news_classification", {}) or {}
     if not bool(cfg.get("enabled", True)) or not items:
         return items, {"enabled": bool(cfg.get("enabled", True)), "mode": "disabled", "status": "disabled", "llm_batches": 0, "fallback_batches": 0}
@@ -905,6 +905,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict]) 
                 temperature=0.1,
                 timeout=(10, timeout_seconds),
                 model=model_override or None,
+                report_date=report_date,
             )
             result_items = {int(item.get("index", -1)): item for item in (response.get("response_json", {}) or {}).get("items", []) or []}
             llm_batches += 1
@@ -2636,7 +2637,7 @@ def main() -> None:
     items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
     dedup_window_hours = int((settings.get("providers", {}).get("query_news", {}) or {}).get("dedup_window_hours", 12) or 12)
     items, dedup_stats = dedupe_news_items(items, dedup_window_hours=dedup_window_hours)
-    items, classification_summary = classify_news_with_llm(agent_home, settings, items)
+    items, classification_summary = classify_news_with_llm(agent_home, settings, items, report_date=report_date)
     items = [enrich_news_item(item, query_type=str(item.get("query_type", "") or ""), matched_keywords=list(item.get("matched_keywords", []) or [])) for item in items]
     compute_heat_metrics(items)
     provider_items = [

@@ -920,6 +920,9 @@ class PageService:
             "runTime": self.time_label(generated_at),
             "memoryCycleSummary": memory_cycle_payload.get("summary", {}) if isinstance(memory_cycle_payload, dict) else {},
         }
+        from model_run_store import list_model_runs
+
+        decision_trace_payload = self.read_json_file(self.home / "db" / "decision_traces" / f"{selected}.json")
         return {
             "sourceHealth": state.get("source_health", {}) or {},
             "preflightStatus": (state.get("summary", {}) or {}).get("preflight_status", ""),
@@ -943,6 +946,8 @@ class PageService:
                 "committeeReady": aggregate.get("committee_ready", False),
                 "workflowTrace": aggregate.get("workflow_trace", {}),
             },
+            "modelRuns": list_model_runs(self.home, selected, limit=12),
+            "decisionTrace": decision_trace_payload,
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
             "ragRuntime": self.rag_runtime_payload(full=include_full_rag),

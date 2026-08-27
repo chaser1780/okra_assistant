@@ -256,6 +256,26 @@ class ExecutionConversionRequestDto(MutationRequestModel):
     simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
 
 
+class StrategySimulationExperimentRequestDto(MutationRequestModel):
+    experimentId: str | None = Field(default=None, max_length=80)
+    label: str = Field(min_length=1, max_length=160)
+    asOfDate: str | None = None
+    note: str = ""
+    initialPortfolio: dict[str, Any] | None = None
+
+
+class StrategySimulationActionRequestDto(MutationRequestModel):
+    experimentId: str = Field(min_length=1, max_length=80)
+    actionId: str | None = Field(default=None, max_length=80)
+    action: Literal["buy", "sell", "switch_in", "switch_out"]
+    fundCode: str = Field(min_length=1, max_length=40)
+    amount: float | int | str
+    tradeNav: float | int | str | None = None
+    units: float | int | str | None = None
+    asOfDate: str | None = None
+    note: str = ""
+
+
 class ScreenshotFileDto(MutationRequestModel):
     name: str = Field(default="screenshot.png", min_length=1, max_length=255)
     data: str = Field(min_length=1)

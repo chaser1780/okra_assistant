@@ -219,7 +219,7 @@ def _mock_agent_output(agent_name: str, bundle: dict) -> dict:
     return {"agent_name": agent_name, "summary": f"{agent_name} mock summary", "records": records}
 
 
-def _call_memory_agent(agent_home: Path, agent_name: str, bundle: dict, *, mock: bool) -> dict:
+def _call_memory_agent(agent_home: Path, agent_name: str, bundle: dict, *, mock: bool, report_date: str) -> dict:
     if mock:
         return _mock_agent_output(agent_name, bundle)
     prompt = MEMORY_AGENT_PROMPTS[agent_name]
@@ -234,6 +234,7 @@ def _call_memory_agent(agent_home: Path, agent_name: str, bundle: dict, *, mock:
         max_output_tokens=2200 if agent_name == "memory_manager" else 1800,
         fallback_defaults={"agent_name": agent_name, "summary": "", "records": []},
         timeout=(10, 45),
+        report_date=report_date,
     )
     return result["response_json"]
 
@@ -347,11 +348,11 @@ def run_memory_cycle(agent_home: Path, report_date: str, *, mock: bool = False) 
     ):
         runtime.update({"currentStep": agent_name, "currentAgent": agent_name})
         _write_runtime(agent_home, report_date, runtime)
-        agent_outputs[agent_name] = _call_memory_agent(agent_home, agent_name, bundle, mock=mock)
+        agent_outputs[agent_name] = _call_memory_agent(agent_home, agent_name, bundle, mock=mock, report_date=report_date)
     manager_bundle = {**bundle, "agent_outputs": agent_outputs}
     runtime.update({"currentStep": "memory_manager", "currentAgent": "memory_manager"})
     _write_runtime(agent_home, report_date, runtime)
-    manager_output = _call_memory_agent(agent_home, "memory_manager", manager_bundle, mock=mock)
+    manager_output = _call_memory_agent(agent_home, "memory_manager", manager_bundle, mock=mock, report_date=report_date)
 
     written = []
     rag_memory_checks = []

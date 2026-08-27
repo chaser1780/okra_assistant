@@ -86,25 +86,9 @@ def _user_simulation_trades(agent_home: Path) -> list[dict[str, Any]]:
 
 
 def _strategy_experiments(agent_home: Path) -> list[dict[str, Any]]:
-    base = strategy_experiment_dir(agent_home)
-    if not base.exists():
-        return []
-    items: list[dict[str, Any]] = []
-    for path in sorted(base.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
-        payload = load_json(path)
-        if not isinstance(payload, dict):
-            continue
-        items.append(
-            {
-                "experimentId": str(payload.get("experiment_id") or path.stem),
-                "label": str(payload.get("label") or payload.get("name") or path.stem),
-                "status": str(payload.get("status") or "ready"),
-                "asOfDate": str(payload.get("as_of_date") or payload.get("report_date") or ""),
-                "createdAt": str(payload.get("created_at") or ""),
-                "sourcePath": str(path.relative_to(agent_home)).replace("\\", "/"),
-            }
-        )
-    return items
+    from strategy_simulation import list_experiments
+
+    return list_experiments(agent_home)
 
 
 def _simulation_status(item: dict[str, Any]) -> str:
