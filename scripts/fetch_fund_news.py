@@ -14,11 +14,9 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from threading import local
 
@@ -30,6 +28,7 @@ from common import dump_json, ensure_layout, load_llm_config, load_portfolio, lo
 from multiagent_utils import ProviderRequestError, call_json_agent, call_responses_text, parse_json_text
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
 from news.repository import build_news_repository_payload
+from news.providers.rss import fetch_rss_news as fetch_configured_rss_news, parse_rss_datetime as parse_configured_rss_datetime, parse_rss_feed as parse_configured_rss_feed
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_source_health_item, normalize_provider_item, resolve_provider_chain
 
@@ -1049,29 +1048,7 @@ def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
 
 
 def parse_rss_datetime(value: str | None, report_date: str) -> str:
-    candidate = str(value or "").strip()
-    if not candidate:
-        return ""
-    if re.match(r"^\d{4}-\d{2}-\d{2}(?:[T\s]|$)", candidate):
-        parsed = parse_iso_datetime(candidate)
-        if parsed is not None:
-            return parsed.isoformat(timespec="seconds")
-    for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT", "%Y-%m-%d %H:%M:%S"):
-        try:
-            dt = datetime.strptime(candidate, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=CN_TZ)
-            return dt.astimezone(CN_TZ).isoformat(timespec="seconds")
-        except ValueError:
-            continue
-    try:
-        dt = parsedate_to_datetime(candidate)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=CN_TZ)
-        return dt.astimezone(CN_TZ).isoformat(timespec="seconds")
-    except (TypeError, ValueError, IndexError):
-        pass
-    return ""
+    return parse_configured_rss_datetime(value, report_date)
 
 
 def fetch_xml_text(url: str, *, timeout_seconds: int) -> str:
@@ -1100,35 +1077,7 @@ def fetch_json_text(url: str, *, timeout_seconds: int, referer: str = "") -> str
 
 
 def parse_rss_feed(xml_text: str, report_date: str) -> list[dict]:
-    root = ET.fromstring(xml_text)
-    items: list[dict] = []
-    for node in root.findall(".//item") + root.findall(".//entry"):
-        title = extract_plain_text(node.findtext("title") or "")
-        summary = extract_plain_text(node.findtext("description") or node.findtext("summary") or node.findtext("{http://www.w3.org/2005/Atom}summary") or title)
-        link = node.findtext("link") or ""
-        if not link:
-            link_node = node.find("link")
-            if link_node is not None:
-                link = link_node.attrib.get("href", "")
-        published_at = parse_rss_datetime(
-            node.findtext("pubDate")
-            or node.findtext("published")
-            or node.findtext("{http://www.w3.org/2005/Atom}published")
-            or node.findtext("updated")
-            or node.findtext("{http://www.w3.org/2005/Atom}updated"),
-            report_date,
-        )
-        if not title or not link:
-            continue
-        items.append(
-            {
-                "title": title[:120],
-                "summary": summary[:240] or title[:120],
-                "published_at": published_at,
-                "url": link.strip(),
-            }
-        )
-    return items
+    return parse_configured_rss_feed(xml_text, report_date, plain_text=extract_plain_text)
 
 
 def rss_source_role(feed_name: str, query: dict) -> tuple[str, str, str]:
@@ -1205,88 +1154,16 @@ def normalize_rss_news_item(raw_item: dict, query: dict, *, feed_name: str, prov
 
 def fetch_rss_news(settings: dict, report_date: str, query_plan: dict) -> tuple[list[dict], list[dict]]:
     provider_settings = settings.get("providers", {}).get("rss_news", {}) or {}
-    if not bool(provider_settings.get("enabled", False)):
-        return [], []
-    timeout_seconds = int(provider_settings.get("timeout_seconds", 12) or 12)
-    feeds = list(provider_settings.get("feeds", []) or [])
-    if not feeds:
-        return [], [
-            build_source_health_item(
-                source_key="rss_news:feeds",
-                source_role="theme_news",
-                provider="rss_news",
-                configured=True,
-                status="warning",
-                notes=["rss feeds not configured"],
-            )
-        ]
-    all_items: list[dict] = []
-    health_rows: list[dict] = []
-    combined_queries = [
-        *(query_plan.get("direct_queries", []) or []),
-        *(query_plan.get("theme_queries", []) or []),
-        *(query_plan.get("market_queries", []) or []),
-    ]
-    for feed in feeds:
-        if not bool(feed.get("enabled", True)):
-            continue
-        feed_url = str(feed.get("url", "") or "").strip()
-        feed_name = str(feed.get("name", "") or feed_url or "rss_feed")
-        provider_name = str(feed.get("provider", "") or f"rss:{feed_name}")
-        if not feed_url:
-            health_rows.append(
-                build_source_health_item(
-                    source_key=f"rss_news:{provider_name}",
-                    source_role="theme_news",
-                    provider=provider_name,
-                    configured=False,
-                    status="warning",
-                    notes=["missing feed url"],
-                )
-            )
-            continue
-        errors: list[str] = []
-        raw_item_count = 0
-        matched_count = 0
-        try:
-            xml_text = fetch_xml_text(feed_url, timeout_seconds=timeout_seconds)
-            rows = parse_rss_feed(xml_text, report_date)
-            raw_item_count = len(rows)
-            for raw_item in rows:
-                for query in combined_queries:
-                    keyword = str(query.get("keyword", "") or "").strip()
-                    if not keyword or not query_matches_item(keyword, raw_item):
-                        continue
-                    matched_count += 1
-                    all_items.extend(normalize_rss_news_item(raw_item, query, feed_name=feed_name, provider_name=provider_name, report_date=report_date, feed=feed))
-        except ET.ParseError as exc:
-            errors.append(f"parse_error={exc}")
-        except Exception as exc:
-            errors.append(str(exc))
-        status = "ok" if matched_count > 0 and not errors else ("warning" if errors or raw_item_count == 0 else "ok")
-        notes = [f"feed_url={feed_url}", f"raw_item_count={raw_item_count}", f"matched_item_count={matched_count}", *errors[:4]]
-        health_rows.append(
-            build_source_health_item(
-                source_key=f"rss_news:{provider_name}",
-                source_role="theme_news",
-                provider=provider_name,
-                items=[item for item in all_items if item.get("provider") == provider_name],
-                configured=True,
-                status=status,
-                notes=notes,
-                error_count=len(errors),
-                warning_count=1 if status == "warning" else 0,
-                metrics={
-                    "raw_item_count": raw_item_count,
-                    "matched_item_count": matched_count,
-                    "feed_ok": int(not errors and raw_item_count > 0),
-                    "parse_error": int(any("parse_error" in error for error in errors)),
-                    "empty_feed": int(raw_item_count == 0),
-                    "stale_feed": 0,
-                },
-            )
-        )
-    return all_items, health_rows
+    return fetch_configured_rss_news(
+        provider_settings,
+        report_date,
+        query_plan,
+        fetch_xml=fetch_xml_text,
+        parse_feed=parse_rss_feed,
+        query_matches=query_matches_item,
+        normalize_item=normalize_rss_news_item,
+        build_health=build_source_health_item,
+    )
 
 
 def absolute_url(base_url: str, href: str) -> str:
