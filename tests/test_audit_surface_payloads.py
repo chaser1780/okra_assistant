@@ -40,7 +40,23 @@ class AuditSurfacePayloadTests(unittest.TestCase):
                 "modelRuns": [{"modelRunId": "run-1"}],
                 "sourceArtifacts": {"validatedAdvice": {"exists": True}, "rawPrompt": {"exists": False}},
                 "decisions": [
-                    {"fundCode": "F1", "fundName": "Fund 1", "action": "add", "amount": 100, "confidence": 0.7, "executionEligible": True, "section": "tactical_actions"}
+                    {
+                        "fundCode": "F1",
+                        "fundName": "Fund 1",
+                        "action": "add",
+                        "amount": 100,
+                        "confidence": 0.7,
+                        "executionEligible": True,
+                        "section": "tactical_actions",
+                        "decisionCutoff": "2026-05-20T14:55:00+08:00",
+                        "modelRunScope": "pipeline",
+                        "evidenceRefs": [{"kind": "news", "path": "raw/news/2026-05-20.json"}],
+                        "supportingSignals": ["signal-a"],
+                        "opposingSignals": ["signal-b"],
+                        "policyHits": ["cash_floor"],
+                        "constraintResults": ["pass"],
+                        "executionState": "simulated_advice",
+                    }
                 ],
             },
         )
@@ -54,6 +70,10 @@ class AuditSurfacePayloadTests(unittest.TestCase):
         self.assertEqual(4, trace["evidenceCount"])
         self.assertEqual(1, trace["availableArtifactCount"])
         self.assertNotIn("sourceArtifacts", trace)
+        visible = trace["decisions"][0]
+        self.assertEqual("2026-05-20T14:55:00+08:00", visible["decisionCutoff"])
+        self.assertEqual(["signal-a"], visible["supportingSignals"])
+        self.assertEqual("raw/news/2026-05-20.json", visible["evidenceRefs"][0]["path"])
 
     def test_shadow_review_exposes_isolated_experiment_snapshot(self):
         initial = {

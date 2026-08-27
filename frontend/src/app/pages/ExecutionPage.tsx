@@ -473,7 +473,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 lg:col-span-6">
-          <SectionTitle title="待确认模拟操作" meta="按模拟确认日刷新状态，不触发真实成交" />
+          <SectionTitle title="待确认模拟操作" meta="按模拟确认日刷新状态，不进入券商委托流程" />
           <Button className="mb-3" variant="secondary" disabled={busy} onClick={() => void refreshConfirmations()}>
             刷新确认状态
           </Button>
