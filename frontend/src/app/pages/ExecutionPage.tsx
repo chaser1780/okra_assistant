@@ -156,6 +156,17 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       && screenshotPreview.unmatched_detected.length === 0
       && hasValidPreviewIntegrity(screenshotPreview)
     : false;
+  const simulationStatusCounts = useMemo(() => {
+    const counts = { planned: 0, simulated: 0, confirmed: 0, cancelled: 0 };
+    for (const item of executionSync.trades) {
+      const status = String(item.simulation_status ?? item.simulationStatus ?? item.status ?? "planned").toLowerCase();
+      if (status === "confirmed" || status === "settled") counts.confirmed += 1;
+      else if (status === "simulated") counts.simulated += 1;
+      else if (status === "cancelled" || status === "canceled" || status === "failed") counts.cancelled += 1;
+      else counts.planned += 1;
+    }
+    return counts;
+  }, [executionSync.trades]);
 
   const loadFundCandidates = useCallback(async (holding: UnmatchedHolding, key: string) => {
     if (lookupInFlight.current.has(key)) return;
@@ -233,7 +244,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
-    setMessage("正在识别支付宝持仓截图...");
+    setMessage("正在识别持仓截图...");
     try {
       const encoded = await Promise.all(
         Array.from(files).map(async (file) => ({
@@ -340,7 +351,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     setBusy(true);
     try {
       const result = await updateExecutionConfirmations({ date: today });
-      setMessage(`模拟记录状态已刷新；当前组合不会因状态刷新自动改写。`);
+      setMessage("模拟记录状态已刷新；当前组合不会因状态刷新自动改写。");
       onRefresh();
     } catch (error) {
       setMessage(`确认状态刷新失败：${errorMessage(error)}`);
@@ -359,11 +370,22 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
         <Metric title="组合同步" value={executionSync.counts.reports ?? 0} body="截图或快照更新用户模拟组合的记录" />
       </section>
 
-      <TerminalPanel title="模拟状态" meta={`UPDATED ${executionSync.updatedAt || "暂无"}`} className="grid grid-cols-2 gap-px bg-slate-800/60 md:grid-cols-4">
-        <ExecutionState label="建议生成" value="已读取" tone="success" />
-        <ExecutionState label="用户记录" value={`${executionSync.counts.trades ?? 0} 笔`} tone="info" />
-        <ExecutionState label="模拟待办" value={`${executionSync.counts.pending ?? 0} 笔`} tone={executionSync.counts.pending ? "warning" : "success"} />
-        <ExecutionState label="组合同步" value={`${executionSync.counts.reports ?? 0} 份`} tone="accent" />
+      <TerminalPanel title="模拟状态" meta={`UPDATED ${executionSync.updatedAt || "暂无"}`}>
+        <div className="grid grid-cols-2 gap-px bg-slate-800/60 md:grid-cols-4">
+          <ExecutionState label="建议生成" value="已读取" tone="success" />
+          <ExecutionState label="用户记录" value={`${executionSync.counts.trades ?? 0} 笔`} tone="info" />
+          <ExecutionState label="模拟待办" value={`${executionSync.counts.pending ?? 0} 笔`} tone={executionSync.counts.pending ? "warning" : "success"} />
+          <ExecutionState label="组合同步" value={`${executionSync.counts.reports ?? 0} 份`} tone="accent" />
+        </div>
+      </TerminalPanel>
+
+      <TerminalPanel title="模拟操作状态轨道" meta="仅表示本地模拟记录，不对应真实委托、成交或到账" className="p-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <SimulationStatusStep label="计划中" value={simulationStatusCounts.planned} tone="warning" />
+          <SimulationStatusStep label="已记录模拟" value={simulationStatusCounts.simulated} tone="info" />
+          <SimulationStatusStep label="已确认模拟" value={simulationStatusCounts.confirmed} tone="success" />
+          <SimulationStatusStep label="已取消" value={simulationStatusCounts.cancelled} tone="neutral" />
+        </div>
       </TerminalPanel>
 
       {message ? <div className="rounded-md border border-cyan-500/30 bg-cyan-950/25 px-4 py-3 text-sm text-cyan-100">{message}</div> : null}
@@ -391,7 +413,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
           )}
           <div className="mt-4 flex items-center justify-between gap-3">
             <p className="text-xs leading-5 text-slate-500">
-              15:00 后或非交易日会顺延；买入确认前不增加份额，卖出确认前只进入待确认，到账后更新现金仓。
+              日期与确认日只用于模拟时序记录；保存后会立即更新用户模拟组合，不会发送委托或连接券商。
             </p>
             <Button variant="primary" disabled={busy} onClick={() => void submitTrade()}>
               记录{tradeLabels[tradeKind]}
@@ -451,11 +473,11 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 lg:col-span-6">
-          <SectionTitle title="待确认交易" meta="到确认日/到账日后可刷新落仓" />
+          <SectionTitle title="待确认模拟操作" meta="按模拟确认日刷新状态，不触发真实成交" />
           <Button className="mb-3" variant="secondary" disabled={busy} onClick={() => void refreshConfirmations()}>
             刷新确认状态
           </Button>
-          <TradeList items={executionSync.pending} empty="暂无待确认交易" />
+          <TradeList items={executionSync.pending} empty="暂无待确认模拟操作" />
         </Card>
         <Card className="col-span-12 p-4 lg:col-span-6">
           <SectionTitle title="最近用户模拟操作" meta="本地账本记录" />
@@ -679,6 +701,11 @@ function ExecutionState({ label, value, tone }: { label: string; value: string; 
   return <div className="bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className="mt-2 flex items-center justify-between gap-2 text-sm font-semibold text-slate-200"><span>{value}</span><TerminalState label={tone === "warning" ? "待确认" : "正常"} tone={tone} /></div></div>;
 }
 
+function SimulationStatusStep({ label, value, tone }: { label: string; value: number; tone: "neutral" | "success" | "warning" | "info" }) {
+  const color = tone === "success" ? "text-emerald-300" : tone === "warning" ? "text-amber-300" : tone === "info" ? "text-cyan-200" : "text-slate-300";
+  return <div className="border border-slate-800 bg-slate-950/55 px-3 py-3"><div className="text-xs font-semibold text-slate-500">{label}</div><div className={`metric-number mt-2 text-2xl font-black ${color}`}>{value}</div></div>;
+}
+
 function FundCandidate({
   candidate,
   disabled,
@@ -756,7 +783,7 @@ function TradeList({ items, empty }: { items: Record<string, unknown>[]; empty: 
             {operationText(item.operation_type)} | {text(item.trade_date)} | {signedMoney(item.amount ?? item.out_amount)}
           </div>
           <div className="text-xs text-slate-500">
-            确认日 {text(item.confirm_date ?? item.in_confirm_date ?? item.out_confirm_date)} | 到账日 {text(item.settlement_date ?? item.in_confirm_date)}
+            模拟确认日 {text(item.confirm_date ?? item.in_confirm_date ?? item.out_confirm_date)} | 模拟到账日 {text(item.settlement_date ?? item.in_confirm_date)}
           </div>
         </div>
       ))}
