@@ -118,6 +118,45 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(len(pending["items"]), 1)
         self.assertFalse(lock_path(self.agent.root, "execution_sync").exists())
 
+    def test_explicit_user_simulation_trade_updates_only_user_simulation_portfolio(self):
+        result = record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "sim-buy-1",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "电网设备C",
+                "operation_type": "buy",
+                "amount": 100,
+                "simulation_track": "user_simulation",
+                "simulation_status": "simulated",
+            },
+        )
+        portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        target = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
+        cash = next(item for item in portfolio["funds"] if item["fund_code"] == "017704")
+        pending = json.loads((self.agent.root / "db/execution_sync/pending_confirmations.json").read_text(encoding="utf-8"))
+        replay = record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "sim-buy-1",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "电网设备C",
+                "operation_type": "buy",
+                "amount": 100,
+                "simulation_track": "user_simulation",
+                "simulation_status": "simulated",
+            },
+        )
+        self.assertTrue(result["trade"]["is_simulation"])
+        self.assertEqual("simulated", result["trade"]["status"])
+        self.assertEqual(1100.0, target["current_value"])
+        self.assertEqual(900.0, cash["current_value"])
+        self.assertEqual([], pending["items"])
+        self.assertTrue(result["trade"]["portfolio_simulation_event_path"])
+        self.assertTrue(replay["idempotent_replay"])
+
     def test_trade_record_id_is_idempotent_and_conflicts_across_dates(self):
         payload = {
             "trade_id": "trade-stable-1",

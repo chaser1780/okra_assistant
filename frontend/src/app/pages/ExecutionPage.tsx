@@ -217,10 +217,10 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     try {
       if (tradeKind === "convert") {
         await recordExecutionConversion(cleanPayload({ ...conversion, source: "user_simulation", platform: "local_simulation", simulation_track: "user_simulation", simulation_status: "simulated" }));
-        setMessage("转换已记录到用户模拟轨道。组合仓位仍以你确认同步的组合快照为准。");
+        setMessage("转换已记录并立即应用到用户模拟组合；策略实验组合不会改变。");
       } else {
         await recordExecutionTrade(cleanPayload({ ...trade, operation_type: tradeKind, source: "user_simulation", platform: "local_simulation", simulation_track: "user_simulation", simulation_status: "simulated" }));
-        setMessage(`${tradeLabels[tradeKind]}已记录到用户模拟轨道；不会自动改写当前组合仓位。`);
+        setMessage(`${tradeLabels[tradeKind]}已记录并立即应用到用户模拟组合。`);
       }
       onRefresh();
     } catch (error) {
@@ -370,7 +370,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-7">
-          <SectionTitle title="记录用户模拟操作" meta="只写入用户模拟账本，不自动改写组合" />
+          <SectionTitle title="记录用户模拟操作" meta="立即更新用户模拟组合，不影响策略实验" />
           <div className="mb-4 inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
             {(["buy", "sell", "convert"] as TradeKind[]).map((kind) => (
               <button
