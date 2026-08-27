@@ -123,6 +123,28 @@ class MemoryLifecycleEventTests(unittest.TestCase):
         self.assertTrue(page["longMemory"]["recentEvents"])
         self.assertIn("review", page)
 
+    def test_review_payload_marks_expired_memory_without_mutating_its_status(self):
+        upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_id": "expired-memory",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "window",
+                "title": "Expired window",
+                "text": "Expired rule.",
+                "status": "strategic",
+                "valid_until": "2026-05-10",
+            },
+        )
+
+        page = OkraWebApi(self.agent.root).review_page("2026-05-20")
+        record = next(item for item in page["longMemory"]["records"] if item["memory_id"] == "expired-memory")
+
+        self.assertEqual("strategic", record["status"])
+        self.assertTrue(record["isExpired"])
+        self.assertEqual("expired", record["effectiveStatus"])
+
 
 if __name__ == "__main__":
     unittest.main()

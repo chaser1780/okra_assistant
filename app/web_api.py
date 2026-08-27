@@ -326,7 +326,7 @@ class OkraWebApi:
             research=research,
         )
         payload["portfolio"] = self.page_service.portfolio_payload(snapshot.state)
-        payload["longMemory"] = self.page_service.long_memory_payload()
+        payload["longMemory"] = self.page_service.long_memory_payload(snapshot.selected_date)
         payload["system"] = self.page_service.system_payload(snapshot.state, include_full_rag=False)
         return payload
 
@@ -375,7 +375,7 @@ class OkraWebApi:
         return self.state_service.build_review_page_dto(
             snapshot,
             review=_to_jsonable(self.state_service.build_review_view_model(snapshot)),
-            long_memory=self.page_service.long_memory_payload(),
+            long_memory=self.page_service.long_memory_payload(snapshot.selected_date),
         )
 
     def shadow_review_page(self, selected: str | None = None) -> dict:

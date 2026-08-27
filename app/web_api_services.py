@@ -191,6 +191,19 @@ def _source_health_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _with_memory_effective_status(records: list[dict[str, Any]], reference_date: str) -> list[dict[str, Any]]:
+    target_date = str(reference_date or "")[:10]
+    result = []
+    for record in records:
+        item = dict(record)
+        valid_until = str(item.get("valid_until") or "")[:10]
+        expired = bool(target_date and valid_until and valid_until < target_date)
+        item["isExpired"] = expired
+        item["effectiveStatus"] = "expired" if expired else str(item.get("status") or "candidate")
+        result.append(item)
+    return result
+
+
 def _rank_news_items(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     def sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
         risk_rank = {"high": 3, "medium": 2, "low": 1}.get(str(item.get("risk_level", "") or ""), 0)
@@ -418,8 +431,8 @@ class PageService:
     def dates(self) -> dict[str, Any]:
         return {"dates": collect_dates(self.home), "today": today_str()}
 
-    def long_memory_payload(self) -> dict[str, Any]:
-        records = list_memory_records(self.home, limit=1000)
+    def long_memory_payload(self, reference_date: str = "") -> dict[str, Any]:
+        records = _with_memory_effective_status(list_memory_records(self.home, limit=1000), reference_date)
         grouped = {
             "fund": [item for item in records if item.get("domain") == "fund"],
             "market": [item for item in records if item.get("domain") == "market"],
@@ -449,12 +462,12 @@ class PageService:
             "recentEvents": _to_jsonable(list_memory_events(self.home, limit=40)),
         }
 
-    def fund_long_memory_payload(self, fund_code: str) -> dict[str, Any]:
-        fund_records = list_memory_records(self.home, domain="fund", entity_key=fund_code, limit=80)
-        execution_records = list_memory_records(self.home, domain="execution", limit=80)
+    def fund_long_memory_payload(self, fund_code: str, reference_date: str = "") -> dict[str, Any]:
+        fund_records = _with_memory_effective_status(list_memory_records(self.home, domain="fund", entity_key=fund_code, limit=80), reference_date)
+        execution_records = _with_memory_effective_status(list_memory_records(self.home, domain="execution", limit=80), reference_date)
         portfolio_rules = [
             item
-            for item in list_memory_records(self.home, domain="portfolio", limit=120)
+            for item in _with_memory_effective_status(list_memory_records(self.home, domain="portfolio", limit=120), reference_date)
             if item.get("status") in {"strategic", "validated_strategy", "permanent"}
         ]
         return {"fund": _to_jsonable(fund_records), "execution": _to_jsonable(execution_records[:12]), "rules": _to_jsonable(portfolio_rules[:12])}
@@ -540,7 +553,7 @@ class PageService:
             "intelligence": self.intelligence_payload(state),
             "realtime": self.realtime_payload(state, realtime=_to_jsonable(realtime)),
             "review": _to_jsonable(review),
-            "longMemory": self.long_memory_payload(),
+            "longMemory": self.long_memory_payload(snapshot.selected_date),
             "executionSync": self.execution_controller.execution_sync_payload(),
             "todayAnalysis": today_analysis,
             "dailyFirstOpen": _to_jsonable(today_analysis),
@@ -634,7 +647,7 @@ class PageService:
                 "benchmarkStatus": benchmark_status,
             },
             "tradeMarkers": sorted(_markers(trade_markers) + planned_dca_markers, key=lambda item: item.get("date", "")),
-            "longMemory": self.fund_long_memory_payload(fund_code),
+            "longMemory": self.fund_long_memory_payload(fund_code, snapshot.selected_date),
             "dataContext": self.data_context(state),
             "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "system": system_payload(state),

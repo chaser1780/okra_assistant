@@ -597,6 +597,9 @@ export type LongMemoryRecord = {
   approved_by?: string;
   approved_at?: string;
   can_promote_permanent?: boolean;
+  valid_until?: string;
+  isExpired?: boolean;
+  effectiveStatus?: MemoryStatus | string;
   source?: string;
   metadata?: Record<string, unknown>;
   evidence_refs?: Array<Record<string, unknown>>;

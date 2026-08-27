@@ -268,7 +268,7 @@ function MemoryCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-slate-100">{memoryTitle(record.title)}</h3>
-            <Badge tone={statusTone(record.status)}>{statusLabel(record.status)}</Badge>
+            <Badge tone={record.isExpired ? "warning" : statusTone(record.status)}>{record.isExpired ? "已过期" : statusLabel(record.effectiveStatus ?? record.status)}</Badge>
             <Badge tone="info">{domainLabel(record.domain)}</Badge>
             <Badge tone="neutral">{entityLabel(record.entity_key)}</Badge>
             {strategyExperiment ? <Badge tone="warning">实验来源</Badge> : <Badge tone="success">用户轨道</Badge>}
@@ -286,6 +286,7 @@ function MemoryCard({
             支持 {record.support_count} / 反例 {record.contradiction_count}
           </div>
           {strategyExperiment ? <div>仅用于策略验证</div> : null}
+          {record.isExpired ? <div>有效期至 {record.valid_until || "未知"}</div> : null}
         </div>
       </div>
 
