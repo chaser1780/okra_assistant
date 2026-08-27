@@ -41,6 +41,8 @@ class DataContractTests(unittest.TestCase):
         self.assertEqual("official_nav_pending", context["freshnessStatus"])
         self.assertIn("官方净值", context["freshnessReason"])
         self.assertEqual("fund_estimate_proxy", context["sourceKey"])
+        self.assertEqual("portfolio", context["subjectId"])
+        self.assertEqual("2026-08-27", context["asOfDate"])
 
     def test_conflicting_realtime_observations_are_explicit(self):
         context = build_data_context(

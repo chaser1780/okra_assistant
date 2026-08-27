@@ -29,6 +29,7 @@ class DecisionTraceTests(unittest.TestCase):
                 json.dumps(
                     {
                         "generated_at": "2026-08-27T15:00:00+08:00",
+                        "decision_cutoff": "2026-08-27T14:55:00+08:00",
                         "decision_source": "action_debate_promoted",
                         "execution_eligible": True,
                         "tactical_actions": [
@@ -71,6 +72,9 @@ class DecisionTraceTests(unittest.TestCase):
         self.assertEqual("user_simulation", trace["formalTrack"])
         self.assertEqual("decision-1", trace["decisions"][0]["decisionId"])
         self.assertTrue(trace["sourceArtifacts"]["validatedAdvice"]["exists"])
+        self.assertEqual("2026-08-27T14:55:00+08:00", trace["decisionCutoff"])
+        self.assertEqual("2026-08-27T14:55:00+08:00", trace["decisions"][0]["decisionCutoff"])
+        self.assertEqual("unavailable", trace["decisions"][0]["modelRunScope"])
 
     def test_missing_artifacts_remain_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:

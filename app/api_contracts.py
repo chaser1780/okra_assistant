@@ -43,6 +43,8 @@ class MetricDto(ContractModel):
 
 class DataContextDto(ContractModel):
     snapshotId: str = ""
+    subjectId: str = "portfolio"
+    asOfDate: str = ""
     selectedDate: str = ""
     portfolioAsOfDate: str = ""
     realtimeAsOfDate: str = ""

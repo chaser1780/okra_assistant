@@ -109,6 +109,8 @@ def build_data_context(
     conflict_count = sum(1 for item in items if _has_estimate_proxy_conflict(item))
     snapshot_payload = {
         "selectedDate": selected_date,
+        "asOfDate": portfolio_date or realtime_date or selected_date,
+        "subjectId": str(portfolio.get("portfolio_id") or portfolio.get("id") or "portfolio"),
         "portfolioAsOfDate": portfolio_date,
         "realtimeAsOfDate": realtime_date,
         "latestRetrievedAt": retrieved_at,
@@ -119,6 +121,8 @@ def build_data_context(
     payload_hash = stable_payload_hash(snapshot_payload)
     return {
         "snapshotId": f"data_{payload_hash[:16]}",
+        "subjectId": snapshot_payload["subjectId"],
+        "asOfDate": snapshot_payload["asOfDate"],
         "selectedDate": selected_date,
         "portfolioAsOfDate": portfolio_date,
         "realtimeAsOfDate": realtime_date,
