@@ -83,6 +83,8 @@ export function ReviewPage({
 
       <DecisionTracePanel trace={review.decisionTrace} />
 
+      <ReviewQualityPanels quality={review.quality} />
+
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-3">
           <SectionTitle title="长期记忆总览" meta={longMemory.updatedAt} />
@@ -232,6 +234,70 @@ function DecisionTracePanel({ trace }: { trace?: ReviewPayload["decisionTrace"] 
 
 function TraceMetric({ label, value, tone = "accent" }: { label: string; value: string; tone?: Tone }) {
   return <div className="border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-xs text-slate-500">{label}</div><div className="mt-2 flex items-center justify-between gap-2"><span className="metric-number text-sm font-semibold text-slate-200">{value}</span><Badge tone={tone}>{tone === "warning" ? "受限" : "追溯"}</Badge></div></div>;
+}
+
+function ReviewQualityPanels({ quality }: { quality?: ReviewPayload["quality"] }) {
+  const advice = quality?.adviceQuality;
+  const simulation = quality?.simulationQuality;
+  const memory = quality?.memoryQuality;
+  const twr = simulation?.twr ?? {};
+  const mwr = simulation?.mwr ?? {};
+  const drawdown = simulation?.cashflowAdjustedDrawdown ?? {};
+  const benchmark = simulation?.benchmark ?? {};
+  const trackCounts = memory?.sourceTrackCounts ?? {};
+  return (
+    <TerminalPanel title="复盘质量" meta="只使用已落库的复盘、用户模拟账本与记忆记录；数据不足时不估算" className="p-4">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <QualityBlock title="建议质量" tone="accent">
+          <QualityLine label="已评估事件" value={`${advice?.scoredEventCount ?? 0} 条`} />
+          <QualityLine label="方向一致率" value={qualityPercent(advice?.directionalAccuracyPct)} tone={advice?.directionalAccuracyPct == null ? "neutral" : advice.directionalAccuracyPct >= 50 ? "success" : "danger"} />
+          <QualityLine label="支持 / 反向 / 中性" value={`${advice?.supportedCount ?? 0} / ${advice?.adverseCount ?? 0} / ${advice?.neutralCount ?? 0}`} />
+          <QualityLine label="明确弃答" value={qualityRate(advice?.abstention?.count, advice?.abstention?.decisionCount)} />
+          <p className="mt-3 text-xs leading-5 text-slate-500">{advice?.confidenceCalibration?.reason || "暂无置信度校准数据。"}</p>
+        </QualityBlock>
+        <QualityBlock title="用户模拟质量" tone="info">
+          <QualityLine label="模拟操作" value={`${simulation?.operationCount ?? 0} 笔`} />
+          <QualityLine label="换手金额 / 占比" value={`${compactMoney(simulation?.turnoverAmount)} / ${qualityPercent(simulation?.turnoverPct)}`} />
+          <QualityLine label="明确费用" value={compactMoney(simulation?.costAmount)} />
+          <QualityLine label="TWR / MWR" value={`${performanceValue(twr)} / ${performanceValue(mwr)}`} />
+          <QualityLine label="现金流调整回撤" value={performanceValue(drawdown, "currentPct")} />
+          <p className="mt-3 text-xs leading-5 text-slate-500">{benchmark.status === "available" ? "组合基准已配置，可在绩效图表中查看相对表现。" : "组合基准未配置，不展示伪造的超额收益。"}</p>
+        </QualityBlock>
+        <QualityBlock title="记忆质量" tone="warning">
+          <QualityLine label="有效记录" value={`${memory?.recordCount ?? 0} 条`} />
+          <QualityLine label="反例 / 已过期" value={`${memory?.contradictionCount ?? 0} / ${memory?.expiredCount ?? 0}`} />
+          <QualityLine label="重复候选" value={`${memory?.duplicateCount ?? 0} 条`} />
+          <QualityLine label="用户 / 实验来源" value={`${trackCounts.user_simulation ?? 0} / ${trackCounts.strategy_simulation ?? 0}`} />
+          <p className="mt-3 text-xs leading-5 text-slate-500">实验来源保留在策略验证域，不能静默影响用户模拟组合。</p>
+        </QualityBlock>
+      </div>
+    </TerminalPanel>
+  );
+}
+
+function QualityBlock({ title, tone, children }: { title: string; tone: Tone; children: React.ReactNode }) {
+  const color = tone === "warning" ? "text-amber-200" : tone === "info" ? "text-cyan-200" : "text-cyan-100";
+  return <section className="border border-slate-800 bg-slate-950/45 p-3"><h3 className={`text-sm font-bold ${color}`}>{title}</h3><div className="mt-3 space-y-2">{children}</div></section>;
+}
+
+function QualityLine({ label, value, tone = "neutral" }: { label: string; value: string; tone?: Tone }) {
+  const color = tone === "success" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : "text-slate-200";
+  return <div className="flex items-center justify-between gap-3 text-sm"><span className="text-slate-500">{label}</span><span className={`metric-number text-right ${color}`}>{value}</span></div>;
+}
+
+function qualityPercent(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : "不可用";
+}
+
+function qualityRate(count: number | undefined, total: number | undefined) {
+  if (!total) return "不可用";
+  return `${count ?? 0} / ${total} (${((count ?? 0) / total * 100).toFixed(1)}%)`;
+}
+
+function performanceValue(value: Record<string, unknown>, key = "returnPct") {
+  if (value.available !== true) return "不可用";
+  const numeric = Number(value[key]);
+  return Number.isFinite(numeric) ? `${numeric.toFixed(2)}%` : "不可用";
 }
 
 function CountLine({ label, value, tone = "neutral" }: { label: string; value: number; tone?: Tone }) {

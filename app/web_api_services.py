@@ -458,6 +458,101 @@ class PageService:
             "recentEvents": _to_jsonable(list_memory_events(self.home, limit=40)),
         }
 
+    def review_quality_payload(
+        self,
+        state: dict[str, Any],
+        reference_date: str,
+        long_memory: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read-only quality metrics with explicit data sufficiency boundaries."""
+        outcome_events = self._outcome_events(reference_date)
+        scored = [event for event in outcome_events if str(event.get("scoring_status") or "") == "scored"]
+        positive = [event for event in scored if str(event.get("outcome_label") or "") in {"helped", "avoided_loss"}]
+        adverse = [event for event in scored if str(event.get("outcome_label") or "") in {"hurt", "missed_opportunity"}]
+        neutral = [event for event in scored if str(event.get("outcome_label") or "") == "neutral"]
+        directional_count = len(positive) + len(adverse)
+
+        trace = self.read_json_file(self.home / "db" / "decision_traces" / f"{reference_date}.json")
+        decisions = [item for item in trace.get("decisions", []) or [] if isinstance(item, dict)]
+        abstentions = [item for item in decisions if str(item.get("abstentionReason") or "").strip()]
+
+        portfolio = self.portfolio_payload(state)
+        performance = portfolio.get("performanceMetrics", {}) if isinstance(portfolio.get("performanceMetrics"), dict) else {}
+        execution = self.execution_controller.execution_sync_payload()
+        trades = [
+            item
+            for item in execution.get("trades", []) or []
+            if isinstance(item, dict) and item.get("is_simulation") and str(item.get("simulation_track") or "") == USER_SIMULATION_TRACK
+        ]
+        simulated_notional = sum(_safe_float(item.get("out_amount") if str(item.get("operation_type") or "") == "convert" else item.get("amount")) for item in trades)
+        simulated_fees = sum(_safe_float(item.get("fee")) for item in trades)
+        total_value = _safe_float(portfolio.get("totalValue"))
+
+        records = [item for item in long_memory.get("records", []) or [] if isinstance(item, dict)]
+        duplicate_keys: dict[tuple[str, str, str], int] = {}
+        for record in records:
+            key = (
+                str(record.get("domain") or ""),
+                str(record.get("entity_key") or ""),
+                " ".join(str(record.get("title") or "").lower().split()),
+            )
+            duplicate_keys[key] = duplicate_keys.get(key, 0) + 1
+        duplicate_count = sum(count - 1 for count in duplicate_keys.values() if count > 1)
+        contradiction_total = sum(int(record.get("contradiction_count") or 0) for record in records)
+        expired_count = sum(1 for record in records if record.get("isExpired"))
+
+        return {
+            "adviceQuality": {
+                "scoredEventCount": len(scored),
+                "directionalEventCount": directional_count,
+                "supportedCount": len(positive),
+                "adverseCount": len(adverse),
+                "neutralCount": len(neutral),
+                "directionalAccuracyPct": round(len(positive) / directional_count * 100, 2) if directional_count else None,
+                "confidenceCalibration": {
+                    "available": False,
+                    "reason": "当前复盘事件未保留与单条建议置信度的一一对应关系，暂不计算校准误差。",
+                },
+                "abstention": {
+                    "count": len(abstentions),
+                    "decisionCount": len(decisions),
+                    "ratePct": round(len(abstentions) / len(decisions) * 100, 2) if decisions else None,
+                    "reason": "仅统计带有明确弃答原因的正式建议记录。",
+                },
+            },
+            "simulationQuality": {
+                "track": USER_SIMULATION_TRACK,
+                "operationCount": len(trades),
+                "turnoverAmount": round(simulated_notional, 2),
+                "turnoverPct": round(simulated_notional / total_value * 100, 2) if total_value else None,
+                "costAmount": round(simulated_fees, 2),
+                "twr": performance.get("twr", {}),
+                "mwr": performance.get("mwr", {}),
+                "cashflowAdjustedDrawdown": performance.get("cashflowAdjustedDrawdown", {}),
+                "benchmark": portfolio.get("benchmark", {"status": "not_configured"}),
+            },
+            "memoryQuality": {
+                "recordCount": len(records),
+                "expiredCount": expired_count,
+                "duplicateCount": duplicate_count,
+                "contradictionCount": contradiction_total,
+                "sourceTrackCounts": dict((long_memory.get("lifecycle") or {}).get("trackCounts") or {}),
+                "statusCounts": dict((long_memory.get("lifecycle") or {}).get("statusCounts") or {}),
+            },
+        }
+
+    def _outcome_events(self, reference_date: str) -> list[dict[str, Any]]:
+        root = self.home / "db" / "outcome_events"
+        if not root.exists() or not reference_date:
+            return []
+        rows: list[dict[str, Any]] = []
+        for path in sorted(root.glob(f"{reference_date}__*.json")):
+            payload = self.read_json_file(path)
+            for item in payload.get("events", []) or []:
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows
+
     def fund_long_memory_payload(self, fund_code: str, reference_date: str = "") -> dict[str, Any]:
         fund_records = _with_memory_effective_status(list_memory_records(self.home, domain="fund", entity_key=fund_code, limit=80), reference_date)
         execution_records = _with_memory_effective_status(list_memory_records(self.home, domain="execution", limit=80), reference_date)

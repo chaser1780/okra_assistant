@@ -372,10 +372,13 @@ class OkraWebApi:
 
     def review_page(self, selected: str | None = None) -> dict:
         snapshot = self.state_service.load_snapshot(selected)
+        long_memory = self.page_service.long_memory_payload(snapshot.selected_date)
+        review = _to_jsonable(self.state_service.build_review_view_model(snapshot))
+        review["quality"] = self.page_service.review_quality_payload(snapshot.state, snapshot.selected_date, long_memory)
         return self.state_service.build_review_page_dto(
             snapshot,
-            review=_to_jsonable(self.state_service.build_review_view_model(snapshot)),
-            long_memory=self.page_service.long_memory_payload(snapshot.selected_date),
+            review=review,
+            long_memory=long_memory,
         )
 
     def shadow_review_page(self, selected: str | None = None) -> dict:

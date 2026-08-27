@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.web_api import OkraWebApi  # noqa: E402
 from helpers import TempAgentHome  # noqa: E402
+from long_memory_store import upsert_memory_record  # noqa: E402
 from strategy_simulation import create_experiment, record_action  # noqa: E402
 
 
@@ -77,6 +78,50 @@ class AuditSurfacePayloadTests(unittest.TestCase):
         self.assertEqual(0.0, experiment["valueDelta"])
         self.assertTrue(page["guardrails"]["nonExecutable"])
         self.assertFalse(page["guardrails"]["affectsPortfolio"])
+
+    def test_review_quality_uses_outcomes_and_keeps_missing_metrics_explicit(self):
+        report_date = "2026-05-20"
+        self.agent.write_json(
+            f"db/outcome_events/{report_date}__T_1.json",
+            {
+                "events": [
+                    {"scoring_status": "scored", "outcome_label": "helped"},
+                    {"scoring_status": "scored", "outcome_label": "hurt"},
+                    {"scoring_status": "pending", "outcome_label": "not_scored"},
+                ]
+            },
+        )
+        self.agent.write_json(
+            f"db/decision_traces/{report_date}.json",
+            {"decisions": [{"abstentionReason": "证据不足"}, {"abstentionReason": ""}]},
+        )
+        upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_id": "quality-memory",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "quality",
+                "title": "Quality rule",
+                "text": "Tracks a counterexample.",
+                "status": "experimental_active",
+                "contradiction_count": 2,
+                "source": "replay_experiment",
+                "metadata": {"experimentId": "quality-exp"},
+            },
+        )
+
+        quality = OkraWebApi(self.agent.root).review_page(report_date)["review"]["quality"]
+
+        self.assertEqual(2, quality["adviceQuality"]["scoredEventCount"])
+        self.assertEqual(50.0, quality["adviceQuality"]["directionalAccuracyPct"])
+        self.assertEqual(1, quality["adviceQuality"]["abstention"]["count"])
+        self.assertFalse(quality["adviceQuality"]["confidenceCalibration"]["available"])
+        self.assertEqual("user_simulation", quality["simulationQuality"]["track"])
+        self.assertFalse(quality["simulationQuality"]["twr"].get("available", False))
+        self.assertEqual("not_configured", quality["simulationQuality"]["benchmark"]["status"])
+        self.assertEqual(2, quality["memoryQuality"]["contradictionCount"])
+        self.assertEqual(1, quality["memoryQuality"]["sourceTrackCounts"]["strategy_simulation"])
 
 
 if __name__ == "__main__":

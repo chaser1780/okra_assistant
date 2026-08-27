@@ -481,11 +481,42 @@ export type ReviewPayload = {
     source?: string;
     track?: string;
     executionEligible?: boolean;
-    decisionCount?: number;
-    evidenceCount?: number;
-    modelRunCount?: number;
-    availableArtifactCount?: number;
-    decisions?: Array<Record<string, unknown>>;
+    decisionCount: number;
+    evidenceCount: number;
+    modelRunCount: number;
+    availableArtifactCount: number;
+    decisions: Array<Record<string, unknown>>;
+  };
+  quality?: {
+    adviceQuality?: {
+      scoredEventCount?: number;
+      directionalEventCount?: number;
+      supportedCount?: number;
+      adverseCount?: number;
+      neutralCount?: number;
+      directionalAccuracyPct?: number | null;
+      confidenceCalibration?: { available?: boolean; reason?: string };
+      abstention?: { count?: number; decisionCount?: number; ratePct?: number | null; reason?: string };
+    };
+    simulationQuality?: {
+      track?: string;
+      operationCount?: number;
+      turnoverAmount?: number;
+      turnoverPct?: number | null;
+      costAmount?: number;
+      twr?: Record<string, unknown>;
+      mwr?: Record<string, unknown>;
+      cashflowAdjustedDrawdown?: Record<string, unknown>;
+      benchmark?: Record<string, unknown>;
+    };
+    memoryQuality?: {
+      recordCount?: number;
+      expiredCount?: number;
+      duplicateCount?: number;
+      contradictionCount?: number;
+      sourceTrackCounts?: Record<string, number>;
+      statusCounts?: Record<string, number>;
+    };
   };
 };
 

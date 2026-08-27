@@ -290,6 +290,38 @@ const decisionTraceSchema = z.object({
   decisions: z.array(unknownRecordSchema).catch([])
 }).passthrough();
 
+const reviewQualitySchema = z.object({
+  adviceQuality: z.object({
+    scoredEventCount: z.number().optional(),
+    directionalEventCount: z.number().optional(),
+    supportedCount: z.number().optional(),
+    adverseCount: z.number().optional(),
+    neutralCount: z.number().optional(),
+    directionalAccuracyPct: z.number().nullable().optional(),
+    confidenceCalibration: z.object({ available: z.boolean().optional(), reason: z.string().optional() }).passthrough().optional(),
+    abstention: z.object({ count: z.number().optional(), decisionCount: z.number().optional(), ratePct: z.number().nullable().optional(), reason: z.string().optional() }).passthrough().optional()
+  }).passthrough().optional(),
+  simulationQuality: z.object({
+    track: z.string().optional(),
+    operationCount: z.number().optional(),
+    turnoverAmount: z.number().optional(),
+    turnoverPct: z.number().nullable().optional(),
+    costAmount: z.number().optional(),
+    twr: unknownRecordSchema.optional(),
+    mwr: unknownRecordSchema.optional(),
+    cashflowAdjustedDrawdown: unknownRecordSchema.optional(),
+    benchmark: unknownRecordSchema.optional()
+  }).passthrough().optional(),
+  memoryQuality: z.object({
+    recordCount: z.number().optional(),
+    expiredCount: z.number().optional(),
+    duplicateCount: z.number().optional(),
+    contradictionCount: z.number().optional(),
+    sourceTrackCounts: numberRecordSchema.optional(),
+    statusCounts: numberRecordSchema.optional()
+  }).passthrough().optional()
+}).passthrough();
+
 export const reviewSchema = z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
@@ -315,7 +347,8 @@ export const reviewSchema = z.object({
     latestLearningAuditSummary: unknownRecordSchema.optional(),
     latestLearningAuditPath: z.string().optional()
   }).passthrough().optional(),
-  decisionTrace: decisionTraceSchema.optional()
+  decisionTrace: decisionTraceSchema.optional(),
+  quality: reviewQualitySchema.optional()
 }).passthrough();
 
 const longMemoryRecordSchema = z.object({
