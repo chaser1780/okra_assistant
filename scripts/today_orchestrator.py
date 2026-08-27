@@ -33,7 +33,7 @@ from common import (
     is_trading_day,
     today_shanghai,
 )
-from execution_sync import build_execution_sync_payload, update_pending_confirmations
+from execution_sync import build_execution_sync_payload, sync_configured_simulated_dca, update_pending_confirmations
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -427,6 +427,10 @@ def _needs_after_close_rerun(agent_home: Path, report_date: str) -> bool:
     )
 
 
+def should_apply_configured_dca(report_date: str, started_at: datetime) -> bool:
+    return report_date == today_shanghai(started_at)
+
+
 def pending_backfill_dates(agent_home: Path, report_date: str, started_at: datetime) -> list[str]:
     if report_date != today_shanghai(started_at):
         return []
@@ -536,8 +540,13 @@ def run_today_analysis(
         runtime.update({"phase": "execution_sync", "currentStep": "update_pending_confirmations", "elapsedSeconds": _elapsed_seconds(run_meta["started_at_shanghai"])})
         _write_runtime(agent_home, report_date, runtime)
         confirmation_updates = update_pending_confirmations(agent_home, report_date)
+        configured_dca = (
+            sync_configured_simulated_dca(agent_home, report_date)
+            if should_apply_configured_dca(report_date, started)
+            else {"asOfDate": report_date, "status": "skipped", "reason": "historical_analysis_does_not_mutate_user_simulation", "created": [], "skipped": []}
+        )
         execution_sync = build_execution_sync_payload(agent_home)
-        dump_json(paths.workspace / "execution_sync.json", {"confirmation_updates": confirmation_updates, "execution_sync": execution_sync})
+        dump_json(paths.workspace / "execution_sync.json", {"confirmation_updates": confirmation_updates, "configured_dca": configured_dca, "execution_sync": execution_sync})
 
         runtime.update({"phase": "today_analysis", "currentStep": "run_daily_pipeline", "elapsedSeconds": _elapsed_seconds(run_meta["started_at_shanghai"])})
         _write_runtime(agent_home, report_date, runtime)

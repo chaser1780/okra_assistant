@@ -819,6 +819,9 @@ def _copilot_is_context_followup(text: str) -> bool:
 
 
 def _copilot_should_use_rag(payload: dict, *, question: str, messages: list[dict[str, str]], page: str, fund_code: str) -> bool:
+    explicit_intent = str(payload.get("intent", "") or "").strip()
+    if explicit_intent in {"general_chat", "page_explain", "fund_explain", "decision_explain", "risk_review", "execution_review", "memory_review"}:
+        return explicit_intent != "general_chat"
     if isinstance(payload.get("useRag"), bool):
         return bool(payload["useRag"])
     current_text = question.lower()

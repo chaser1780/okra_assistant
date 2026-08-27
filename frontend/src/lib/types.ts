@@ -785,6 +785,8 @@ export type CopilotRequest = {
   page: string;
   selectedDate?: string;
   fundCode?: string;
+  intent?: "general_chat" | "page_explain" | "fund_explain" | "decision_explain" | "risk_review" | "execution_review" | "memory_review";
+  useRag?: boolean;
   messages?: CopilotMessage[];
 };
 

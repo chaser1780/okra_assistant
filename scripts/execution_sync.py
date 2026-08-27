@@ -14,6 +14,7 @@ from common import (
     actual_trade_dir,
     dump_json,
     ensure_layout,
+    is_trading_day,
     actual_trade_path,
     file_lock,
     load_json,
@@ -1101,6 +1102,50 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
             "reports": len(reports),
         },
     }
+
+
+def sync_configured_simulated_dca(agent_home: Path, report_date: str | None = None) -> dict[str, Any]:
+    """Materialize configured DCA as an idempotent user-simulation operation."""
+    as_of = resolve_date(report_date)
+    if not is_trading_day(agent_home, as_of):
+        return {"asOfDate": as_of, "status": "skipped", "reason": "not_trading_day", "created": [], "skipped": []}
+    portfolio = load_portfolio(agent_home)
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for fund in portfolio.get("funds", []) or []:
+        try:
+            amount = round(float(fund.get("fixed_daily_buy_amount", 0) or 0), 2)
+        except (TypeError, ValueError):
+            amount = 0.0
+        code = str(fund.get("fund_code", "") or "")
+        if amount <= 0 or not code:
+            continue
+        if fund.get("allow_trade") is False:
+            skipped.append({"fundCode": code, "reason": "trade_disabled"})
+            continue
+        trade_id = f"configured_dca_{as_of}_{code}"
+        try:
+            result = record_actual_trade(
+                agent_home,
+                {
+                    "trade_id": trade_id,
+                    "trade_date": as_of,
+                    "fund_code": code,
+                    "fund_name": str(fund.get("fund_name", "") or ""),
+                    "operation_type": "dca",
+                    "amount": amount,
+                    "source": "configured_dca",
+                    "platform": "local_simulation",
+                    "simulation_track": "user_simulation",
+                    "simulation_status": "simulated",
+                    "linked_advice_date": as_of,
+                    "user_note": "按固定定投配置自动生成的模拟操作。",
+                },
+            )
+            created.append({"fundCode": code, "amount": amount, "idempotentReplay": bool(result.get("idempotent_replay")), "tradeId": trade_id})
+        except RuntimeError as exc:
+            skipped.append({"fundCode": code, "reason": str(exc)})
+    return {"asOfDate": as_of, "status": "ok", "created": created, "skipped": skipped}
 
 
 def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 try:
@@ -10,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from common import load_llm_config
 from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
+from model_run_store import write_model_run
 
 
 def _conversation_history(evidence: dict) -> list[dict[str, str]]:
@@ -81,6 +83,7 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
         "max_output_tokens": 1400,
     }
     last_error = None
+    started = time.perf_counter()
     for transport_name, use_env_proxy in (("direct", False), ("env_proxy", True)):
         session = build_llm_session(use_env_proxy=use_env_proxy)
         try:
@@ -102,6 +105,18 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
             if not text:
                 text = str(parsed.get("output_text", "") or "").strip()
             if text:
+                write_model_run(
+                    home,
+                    config=config,
+                    request_name="copilot",
+                    request_payload=request_payload,
+                    status="ok",
+                    transport_name=transport_name,
+                    attempt_count=1,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    output_text=text,
+                    report_date=str(evidence.get("sourceDate") or evidence.get("selectedDate") or ""),
+                )
                 return text
             failed_event = parsed.get("failed_event") or parsed.get("error_event")
             raise RuntimeError(json.dumps(failed_event, ensure_ascii=False) if failed_event else "LLM response did not contain output text.")
@@ -109,7 +124,18 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
             last_error = exc
         finally:
             session.close()
-    raise RuntimeError(f"助手 LLM 请求失败：{last_error}")
+    write_model_run(
+        home,
+        config=config,
+        request_name="copilot",
+        request_payload=request_payload,
+        status="failed",
+        attempt_count=2,
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        error=str(last_error or "copilot request failed"),
+        report_date=str(evidence.get("sourceDate") or evidence.get("selectedDate") or ""),
+    )
+    raise RuntimeError("助手模型当前不可用")
 
 
 def local_copilot_answer(context: str, question: str, evidence: dict, error: str) -> str:
@@ -122,7 +148,7 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
                 "",
                 "请稍后重试；如果你问的是具体基金、持仓、交易或系统决策，我会在可用时结合本地证据回答。",
                 "",
-                f"LLM 调用失败原因：{error[:500]}",
+                "当前未展示底层模型错误，请在运行中心查看模型运行状态。",
             ]
         )
 
@@ -155,7 +181,7 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
             )
         if not citations:
             lines.append("- 没有可用证据。")
-        lines.extend(["", f"LLM 调用失败原因：{error[:500]}"])
+        lines.extend(["", "当前未展示底层模型错误，请在运行中心查看模型运行状态。"])
         return "\n".join(lines)
 
     page_data = evidence.get("pageData", {}) if isinstance(evidence, dict) else {}
@@ -183,5 +209,5 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
     ]
     if summary:
         lines.extend(["", f"状态摘要：{json.dumps(summary, ensure_ascii=False)[:500]}"])
-    lines.extend(["", f"LLM 调用失败原因：{error[:500]}"])
+    lines.extend(["", "当前未展示底层模型错误，请在运行中心查看模型运行状态。"])
     return "\n".join(lines)

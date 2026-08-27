@@ -61,8 +61,9 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
       </Card>
 
       <Card className="p-4 lg:col-span-2">
-        <SectionTitle title="RAG 检索状态" />
+        <SectionTitle title="RAG 检索状态" meta="当前为词法检索 + 重排；向量语义检索尚未启用" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <StatusTile label="检索模式" value="词法检索 + 重排" tone="info" />
           <StatusTile label="默认接入" value={enabledLabel(ragRuntime.enabled)} tone={ragRuntime.enabled ? "success" : "info"} />
           <StatusTile label="默认 Agent 接入" value={enabledLabel((ragRuntime.agentDefault ?? {}).enabled)} tone={(ragRuntime.agentDefault ?? {}).enabled ? "success" : "info"} />
           <StatusTile label="影子 Agent" value={enabledLabel((ragRuntime.agentShadow ?? {}).enabled)} tone={(ragRuntime.agentShadow ?? {}).enabled ? "success" : "info"} />

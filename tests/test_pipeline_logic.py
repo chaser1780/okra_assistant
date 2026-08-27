@@ -19,9 +19,16 @@ from helpers import TempAgentHome
 from ui_support import latest_nightly_target_date, load_portfolio_for_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
 from ui_tasks import portfolio_alignment_target_date, should_align_portfolio_on_boot
 from web_api_services import TaskController
+from today_orchestrator import should_apply_configured_dca
+from datetime import datetime, timezone, timedelta
 
 
 class PipelineLogicTests(unittest.TestCase):
+    def test_configured_dca_only_applies_on_current_shanghai_day(self):
+        started = datetime(2026, 5, 4, 16, 0, tzinfo=timezone(timedelta(hours=8)))
+        self.assertTrue(should_apply_configured_dca("2026-05-04", started))
+        self.assertFalse(should_apply_configured_dca("2026-05-03", started))
+
     def test_run_step_persists_child_stderr_on_failure(self):
         agent = TempAgentHome()
         try:

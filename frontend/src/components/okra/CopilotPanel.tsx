@@ -1,7 +1,7 @@
 import { PanelRightClose, PanelRightOpen, SendHorizontal, Sparkles, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { askCopilot } from "../../lib/api";
-import type { CopilotMessage, CopilotResponse } from "../../lib/types";
+import type { CopilotMessage, CopilotRequest, CopilotResponse } from "../../lib/types";
 import { Button } from "../ui";
 
 const ASSISTANT_TITLE = "\u667a\u80fd\u95ee\u7b54";
@@ -11,6 +11,7 @@ const OFFLINE_ANSWER = "\u667a\u80fd\u52a9\u624b\u6682\u65f6\u4e0d\u53ef\u7528\u
 const STOPPED_ANSWER = "\u5df2\u505c\u6b62\u672c\u6b21\u56de\u7b54\u3002";
 const QUESTION_PLACEHOLDER = "\u8f93\u5165\u4f60\u7684\u95ee\u9898";
 const HISTORY_LIMIT = 10;
+const GENERAL_CONCEPT_PATTERN = /什么是|什么意思|有什么区别|区别是什么|解释一下|定义|原理|what is|difference between|explain/i;
 
 type UiMessage = CopilotMessage & {
   id: string;
@@ -63,7 +64,8 @@ export function CopilotPanel({
     setBusy(true);
     try {
       const history = nextMessages.slice(-HISTORY_LIMIT).map(({ role, content }) => ({ role, content }));
-      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode, messages: history }, controller.signal);
+      const intent = copilotIntent(page, trimmedQuestion, fundCode);
+      const result = await askCopilot({ context, question: trimmedQuestion, page, selectedDate, fundCode, intent, useRag: intent !== "general_chat", messages: history }, controller.signal);
       const answer = result.answer || EMPTY_ANSWER;
       setMessages((current) => [...current, { id: newMessageId(), role: "assistant", content: answer }]);
       setLastResult(result);
@@ -211,4 +213,14 @@ export function CopilotPanel({
       </div>
     </aside>
   );
+}
+
+function copilotIntent(page: string, question: string, fundCode?: string): NonNullable<CopilotRequest["intent"]> {
+  if (GENERAL_CONCEPT_PATTERN.test(question)) return "general_chat";
+  if (page === "execution") return "execution_review";
+  if (page === "fundDetail" || fundCode) return "fund_explain";
+  if (page === "review" || page === "shadowReview") return "memory_review";
+  if (page === "today" || page === "portfolio" || page === "research") return "decision_explain";
+  if (page === "realtime" || page === "intelligence") return "risk_review";
+  return "page_explain";
 }

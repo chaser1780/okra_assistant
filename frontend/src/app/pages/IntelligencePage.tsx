@@ -23,6 +23,7 @@ export function IntelligencePage({
   const szseItems = entryArray(intelligence.szse_items);
   const eventRisks = entryArray(intelligence.event_risks);
   const events = entryArray(intelligence.events);
+  const eventSummary = (intelligence.eventSummary ?? {}) as Record<string, unknown>;
   const relatedByFund = intelligence.related_news_by_fund ?? {};
   const sentiment = (intelligence.sentiment_digest ?? {}) as Record<string, unknown>;
   const sourceHealth = ((intelligence.source_health ?? {}) as Record<string, unknown>) || {};
@@ -67,7 +68,7 @@ export function IntelligencePage({
     <div className="space-y-4">
       <ResearchDataContext context={intelligence.dataContext as DataContext | undefined} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard title="唯一新闻" value={text(metrics.unique_news_count, "0")} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
+        <MetricCard title="新闻事件" value={text(eventSummary.event_count, String(events.length))} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
         <MetricCard title="重要新闻" value={text(metrics.important_news_count, String(importantNews.length))} body="高热度、政策或风险事件" tone="warning" />
         <MetricCard title="监管信息" value={text(metrics.regulatory_count, String(regulatoryItems.length))} body={`深交所 ${text(metrics.szse_count, String(szseItems.length))} 条`} tone="info" />
         <MetricCard title="文本情绪" value={scoreText(metrics.text_sentiment_score)} body={`热度 ${scoreText(metrics.heat_score)} / 派生 ${scoreText(metrics.derived_sentiment_score)}`} tone={sentimentTone(metrics.text_sentiment_score)} />
@@ -397,6 +398,7 @@ function breakdownRows(value: ResearchDigestBreakdown | undefined): string[] {
 }
 
 function providerName(item: ResearchDigestEntry): string {
+  if (Array.isArray(item.providers) && item.providers.length) return text(item.providers[0], "unknown");
   return text(item.provider ?? item.source_name ?? item.source_key ?? item.name ?? item.label, "unknown");
 }
 

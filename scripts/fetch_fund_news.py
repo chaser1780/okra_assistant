@@ -29,9 +29,9 @@ from bs4 import BeautifulSoup
 from common import dump_json, ensure_layout, load_llm_config, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
 from multiagent_utils import ProviderRequestError, call_json_agent, call_responses_text, parse_json_text
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
-from news.event_cluster import cluster_news_items
+from news.repository import build_news_repository_payload
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
-from provider_adapters import build_provider_payload, build_provider_result, build_source_health_item, normalize_provider_item, resolve_provider_chain
+from provider_adapters import build_source_health_item, normalize_provider_item, resolve_provider_chain
 
 EASTMONEY_NOTICE_API = "https://api.fund.eastmoney.com/f10/JJGG"
 EASTMONEY_FUND_PAGE = "https://fund.eastmoney.com/{code}.html"
@@ -2681,29 +2681,17 @@ def main() -> None:
 
     items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
     global_dedup_summary = news_dedup_summary(items, dedup_window_hours=dedup_window_hours)
-    items, events, event_summary = cluster_news_items(items)
-    items.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-    payload = build_provider_payload(
-        report_date,
-        provider_name,
-        "items",
-        items,
+    payload = build_news_repository_payload(
+        report_date=report_date,
+        provider_name=provider_name,
+        provider_chain=[provider_name, *sentiment_provider_chain],
+        items=items,
         source_health=source_health,
         query_plan=query_plan,
         sentiment_queries=sentiment_queries,
         dedup_summary=dedup_stats,
         global_dedup_summary=global_dedup_summary,
         classification_summary=classification_summary,
-        events=events,
-        event_summary=event_summary,
-    )
-    freshness_status = "stale" if any(item.get("stale", False) for item in items) else "fresh"
-    payload = build_provider_result(
-        payload,
-        provider_name=provider_name,
-        provider_chain=[provider_name, *sentiment_provider_chain],
-        freshness_status=freshness_status,
-        confidence="medium" if freshness_status == "stale" else "high",
     )
     print(dump_json(news_path(agent_home, report_date), payload))
 

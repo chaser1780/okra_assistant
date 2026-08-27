@@ -70,6 +70,11 @@ def _question_from_payload(payload: dict[str, Any]) -> str:
 
 
 def _intent_from_payload(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("intent", "") or "").strip()
+    if explicit in {"page_explain", "fund_explain", "decision_explain", "risk_review", "memory_review"}:
+        return explicit
+    if explicit == "execution_review":
+        return "execution_explain"
     page = str(payload.get("page", "") or "").strip()
     question = str(payload.get("question", "") or "").strip().lower()
     if page == "execution":

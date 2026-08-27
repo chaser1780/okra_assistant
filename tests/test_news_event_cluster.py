@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from news.event_cluster import cluster_news_items, event_id_for  # noqa: E402
+from news.repository import build_news_repository_payload  # noqa: E402
 
 
 class NewsEventClusterTests(unittest.TestCase):
@@ -38,6 +39,23 @@ class NewsEventClusterTests(unittest.TestCase):
         first = {"title": "市场风险提示", "published_at": "2026-08-27T10:10:00+08:00"}
         second = {"title": " 市场风险提示 ", "published_at": "2026-08-27T11:20:00+08:00"}
         self.assertEqual(event_id_for(first), event_id_for(second))
+
+    def test_repository_payload_keeps_items_and_exposes_provider_contract(self):
+        payload = build_news_repository_payload(
+            report_date="2026-08-27",
+            provider_name="demo",
+            provider_chain=["demo"],
+            items=[{"title": "事件", "published_at": "2026-08-27T10:00:00+08:00", "code": "F1", "source_tier": "official_policy"}],
+            source_health=[],
+            query_plan={},
+            sentiment_queries=[],
+            dedup_summary={},
+            global_dedup_summary={},
+            classification_summary={},
+        )
+        self.assertEqual(1, len(payload["items"]))
+        self.assertEqual(1, payload["event_summary"]["event_count"])
+        self.assertEqual("news:demo", payload["providerResults"][0]["sourceKey"])
 
 
 if __name__ == "__main__":
