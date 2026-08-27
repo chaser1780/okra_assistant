@@ -27,7 +27,10 @@ from bs4 import BeautifulSoup
 
 from common import dump_json, ensure_layout, load_llm_config, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
 from multiagent_utils import ProviderRequestError, call_json_agent, call_responses_text, parse_json_text
-from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
+from news.query_planner import build_news_query_plan, sentiment_queries_from_plan
+from news import classifier as news_classifier
+from news import normalizer as news_normalizer
+from news import quality as news_quality
 from news.repository import build_news_repository_payload
 from news.providers.rss import fetch_rss_news as fetch_configured_rss_news, parse_rss_datetime as parse_configured_rss_datetime, parse_rss_feed as parse_configured_rss_feed
 from news.providers.regulatory import fetch_regulatory_news as fetch_configured_regulatory_news
@@ -2416,6 +2419,58 @@ def main() -> None:
         classification_summary=classification_summary,
     )
     print(dump_json(news_path(agent_home, report_date), payload))
+
+
+# These names remain public for CLI and test compatibility. Their runtime
+# implementation lives in the focused news pipeline modules above.
+canonicalize_url = news_normalizer.canonicalize_url
+extract_plain_text = news_normalizer.extract_plain_text
+normalize_title_text = news_normalizer.normalize_title_text
+news_content_hash = news_normalizer.news_content_hash
+impact_from_classification = news_normalizer.impact_from_classification
+enrich_news_item = lambda item, *, query_type="", matched_keywords=None: news_normalizer.enrich_news_item(
+    item,
+    query_type=query_type,
+    matched_keywords=matched_keywords,
+    classifier_version=CLASSIFIER_VERSION,
+)
+rule_classify_news_item = lambda item: news_classifier.rule_classify_news_item(item, classifier_version=CLASSIFIER_VERSION)
+build_news_classification_prompts = news_classifier.build_classification_prompts
+NEWS_CLASSIFICATION_SCHEMA = news_classifier.NEWS_CLASSIFICATION_SCHEMA
+
+
+def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], *, report_date: str = "") -> tuple[list[dict], dict]:
+    return news_classifier.classify_news_with_llm(
+        agent_home,
+        settings,
+        items,
+        report_date=report_date,
+        call_json_agent=call_json_agent,
+        provider_error_type=ProviderRequestError,
+        classifier_version=CLASSIFIER_VERSION,
+    )
+
+
+def compute_heat_metrics(items: list[dict]) -> None:
+    news_quality.compute_heat_metrics(items, parse_datetime=parse_iso_datetime)
+
+
+def dedupe_news_items(items: list[dict], *, dedup_window_hours: int) -> tuple[list[dict], dict]:
+    return news_quality.dedupe_news_items(
+        items,
+        dedup_window_hours=dedup_window_hours,
+        enrich_item=enrich_news_item,
+        content_hash=news_content_hash,
+    )
+
+
+def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
+    return news_quality.news_dedup_summary(
+        items,
+        dedup_window_hours=dedup_window_hours,
+        enrich_item=enrich_news_item,
+        content_hash=news_content_hash,
+    )
 
 
 if __name__ == "__main__":
