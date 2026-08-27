@@ -29,6 +29,7 @@ from multiagent_utils import ProviderRequestError, call_json_agent, call_respons
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
 from news.repository import build_news_repository_payload
 from news.providers.rss import fetch_rss_news as fetch_configured_rss_news, parse_rss_datetime as parse_configured_rss_datetime, parse_rss_feed as parse_configured_rss_feed
+from news.providers.regulatory import fetch_regulatory_news as fetch_configured_regulatory_news
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_source_health_item, normalize_provider_item, resolve_provider_chain
 
@@ -1378,71 +1379,18 @@ def normalize_regulatory_item(raw_item: dict, *, provider_name: str, feed_name: 
 
 def fetch_regulatory_news(settings: dict, report_date: str) -> tuple[list[dict], list[dict]]:
     provider_settings = settings.get("providers", {}).get("regulatory_news", {}) or {}
-    if not bool(provider_settings.get("enabled", False)):
-        return [], []
-    timeout_seconds = int(provider_settings.get("timeout_seconds", 15) or 15)
-    feeds = list(provider_settings.get("feeds", []) or [])
-    items: list[dict] = []
-    health_rows: list[dict] = []
-    for feed in feeds:
-        if not bool(feed.get("enabled", True)):
-            continue
-        feed_url = str(feed.get("url", "") or "").strip()
-        feed_name = str(feed.get("name", "") or feed_url or "regulatory_feed")
-        provider_name = str(feed.get("provider", "") or f"reg:{feed_name}")
-        errors: list[str] = []
-        raw_item_count = 0
-        normalized_count = 0
-        try:
-            if provider_name == "reg:szse_inquiry":
-                api_url = "https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=main_wxhj"
-                rows = parse_szse_report_json(fetch_json_text(api_url, timeout_seconds=timeout_seconds, referer=feed_url), api_url, report_date)
-            elif provider_name == "reg:szse_supervision_measure":
-                api_url = "https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1800_jgxxgk"
-                rows = parse_szse_report_json(fetch_json_text(api_url, timeout_seconds=timeout_seconds, referer=feed_url), api_url, report_date)
-            elif provider_name == "reg:szse_disciplinary_action":
-                api_url = "https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1800_jgxxgk_cf"
-                rows = parse_szse_report_json(fetch_json_text(api_url, timeout_seconds=timeout_seconds, referer=feed_url), api_url, report_date)
-            else:
-                html_text = fetch_xml_text(feed_url, timeout_seconds=timeout_seconds)
-                if provider_name == "reg:sse_general":
-                    rows = parse_sse_general_announcements(html_text, feed_url, report_date)
-                elif provider_name == "reg:amac_notice":
-                    rows = parse_amac_notice_board(html_text, feed_url, report_date)
-                elif provider_name == "reg:szse_listed_notice":
-                    rows = parse_szse_notice_page(html_text, feed_url, report_date)
-                    if not rows:
-                        errors.append("szse listed notice page is dynamic; no official JSON endpoint enabled yet")
-                else:
-                    rows = []
-            raw_item_count = len(rows)
-            for raw_item in rows:
-                normalized = normalize_regulatory_item(raw_item, provider_name=provider_name, feed_name=feed_name, report_date=report_date)
-                if normalized is not None:
-                    items.append(normalized)
-                    normalized_count += 1
-        except Exception as exc:
-            errors.append(str(exc))
-        status = "ok" if normalized_count > 0 and not errors else "warning"
-        health_rows.append(
-            build_source_health_item(
-                source_key=f"regulatory_news:{provider_name}",
-                source_role="regulatory_news",
-                provider=provider_name,
-                items=[item for item in items if item.get("provider") == provider_name],
-                configured=True,
-                status=status,
-                notes=[f"feed_url={feed_url}", f"raw_item_count={raw_item_count}", f"normalized_count={normalized_count}", *errors[:4]],
-                error_count=len(errors),
-                warning_count=1 if status == "warning" else 0,
-                metrics={
-                    "raw_item_count": raw_item_count,
-                    "normalized_count": normalized_count,
-                    "sample_titles": [str(item.get("title", "") or "")[:60] for item in items if item.get("provider") == provider_name][:3],
-                },
-            )
-        )
-    return items, health_rows
+    return fetch_configured_regulatory_news(
+        provider_settings,
+        report_date,
+        fetch_html=fetch_xml_text,
+        fetch_json=fetch_json_text,
+        parse_sse=parse_sse_general_announcements,
+        parse_amac=parse_amac_notice_board,
+        parse_szse_page=parse_szse_notice_page,
+        parse_szse_report=parse_szse_report_json,
+        normalize_item=normalize_regulatory_item,
+        build_health=build_source_health_item,
+    )
 
 
 def extract_xueqiu_status_items(payload: dict) -> list[dict]:
