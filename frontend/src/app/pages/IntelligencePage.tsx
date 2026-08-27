@@ -310,6 +310,10 @@ function NewsDetailDrawer({
             <DetailRow label="情绪分" value={scoreText(item.sentiment_score)} />
             <DetailRow label="查询类型" value={text(item.query_type, "暂无")} />
             <DetailRow label="资讯 ID" value={newsId(item) || "暂无"} />
+            <DetailRow label="分类器" value={text(item.classifier, "未报告")} />
+            <DetailRow label="分类置信度" value={confidenceText(item.classification_confidence)} />
+            <DetailRow label="模型运行" value={text(item.classifier_model_run_id, "未报告")} />
+            <DetailRow label="提示词版本" value={text(item.classifier_prompt_version, "未报告")} />
           </div>
 
           {fundCode ? (
@@ -431,6 +435,11 @@ function scoreText(value: unknown): string {
   const numeric = Number(value ?? 0);
   if (!Number.isFinite(numeric)) return "0.00";
   return numeric.toFixed(2);
+}
+
+function confidenceText(value: unknown): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${(Math.max(0, Math.min(1, numeric)) * 100).toFixed(0)}%` : "未报告";
 }
 
 function sentimentTone(value: unknown): Tone {

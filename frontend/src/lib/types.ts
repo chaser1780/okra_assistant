@@ -245,6 +245,11 @@ export type ResearchDigestEntry = Record<string, unknown> & {
   key?: string;
   status?: string;
   count?: number | string;
+  classification_confidence?: number | string | null;
+  classifier?: string;
+  classification_status?: string;
+  classifier_model_run_id?: string;
+  classifier_prompt_version?: string;
   item_count?: number | string;
   mapped_item_count?: number | string;
   unique_item_count?: number | string;

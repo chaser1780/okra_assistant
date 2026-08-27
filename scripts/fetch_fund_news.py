@@ -90,6 +90,7 @@ NEWS_CLASSIFICATION_SCHEMA = {
                     "is_policy_signal": {"type": "boolean"},
                     "is_hype_signal": {"type": "boolean"},
                     "reason_short": {"type": "string"},
+                    "classification_confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 },
                 "required": [
                     "index",
@@ -792,6 +793,13 @@ def enrich_news_item(item: dict, *, query_type: str = "", matched_keywords: list
     enriched["classifier"] = str(item.get("classifier", "") or "rule")
     enriched["classifier_version"] = str(item.get("classifier_version", "") or CLASSIFIER_VERSION)
     enriched["classification_status"] = str(item.get("classification_status", "") or "unclassified")
+    confidence = item.get("classification_confidence")
+    try:
+        enriched["classification_confidence"] = max(0.0, min(1.0, float(confidence))) if confidence not in (None, "") else None
+    except (TypeError, ValueError):
+        enriched["classification_confidence"] = None
+    enriched["classifier_model_run_id"] = str(item.get("classifier_model_run_id", "") or "")
+    enriched["classifier_prompt_version"] = str(item.get("classifier_prompt_version", "") or "")
     enriched["impact"] = str(item.get("impact", "") or impact_from_classification(sentiment_label, risk_level))
     enriched["heat_score"] = float(item.get("heat_score", 0.0) or 0.0)
     enriched["heat_rank"] = int(item.get("heat_rank", 0) or 0)
@@ -839,6 +847,7 @@ def rule_classify_news_item(item: dict) -> dict:
         "is_policy_signal": is_policy_signal,
         "is_hype_signal": is_hype_signal,
         "reason_short": "rule fallback",
+        "classification_confidence": None,
         "classifier": "rule",
         "classifier_version": CLASSIFIER_VERSION,
         "classification_status": "rule_fallback",
@@ -911,6 +920,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
             )
             result_items = {int(item.get("index", -1)): item for item in (response.get("response_json", {}) or {}).get("items", []) or []}
             model_run_id = str((response.get("model_run") or {}).get("modelRunId") or "")
+            prompt_version = str((response.get("model_run") or {}).get("promptVersion") or "")
             llm_batches += 1
             for index, item in enumerate(batch):
                 parsed = result_items.get(index)
@@ -923,6 +933,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
                         "classifier_version": CLASSIFIER_VERSION,
                         "classification_status": "llm",
                         "classifier_model_run_id": model_run_id,
+                        "classifier_prompt_version": prompt_version,
                         "impact": impact_from_classification(str(parsed.get("sentiment_label", "neutral")), str(parsed.get("risk_level", "low"))),
                     }
                 item.update(parsed)
@@ -933,6 +944,12 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
             for item in batch:
                 item.update(rule_classify_news_item(item))
     status = "ok" if llm_batches and fallback_batches == 0 else ("mixed" if llm_batches else "fallback_only")
+    reported_confidences = [
+        float(item["classification_confidence"])
+        for item in classified
+        if item.get("classification_confidence") not in (None, "")
+    ]
+    model_run_ids = sorted({str(item.get("classifier_model_run_id") or "") for item in classified if str(item.get("classifier_model_run_id") or "")})
     return classified, {
         "enabled": True,
         "mode": str(cfg.get("mode", "llm_first") or "llm_first"),
@@ -943,6 +960,9 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
         "model": model_override or "default",
         "circuit_open": bool(circuit_error),
         "error": circuit_error,
+        "model_run_ids": model_run_ids,
+        "reported_confidence_count": len(reported_confidences),
+        "mean_reported_confidence": round(sum(reported_confidences) / len(reported_confidences), 4) if reported_confidences else None,
     }
 
 
