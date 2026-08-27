@@ -2,8 +2,8 @@ import { AlertTriangle, CheckCircle2, CircleDot, Eye, FileWarning, ShieldCheck }
 import type { ShadowReviewItem, ShadowReviewPagePayload, Tone } from "../../lib/types";
 import { Badge, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { StrategySimulationPanel } from "../../components/okra/StrategySimulationPanel";
-import { asNumber, text } from "../../lib/format";
-import { fieldLabel, narrativeText, valueLabel } from "../../lib/display";
+import { asNumber, compactMoney, signedMoney, text } from "../../lib/format";
+import { actionLabel, fieldLabel, narrativeText, valueLabel } from "../../lib/display";
 
 const statusCopy: Record<string, { label: string; body: string; tone: Tone }> = {
   missing: { label: "缺失", body: "当前日期没有可用的官方或影子审查产物。", tone: "neutral" },
@@ -104,6 +104,8 @@ export function ShadowReviewPage({ shadowReview }: { shadowReview: ShadowReviewP
 
       <StrategySimulationPanel selectedDate={shadowReview.selectedDate} />
 
+      <ExperimentSnapshotPanel experiments={shadowReview.strategyExperiments ?? []} />
+
       <Card className="p-4">
         <SectionTitle title="实验与正式建议对照" meta={`${shadowReview.items.length} 项`} />
         {shadowReview.items.length ? (
@@ -117,6 +119,23 @@ export function ShadowReviewPage({ shadowReview }: { shadowReview: ShadowReviewP
         )}
       </Card>
     </div>
+  );
+}
+
+function ExperimentSnapshotPanel({ experiments }: { experiments: NonNullable<ShadowReviewPagePayload["strategyExperiments"]> }) {
+  return (
+    <Card className="p-4">
+      <SectionTitle title="隔离实验快照" meta="实验组合与用户模拟组合永久隔离；金额变化不是收益结论" />
+      {experiments.length ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {experiments.map((experiment) => {
+            const actionCounts = experiment.actionCounts as Record<string, number> | undefined;
+            const actionSummary = actionCounts ? Object.entries(actionCounts).map(([action, count]) => `${actionLabel(action)} ${count}`).join(" / ") : "暂无假设交易";
+            return <div key={experiment.experimentId} className="border border-amber-500/20 bg-amber-950/10 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-semibold text-slate-100">{experiment.label}</div><div className="mt-1 text-xs text-slate-500">{experiment.asOfDate || "暂无日期"}</div></div><Badge tone="warning">{experiment.status}</Badge></div><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div><div className="text-xs text-slate-500">当前组合值</div><div className="metric-number mt-1 text-slate-200">{compactMoney(experiment.totalValue)}</div></div><div><div className="text-xs text-slate-500">相对初始变化</div><div className={`metric-number mt-1 ${Number(experiment.valueDelta) >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{experiment.valueDelta == null ? "不可用" : signedMoney(experiment.valueDelta)}</div></div></div><div className="mt-3 border-t border-amber-500/10 pt-2 text-xs text-slate-500">{experiment.actionCount} 笔假设交易 · {actionSummary}</div></div>;
+          })}
+        </div>
+      ) : <EmptyState title="暂无隔离实验" body="创建策略实验后，这里只展示实验组合快照和假设交易数量，不会影响用户模拟组合。" />}
+    </Card>
   );
 }
 

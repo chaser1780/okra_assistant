@@ -124,6 +124,14 @@ def record_action(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _summary(agent_home: Path, payload: dict[str, Any], path: Path) -> dict[str, Any]:
     portfolio = payload.get("portfolio", {}) if isinstance(payload.get("portfolio"), dict) else {}
+    initial_portfolio = payload.get("initialPortfolio", {}) if isinstance(payload.get("initialPortfolio"), dict) else {}
+    total_value = _optional_number(portfolio.get("total_value"))
+    initial_total_value = _optional_number(initial_portfolio.get("total_value"))
+    actions = [item for item in payload.get("actions", []) or [] if isinstance(item, dict)]
+    action_counts: dict[str, int] = {}
+    for action in actions:
+        name = str(action.get("action") or "unknown")
+        action_counts[name] = action_counts.get(name, 0) + 1
     return {
         "experimentId": str(payload.get("experimentId") or path.stem),
         "label": str(payload.get("label") or path.stem),
@@ -131,8 +139,11 @@ def _summary(agent_home: Path, payload: dict[str, Any], path: Path) -> dict[str,
         "asOfDate": str(payload.get("asOfDate") or ""),
         "createdAt": str(payload.get("createdAt") or ""),
         "updatedAt": str(payload.get("updatedAt") or ""),
-        "actionCount": len(payload.get("actions", []) or []),
-        "totalValue": portfolio.get("total_value"),
+        "actionCount": len(actions),
+        "actionCounts": action_counts,
+        "totalValue": total_value,
+        "initialTotalValue": initial_total_value,
+        "valueDelta": round(total_value - initial_total_value, 2) if total_value is not None and initial_total_value is not None else None,
         "holdingPnl": portfolio.get("holding_pnl"),
         "sourcePath": str(path.relative_to(agent_home)).replace("\\", "/"),
     }

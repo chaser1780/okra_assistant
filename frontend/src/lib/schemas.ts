@@ -238,6 +238,19 @@ export const realtimeSchema = z.object({
   observationOnly: z.boolean().optional()
 }).passthrough();
 
+const decisionTraceSchema = z.object({
+  available: z.boolean().catch(false),
+  reportDate: z.string().catch(""),
+  source: z.string().optional(),
+  track: z.string().optional(),
+  executionEligible: z.boolean().optional(),
+  decisionCount: z.number().catch(0),
+  evidenceCount: z.number().catch(0),
+  modelRunCount: z.number().catch(0),
+  availableArtifactCount: z.number().catch(0),
+  decisions: z.array(unknownRecordSchema).catch([])
+}).passthrough();
+
 export const reviewSchema = z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
@@ -262,7 +275,8 @@ export const reviewSchema = z.object({
     latestReplayAuditPath: z.string().optional(),
     latestLearningAuditSummary: unknownRecordSchema.optional(),
     latestLearningAuditPath: z.string().optional()
-  }).passthrough().optional()
+  }).passthrough().optional(),
+  decisionTrace: decisionTraceSchema.optional()
 }).passthrough();
 
 const longMemoryRecordSchema = z.object({
@@ -692,6 +706,18 @@ const shadowReviewMissingArtifactSchema = z.object({
   message: z.string().catch("")
 }).passthrough();
 
+const strategyExperimentSummarySchema = z.object({
+  experimentId: z.string().catch(""),
+  label: z.string().catch(""),
+  status: z.string().catch(""),
+  actionCount: z.number().catch(0),
+  actionCounts: numberRecordSchema.optional(),
+  asOfDate: z.string().optional(),
+  totalValue: financialNumberSchema.optional(),
+  initialTotalValue: financialNumberSchema.optional(),
+  valueDelta: financialNumberSchema.optional()
+}).passthrough();
+
 export const shadowReviewPageSchema = z.object({
   selectedDate: z.string(),
   status: shadowReviewStatusSchema.catch("missing"),
@@ -724,7 +750,8 @@ export const shadowReviewPageSchema = z.object({
     affectsAdviceAccuracy: z.literal(false),
     affectsLongMemoryPromotion: z.literal(false),
     allowExecutionEvidence: z.literal(false)
-  }).passthrough()
+  }).passthrough(),
+  strategyExperiments: z.array(strategyExperimentSummarySchema).optional()
 }).passthrough();
 
 export const systemPageSchema = z.object({

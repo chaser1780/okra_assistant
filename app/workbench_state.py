@@ -151,6 +151,7 @@ class ReviewViewModel:
     pending_memory_lines: list[str]
     pending_memory_items: list[dict[str, Any]]
     trust: dict[str, Any]
+    decisionTrace: dict[str, Any]
     dates: list[str]
     selected_date: str
 
@@ -403,6 +404,7 @@ class WorkbenchStateService:
         long_memory_items = list(long_memory.get("items", []) or [])
         pending_items = list((state.get("long_memory_pending", {}) or {}).get("items", []) or [])
         trust = _learning_trust_summary(self.home, snapshot.selected_date)
+        decision_trace = _review_decision_trace(self.home, snapshot.selected_date)
         cycle = state.get("learning_cycle", {}) or {}
         ledger = state.get("memory_ledger", {}) or {}
         replay_items = list(state.get("replay_experiments", []) or [])
@@ -447,6 +449,7 @@ class WorkbenchStateService:
             pending_memory_lines=_memory_lines(pending_items, ""),
             pending_memory_items=pending_items,
             trust=trust,
+            decisionTrace=decision_trace,
             dates=snapshot.dates,
             selected_date=snapshot.selected_date,
         )
@@ -663,6 +666,43 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _review_decision_trace(home: Path, report_date: str) -> dict[str, Any]:
+    trace = _read_json_object(home / "db" / "decision_traces" / f"{report_date}.json")
+    if not trace:
+        return {"available": False, "reportDate": report_date, "decisions": []}
+    decisions = [item for item in trace.get("decisions", []) or [] if isinstance(item, dict)]
+    evidence = trace.get("evidenceSnapshot", {}) if isinstance(trace.get("evidenceSnapshot"), dict) else {}
+    artifacts = trace.get("sourceArtifacts", {}) if isinstance(trace.get("sourceArtifacts"), dict) else {}
+    visible_decisions = []
+    for item in decisions[:10]:
+        visible_decisions.append(
+            {
+                "fundCode": str(item.get("fundCode") or ""),
+                "fundName": str(item.get("fundName") or ""),
+                "action": str(item.get("action") or "hold"),
+                "amount": item.get("amount"),
+                "confidence": item.get("confidence"),
+                "executionEligible": bool(item.get("executionEligible")),
+                "section": str(item.get("section") or ""),
+            }
+        )
+    return {
+        "available": True,
+        "traceId": str(trace.get("traceId") or ""),
+        "reportDate": str(trace.get("reportDate") or report_date),
+        "generatedAt": str(trace.get("generatedAt") or ""),
+        "source": str(trace.get("decisionSource") or ""),
+        "track": str(trace.get("formalTrack") or "user_simulation"),
+        "simulationOnly": bool(trace.get("simulationOnly", True)),
+        "executionEligible": bool(trace.get("executionEligible")),
+        "decisionCount": len(decisions),
+        "evidenceCount": int(evidence.get("itemCount") or 0),
+        "modelRunCount": len(trace.get("modelRuns", []) or []),
+        "availableArtifactCount": sum(1 for item in artifacts.values() if isinstance(item, dict) and item.get("exists") is True),
+        "decisions": visible_decisions,
+    }
 
 
 def _summarize_state_clean(state: dict[str, Any]) -> dict[str, Any]:

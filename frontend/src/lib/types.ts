@@ -110,6 +110,9 @@ export type StrategySimulationOverview = {
     actionCount: number;
     asOfDate?: string;
     totalValue?: number | null;
+    initialTotalValue?: number | null;
+    valueDelta?: number | null;
+    actionCounts?: Record<string, number>;
     holdingPnl?: number | null;
   }>;
 };
@@ -435,6 +438,18 @@ export type ReviewPayload = {
     latestLearningAuditSummary?: Record<string, unknown>;
     latestLearningAuditPath?: string;
   };
+  decisionTrace?: Record<string, unknown> & {
+    available: boolean;
+    reportDate: string;
+    source?: string;
+    track?: string;
+    executionEligible?: boolean;
+    decisionCount?: number;
+    evidenceCount?: number;
+    modelRunCount?: number;
+    availableArtifactCount?: number;
+    decisions?: Array<Record<string, unknown>>;
+  };
 };
 
 export type ShadowReviewStatus = "missing" | "not_run" | "running" | "ready" | "partial" | "degraded" | "failed";
@@ -511,6 +526,17 @@ export type ShadowReviewPagePayload = Record<string, unknown> & {
     affectsLongMemoryPromotion: false;
     allowExecutionEvidence: false;
   };
+  strategyExperiments?: Array<Record<string, unknown> & {
+    experimentId: string;
+    label: string;
+    status: string;
+    actionCount: number;
+    asOfDate?: string;
+    totalValue?: number | null;
+    initialTotalValue?: number | null;
+    valueDelta?: number | null;
+    actionCounts?: Record<string, number>;
+  }>;
 };
 
 export type MemoryStatus = "candidate" | "strategic" | "permanent" | "archived" | "rejected";

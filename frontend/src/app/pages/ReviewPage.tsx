@@ -1,8 +1,8 @@
 import { Check, ExternalLink, RotateCcw, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { LongMemoryPayload, LongMemoryRecord, MemoryAction, ReviewPayload, Tone } from "../../lib/types";
-import { lines } from "../../lib/format";
-import { domainLabel, entityLabel, evidencePathLabel, memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
+import { compactMoney, lines } from "../../lib/format";
+import { actionLabel, domainLabel, entityLabel, evidencePathLabel, memoryText, memoryTitle, statusLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { TerminalPanel } from "../../components/okra/TerminalChrome";
 
@@ -77,6 +77,8 @@ export function ReviewPage({
           <LifecycleNode label="审计状态" value={trust?.trustedForLearning ? "通过" : "阻断"} tone={trust?.trustedForLearning ? "success" : "danger"} />
         </div>
       </TerminalPanel>
+
+      <DecisionTracePanel trace={review.decisionTrace} />
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-3">
@@ -168,6 +170,39 @@ export function ReviewPage({
 
 function LifecycleNode({ label, value, tone }: { label: string; value: string | number; tone: Tone }) {
   return <div className="border border-slate-800 bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className={`metric-number mt-2 text-xl font-semibold ${tone === "success" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : tone === "warning" ? "text-amber-300" : "text-cyan-200"}`}>{value}</div></div>;
+}
+
+function DecisionTracePanel({ trace }: { trace?: ReviewPayload["decisionTrace"] }) {
+  if (!trace?.available) {
+    return <TerminalPanel title="当日决策追溯" meta="仅展示已生成的只读决策链" className="p-4"><EmptyState title="当前日期没有决策追溯" body="运行完成后，这里会显示建议来源、证据规模、模型调用数量和模拟执行边界。" /></TerminalPanel>;
+  }
+  const decisions = Array.isArray(trace.decisions) ? trace.decisions : [];
+  return (
+    <TerminalPanel title="当日决策追溯" meta="只读 · 用户模拟轨道 · 不产生交易指令" className="p-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <TraceMetric label="建议数量" value={String(trace.decisionCount ?? 0)} />
+        <TraceMetric label="证据快照" value={`${String(trace.evidenceCount ?? 0)} 条`} />
+        <TraceMetric label="模型运行" value={`${String(trace.modelRunCount ?? 0)} 次`} />
+        <TraceMetric label="链路产物" value={`${String(trace.availableArtifactCount ?? 0)} 项`} />
+        <TraceMetric label="执行边界" value={trace.executionEligible ? "模拟可应用" : "仅供审查"} tone={trace.executionEligible ? "info" : "warning"} />
+      </div>
+      <div className="mt-4 rounded-md border border-slate-800 bg-slate-950/45">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2 text-xs">
+          <span className="font-semibold text-slate-300">来源：{valueLabel(trace.source)}</span>
+          <span className="text-slate-500">报告日期 {trace.reportDate}</span>
+        </div>
+        {decisions.length ? decisions.map((item, index) => {
+          const fund = `${String(item.fundName || "")} ${String(item.fundCode || "")}`.trim() || "未标注基金";
+          const confidence = Number(item.confidence);
+          return <div key={`${String(item.fundCode)}-${index}`} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-slate-800/70 px-3 py-2 text-sm last:border-b-0"><div className="min-w-0"><div className="truncate font-semibold text-slate-200">{fund}</div><div className="mt-1 text-xs text-slate-500">{String(item.section || "建议")}</div></div><div className="text-right text-slate-400">{item.amount == null ? "金额未设" : compactMoney(item.amount)}</div><div className="text-right"><Badge tone={item.executionEligible ? "info" : "neutral"}>{actionLabel(item.action)} {Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : ""}</Badge></div></div>;
+        }) : <div className="p-3 text-sm text-slate-500">决策追溯已生成，但没有可展示的建议记录。</div>}
+      </div>
+    </TerminalPanel>
+  );
+}
+
+function TraceMetric({ label, value, tone = "accent" }: { label: string; value: string; tone?: Tone }) {
+  return <div className="border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-xs text-slate-500">{label}</div><div className="mt-2 flex items-center justify-between gap-2"><span className="metric-number text-sm font-semibold text-slate-200">{value}</span><Badge tone={tone}>{tone === "warning" ? "受限" : "追溯"}</Badge></div></div>;
 }
 
 function CountLine({ label, value, tone = "neutral" }: { label: string; value: number; tone?: Tone }) {

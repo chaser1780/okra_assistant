@@ -54,6 +54,7 @@ class ShadowReviewService:
         artifacts = self._read_core_artifacts(report_date)
         optional = self._read_optional_artifacts()
         outcome_artifacts = self._read_outcome_artifacts(report_date)
+        strategy_experiments = self._strategy_experiment_summaries()
         markdown_path = self.home / "db" / "refactor_reviews" / f"{report_date}.md"
 
         validated = artifacts["legacyAdvice"].payload
@@ -118,6 +119,7 @@ class ShadowReviewService:
             "policySummary": artifact_summary(optional["adaptivePolicies"].payload),
             "skillSummary": artifact_summary(optional["strategySkills"].payload),
             "outcomeSummary": outcome_summary(outcome_artifacts),
+            "strategyExperiments": strategy_experiments,
         }
 
     def _read_core_artifacts(self, report_date: str) -> dict[str, ArtifactRead]:
@@ -140,6 +142,11 @@ class ShadowReviewService:
             relative = relative_posix(path, self.home)
             result[horizon] = read_json_artifact(self.home, relative, f"outcomeEvents:{horizon}")
         return result
+
+    def _strategy_experiment_summaries(self) -> list[dict[str, Any]]:
+        from strategy_simulation import list_experiments
+
+        return list_experiments(self.home, limit=12)
 
 
 def validate_report_date(value: str | None) -> str:
