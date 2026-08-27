@@ -132,7 +132,7 @@ export function FundDetailPage({
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-8 p-4">
-          <SectionTitle title="长期画像" meta="建议成败基于系统每日复盘，不基于真实交易" />
+          <SectionTitle title="长期画像" meta="建议成败基于系统每日复盘，不作为实际成交归因" />
           <MemoryList records={detail.longMemory.fund} empty="这只基金还没有形成长期画像，运行今日分析后会逐步积累。" />
         </Card>
         <Card className="col-span-4 p-4">
@@ -146,7 +146,7 @@ export function FundDetailPage({
         <ChartFrame title="超额收益 / EXCESS" meta={detail.performance.benchmarkStatus === "available" ? detail.performance.benchmarkName : "基准未配置"} height="h-56" className="col-span-12 xl:col-span-5"><TrendChart data={detail.history.excessReturnPct ?? []} yFormatter={(value) => `${value.toFixed(2)}%`} showArea={false} /></ChartFrame>
       </section>
 
-      <TerminalPanel title="交易与建议标记" meta="READ-ONLY TIMELINE" className="p-4">
+      <TerminalPanel title="模拟操作与建议标记" meta="READ-ONLY TIMELINE" className="p-4">
         <div className="flex flex-wrap gap-3">
           {timelineMarkers.slice(-12).map((marker) => (
             <div key={`${marker.date}-${marker.type}-${marker.source}`} className="flex items-center gap-2 border-b border-slate-800/80 pb-2 text-xs">
@@ -231,7 +231,7 @@ export function FundDetailPage({
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-5 p-4">
-          <SectionTitle title="交易记录" meta="买入/卖出/定投标记" />
+          <SectionTitle title="用户模拟操作记录" meta="买入/卖出/定投标记" />
           {detail.tradeMarkers.length ? (
             <div className="space-y-2">
               {detail.tradeMarkers.slice(-8).reverse().map((item) => (
@@ -240,7 +240,7 @@ export function FundDetailPage({
                     <div className="font-semibold text-slate-200">{item.date}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
                       <Badge tone={item.source === "planned_dca" ? "success" : "info"}>{actionLabel(item.action)}</Badge>
-                      <span>{item.source === "planned_dca" ? "按定投日生成" : "真实交易"}</span>
+                      <span>{simulationMarkerSource(item.source)}</span>
                     </div>
                   </div>
                   <div className="metric-number text-slate-100">{item.amountText}</div>
@@ -248,7 +248,7 @@ export function FundDetailPage({
               ))}
             </div>
           ) : (
-            <EmptyState title="暂无交易标记" body="该基金在当前区间没有可展示的交易记录。" />
+            <EmptyState title="暂无模拟操作标记" body="该基金在当前区间没有可展示的用户模拟操作记录。" />
           )}
         </Card>
 
@@ -319,6 +319,13 @@ function EvidenceList({ title, items }: { title: string; items: string[] }) {
       </ul>
     </div>
   );
+}
+
+function simulationMarkerSource(value: unknown) {
+  const source = String(value ?? "").toLowerCase();
+  if (source === "planned_dca") return "按定投日生成";
+  if (source.includes("user_simulation") || source.includes("configured_dca") || source.includes("local_simulation")) return "用户模拟操作";
+  return "模拟历史标记";
 }
 
 function MemoryList({ records, empty, compact = false }: { records: LongMemoryRecord[]; empty: string; compact?: boolean }) {

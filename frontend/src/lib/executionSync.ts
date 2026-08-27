@@ -55,9 +55,9 @@ export function statusText(value: unknown) {
   const map: Record<string, string> = {
     planned: "计划中",
     simulated: "已记录模拟",
-    submitted: "待确认",
-    confirmed: "已确认待到账",
-    settled: "已完成",
+    submitted: "等待用户确认",
+    confirmed: "已确认模拟",
+    settled: "模拟已落账",
     cancelled: "已取消",
     canceled: "已取消",
     failed: "失败"

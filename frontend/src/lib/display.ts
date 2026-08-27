@@ -69,7 +69,7 @@ const keyLabels: Record<string, string> = {
   cash_buffer: "现金缓冲",
   qdii_confirmation_lag_check: "检查 QDII 确认延迟",
   redeem_fee_requires_edge_check: "赎回费需要收益边际覆盖",
-  manual_trade_deviation_tracking: "单独跟踪真实交易偏离",
+  manual_trade_deviation_tracking: "单独跟踪用户模拟操作偏离",
   add_requires_confirmation: "加仓需要二次确认",
   reduce_tends_too_early: "减仓容易过早",
   scheduled_dca_needs_timing_check: "定投需要检查时点",
@@ -105,7 +105,7 @@ const textLabels: Record<string, string> = {
   "Do not reduce positions unless expected edge survives redemption fee and settlement friction.":
     "除非预期收益能够覆盖赎回费和到账摩擦，否则不要减仓。",
   "Track actual trades separately from system advice so execution drift does not contaminate advice accuracy.":
-    "真实交易要和系统建议分开记录，避免执行偏差污染建议胜率。",
+    "用户模拟操作要和系统建议分开记录，避免执行偏差污染建议胜率。",
   "Execute scheduled DCA plan.": "执行固定定投计划。"
 };
 
