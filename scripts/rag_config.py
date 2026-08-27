@@ -93,6 +93,11 @@ DEFAULT_RAG_CONFIG: dict[str, Any] = {
             "cache_enabled": True,
             "dry_run": True,
         },
+        "hybrid": {
+            "enabled": False,
+            "semantic_weight": 0.2,
+            "minimum_vector_coverage": 0.6,
+        },
         "vector_store": {
             "backend": "sqlite_mock",
             "sqlite_path": "db/rag/rag.sqlite",
@@ -157,6 +162,11 @@ def rag_settings(agent_home: Path) -> dict[str, Any]:
 def rag_embedding_settings(agent_home: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = (config or load_rag_config(agent_home))["rag"]
     return dict(settings.get("embedding", {}) or {})
+
+
+def rag_hybrid_settings(agent_home: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = (config or load_rag_config(agent_home))["rag"]
+    return dict(settings.get("hybrid", {}) or {})
 
 
 def rag_vector_store_settings(agent_home: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:

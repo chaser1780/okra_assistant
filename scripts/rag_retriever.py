@@ -7,7 +7,9 @@ import re
 import uuid
 from typing import Any
 
-from rag_index_store import connect_store, init_store
+from rag_config import load_rag_config, rag_embedding_settings, rag_hybrid_settings
+from rag_embedding_client import RagEmbeddingClient
+from rag_index_store import connect_store, get_chunk_embedding_vector, init_store
 from rag_models import RagQueryPlan
 from rag_query_planner import hard_filter_description
 from rag_rerank import rerank_hits
@@ -219,6 +221,48 @@ def _active_manifest_ids(agent_home: Path) -> list[str]:
     return [str(row["manifest_id"]) for row in rows]
 
 
+def _semantic_scores(agent_home: Path, candidates: list[dict[str, Any]], plan: RagQueryPlan) -> tuple[dict[str, float], dict[str, Any]]:
+    """Optional semantic gray-release path; disabled by default."""
+    config = load_rag_config(agent_home)
+    hybrid = rag_hybrid_settings(agent_home, config)
+    embedding = rag_embedding_settings(agent_home, config)
+    if not hybrid.get("enabled", False):
+        return {}, {"enabled": False, "mode": "lexical_rerank", "reason": "hybrid_disabled"}
+    if not embedding.get("enabled", False) or embedding.get("dry_run", True):
+        return {}, {"enabled": False, "mode": "lexical_rerank", "reason": "embedding_not_live"}
+    model = str(embedding.get("model", "") or "")
+    vectors: dict[str, list[float]] = {}
+    for candidate in candidates:
+        chunk_id = str(candidate.get("chunk_id", ""))
+        vector = get_chunk_embedding_vector(agent_home, chunk_id, model=model)
+        if vector:
+            vectors[chunk_id] = vector
+    coverage = len(vectors) / len(candidates) if candidates else 0.0
+    minimum_coverage = float(hybrid.get("minimum_vector_coverage", 0.6) or 0.6)
+    if coverage < minimum_coverage:
+        return {}, {"enabled": False, "mode": "lexical_rerank", "reason": "insufficient_vector_coverage", "coverage": round(coverage, 4)}
+    try:
+        query_vector = RagEmbeddingClient(agent_home, config).embed_texts([plan.query], dry_run=False)[0]
+    except Exception as exc:
+        return {}, {"enabled": False, "mode": "lexical_rerank", "reason": "query_embedding_failed", "detail": str(exc)[:240], "coverage": round(coverage, 4)}
+    return {chunk_id: _cosine_similarity(query_vector, vector) for chunk_id, vector in vectors.items()}, {
+        "enabled": True,
+        "mode": "hybrid_lexical_semantic",
+        "coverage": round(coverage, 4),
+        "semanticWeight": float(hybrid.get("semantic_weight", 0.2) or 0.2),
+    }
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    size = min(len(left), len(right))
+    if not size:
+        return 0.0
+    dot = sum(left[index] * right[index] for index in range(size))
+    left_norm = sum(left[index] * left[index] for index in range(size)) ** 0.5
+    right_norm = sum(right[index] * right[index] for index in range(size)) ** 0.5
+    return dot / (left_norm * right_norm) if left_norm and right_norm else 0.0
+
+
 def retrieve_rag_evidence(
     agent_home: Path,
     plan: RagQueryPlan,
@@ -235,8 +279,13 @@ def retrieve_rag_evidence(
             accepted.append(item)
         elif len(rejected) < 80:
             rejected.append(_reject(reason, item))
+    semantic_scores, semantic_status = _semantic_scores(agent_home, accepted, plan)
     hits = [_hit_from_candidate(item, plan) for item in accepted]
-    ranked = rerank_hits(hits, plan)[: plan.top_k]
+    for hit in hits:
+        score = semantic_scores.get(str(hit.get("chunk_id", "")))
+        if score is not None:
+            hit["semantic_score"] = score
+    ranked = rerank_hits(hits, plan, semantic_weight=float(semantic_status.get("semanticWeight", 0.0) or 0.0))[: plan.top_k]
     missing_data = []
     if not ranked:
         missing_data.append(
@@ -247,6 +296,7 @@ def retrieve_rag_evidence(
                 "query_date": plan.query_date,
             }
         )
+    plan.metadata = {**plan.metadata, "retrieval_mode": semantic_status.get("mode", "lexical_rerank"), "semantic": semantic_status}
     trace_id = f"ragq_{uuid.uuid4().hex[:16]}"
     trace_payload = build_trace_payload(
         trace_id=trace_id,
@@ -260,6 +310,10 @@ def retrieve_rag_evidence(
         final_hits=ranked,
         missing_data=missing_data,
         token_budget=plan.token_budget,
+        retrieval_metadata={
+            "mode": semantic_status.get("mode", "lexical_rerank"),
+            "semantic": semantic_status,
+        },
     )
     trace_path = None
     if write_trace_file:
@@ -272,4 +326,5 @@ def retrieve_rag_evidence(
         "rejected_samples": rejected,
         "candidate_count_before_filter": len(candidates),
         "candidate_count_after_filter": len(accepted),
+        "semantic": semantic_status,
     }

@@ -154,5 +154,6 @@ def build_copilot_rag_pack(agent_home: Path, payload: dict[str, Any]) -> dict[st
         "candidateCountBeforeFilter": retrieval.get("candidate_count_before_filter", 0),
         "candidateCountAfterFilter": retrieval.get("candidate_count_after_filter", 0),
         "fallbackReason": fallback_reason,
+        "mode": (retrieval.get("semantic", {}) or {}).get("mode", "lexical_rerank"),
     }
     return pack

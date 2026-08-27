@@ -56,6 +56,11 @@ timeout_seconds = 60
 cache_enabled = true
 dry_run = true
 
+[rag.hybrid]
+enabled = false
+semantic_weight = 0.2
+minimum_vector_coverage = 0.6
+
 [rag.vector_store]
 backend = "sqlite_mock"
 sqlite_path = "db/rag/rag.sqlite"

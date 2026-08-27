@@ -25,6 +25,7 @@ def build_trace_payload(
     token_budget: int,
     fallback_reason: str = "",
     answer_citation_ids: list[str] | None = None,
+    retrieval_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence_pack_sha256 = hashlib.sha256(json_dumps(final_hits).encode("utf-8")).hexdigest()
     return {
@@ -43,6 +44,7 @@ def build_trace_payload(
         "evidence_pack_sha256": evidence_pack_sha256,
         "answer_citation_ids": answer_citation_ids or [],
         "fallback_reason": fallback_reason,
+        "retrieval": retrieval_metadata or {},
     }
 
 
@@ -69,6 +71,7 @@ def write_rag_trace(agent_home: Path, payload: dict[str, Any]) -> Path:
                 "candidate_count_after_filter": payload.get("candidate_count_after_filter", 0),
                 "evidence_pack_sha256": payload.get("evidence_pack_sha256", ""),
                 "fallback_reason": payload.get("fallback_reason", ""),
+                "retrieval": payload.get("retrieval", {}),
             },
         ),
     )

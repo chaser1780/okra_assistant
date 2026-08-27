@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from helpers import TempAgentHome
 from long_memory_store import upsert_memory_record
-from rag_index_store import count_rows
+from rag_index_store import count_rows, get_embedding_vector
 from rag_ingest import build_parser, run_ingest
 
 
@@ -159,6 +159,8 @@ class RagIngestTests(unittest.TestCase):
         self.assertEqual(1, first["embedding"]["embedded"])
         self.assertEqual(0, second["embedding"]["embedded"])
         self.assertEqual(1, count_rows(self.agent.root, "embedding_cache"))
+        self.assertEqual(1, count_rows(self.agent.root, "embedding_vectors"))
+        self.assertTrue(get_embedding_vector(self.agent.root, first["embedding"]["results"][0]["vector_ref"]))
 
 
 if __name__ == "__main__":
