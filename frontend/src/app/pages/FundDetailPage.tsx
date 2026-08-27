@@ -20,6 +20,7 @@ import { actionLabel, evidencePathLabel, memoryText, memoryTitle, narrativeText,
 import { Badge, Button, Card, EmptyState, SectionTitle } from "../../components/ui";
 import { DrawdownChart, TrendChart } from "../../components/okra/ChartPrimitives";
 import { ChartFrame, TerminalPanel } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext, SimulationTrackRail } from "../../components/okra/ResearchContext";
 
 const ranges = ["近1月", "近3月", "近6月", "近1年", "成立以来"];
 
@@ -88,6 +89,8 @@ export function FundDetailPage({
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={detail.dataContext} />
+      <SimulationTrackRail simulation={detail.simulation} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <Button variant="ghost" className="mb-3 gap-2 px-0" onClick={onBack}>

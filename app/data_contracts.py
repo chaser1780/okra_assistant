@@ -159,6 +159,11 @@ def _freshness(items: list[dict[str, Any]], session_status: str) -> tuple[str, s
     conflicts = [item for item in available if _has_estimate_proxy_conflict(item)]
     if len(conflicts) == len(available):
         return "conflict", "估算净值与代理行情全部存在方向或幅度冲突。"
+    modes = {str(item.get("mode") or "") for item in available}
+    if session_status == "market_closed":
+        if modes.intersection({"proxy_primary", "proxy_fallback"}):
+            return "official_nav_pending", "市场已收盘，代理行情仅用于观察，等待官方净值确认。"
+        return "market_closed", "市场已收盘，当前展示收盘后数据快照。"
     stale = [item for item in available if bool(item.get("stale"))]
     if not stale:
         return "latest", "实时观察数据在当前可用窗口内。"
@@ -167,9 +172,6 @@ def _freshness(items: list[dict[str, Any]], session_status: str) -> tuple[str, s
         return "delayed_multi_day", f"{len(stale)} 项观察数据已滞后 {max_age} 个交易日。"
     if max_age >= 1:
         return "delayed_1d", f"{len(stale)} 项观察数据滞后 1 个交易日。"
-    modes = {str(item.get("mode") or "") for item in available}
-    if session_status == "market_closed":
-        return "official_nav_pending", "市场已收盘，当前仅用于观察，等待官方净值确认。"
     if modes and modes.issubset({"proxy_primary", "proxy_fallback"}):
         return "proxy_observation", "当前使用代理行情，仅用于实时观察和风险提示。"
     return "delayed_1d", f"{len(stale)} 项观察数据未达到最新状态。"

@@ -15,7 +15,17 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
     const source = research.fund_cards?.length ? research.fund_cards : research.rows.map(rowToFundCard);
     const needle = query.trim().toLowerCase();
     return source.filter((card) => {
-      const matchesQuery = !needle || JSON.stringify(card).toLowerCase().includes(needle);
+      const searchText = [
+        card.fundName,
+        card.fundCode,
+        card.actionLabel,
+        card.thesis,
+        card.profile.category,
+        card.portfolio.styleGroup,
+        card.news.topTitle,
+        card.news.topRiskTitle
+      ].filter(Boolean).join(" ").toLowerCase();
+      const matchesQuery = !needle || searchText.includes(needle);
       const matchesFilter = filter === "all" || (filter === "actionable" ? card.isActionable : filter === "watch" ? !card.isActionable : card.hasConflict);
       return matchesQuery && matchesFilter;
     });

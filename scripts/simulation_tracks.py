@@ -65,10 +65,13 @@ def simulation_fields(payload: dict[str, Any]) -> dict[str, Any]:
         status = _simulation_status(payload)
     if status not in SIMULATION_STATUSES:
         raise ValueError(f"Unsupported simulation status: {status}")
+    explicit_simulation = bool(payload.get("is_simulation")) or any(
+        key in payload for key in ("simulation_track", "simulationTrack", "simulation_status", "simulationStatus")
+    )
     return {
         "simulation_track": track,
         "simulation_status": status,
-        "is_simulation": True,
+        "is_simulation": explicit_simulation,
     }
 
 

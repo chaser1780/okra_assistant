@@ -17,6 +17,7 @@ import { actionLabel, roleLabel, styleLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { DrawdownChart, RiskScatterChart, TrendChart } from "../../components/okra/ChartPrimitives";
 import { ChartFrame, TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext, SimulationTrackRail } from "../../components/okra/ResearchContext";
 
 const palette = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#818cf8", "#2dd4bf", "#a78bfa", "#f472b6"];
 
@@ -54,6 +55,8 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={portfolio.dataContext} />
+      <SimulationTrackRail simulation={portfolio.simulation} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="总资产" value={portfolio.totalValueText} body={`快照日期 ${portfolio.asOfDate || "暂无"}`} tone="accent" />
         <MetricCard title="持有盈亏" value={portfolio.holdingPnlText} body="基于当前持仓快照汇总" tone={pnlTone(portfolio.holdingPnl)} />

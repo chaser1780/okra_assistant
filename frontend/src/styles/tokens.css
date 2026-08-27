@@ -39,8 +39,9 @@ body,
 
 body {
   background: hsl(var(--background));
-  background-image: linear-gradient(180deg, rgba(21, 37, 55, 0.16), transparent 30%),
-    radial-gradient(circle at 78% -12%, rgba(34, 211, 238, 0.08), transparent 28%);
+  background-image: linear-gradient(rgba(103, 232, 249, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 232, 249, 0.012) 1px, transparent 1px);
+  background-size: 44px 44px;
   color: hsl(var(--foreground));
   font-family: "Inter", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   letter-spacing: 0;
@@ -186,6 +187,62 @@ textarea {
 
 .terminal-footer-code { color: #475569; }
 
+.terminal-context-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(112, 135, 147, 0.26);
+  background: rgba(112, 135, 147, 0.18);
+}
+
+.terminal-context-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  background: rgba(5, 6, 9, 0.92);
+}
+
+.terminal-context-status { gap: 9px; }
+
+.terminal-context-label {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.terminal-context-value {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simulation-track-rail {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(112, 135, 147, 0.24);
+  padding: 7px 10px;
+  background: rgba(5, 6, 9, 0.78);
+}
+
+.simulation-track-divider {
+  width: 1px;
+  height: 20px;
+  flex: 0 0 auto;
+  background: rgba(112, 135, 147, 0.34);
+}
+
 .terminal-heartbeat {
   width: 6px;
   height: 6px;
@@ -235,6 +292,12 @@ textarea {
 
 @media (prefers-reduced-motion: reduce) {
   .terminal-heartbeat { animation: none; }
+}
+
+@media (max-width: 760px) {
+  .terminal-context-grid { grid-template-columns: 1fr; }
+  .simulation-track-rail { align-items: flex-start; flex-wrap: wrap; }
+  .simulation-track-divider { display: none; }
 }
 
 .okra-panel {

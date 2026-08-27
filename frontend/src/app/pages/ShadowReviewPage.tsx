@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, CircleDot, Eye, FileWarning, ShieldCheck } from "lucide-react";
 import type { ShadowReviewItem, ShadowReviewPagePayload, Tone } from "../../lib/types";
 import { Badge, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
+import { StrategySimulationPanel } from "../../components/okra/StrategySimulationPanel";
 import { asNumber, text } from "../../lib/format";
 import { fieldLabel, narrativeText, valueLabel } from "../../lib/display";
 
@@ -101,8 +102,10 @@ export function ShadowReviewPage({ shadowReview }: { shadowReview: ShadowReviewP
         </Card>
       </section>
 
+      <StrategySimulationPanel selectedDate={shadowReview.selectedDate} />
+
       <Card className="p-4">
-        <SectionTitle title="只读建议对照" meta={`${shadowReview.items.length} 项`} />
+        <SectionTitle title="实验与正式建议对照" meta={`${shadowReview.items.length} 项`} />
         {shadowReview.items.length ? (
           <div className="space-y-3">
             {shadowReview.items.map((item) => (

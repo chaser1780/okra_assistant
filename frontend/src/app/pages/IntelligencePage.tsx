@@ -2,12 +2,13 @@ import { Activity, AlertTriangle, Building2, ExternalLink, Flame, Newspaper, Rad
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { NewsIntelligencePayload, ResearchDigestBreakdown, ResearchDigestEntry, Tone } from "../../lib/types";
+import type { DataContext, NewsIntelligencePayload, ResearchDigestBreakdown, ResearchDigestEntry, Tone } from "../../lib/types";
 import { text } from "../../lib/format";
 import { narrativeText, valueLabel } from "../../lib/display";
 import { openExternalUrl } from "../../lib/api";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { TerminalPanel } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext } from "../../components/okra/ResearchContext";
 
 export function IntelligencePage({
   intelligence,
@@ -63,6 +64,7 @@ export function IntelligencePage({
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={intelligence.dataContext as DataContext | undefined} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard title="唯一新闻" value={text(metrics.unique_news_count, "0")} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
         <MetricCard title="重要新闻" value={text(metrics.important_news_count, String(importantNews.length))} body="高热度、政策或风险事件" tone="warning" />

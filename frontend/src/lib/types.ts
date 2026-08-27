@@ -100,6 +100,20 @@ export type SimulationPayload = {
   strategySimulation: SimulationTrack;
 };
 
+export type StrategySimulationOverview = {
+  simulationOnly: true;
+  formalTrack: "user_simulation";
+  experiments: Array<Record<string, unknown> & {
+    experimentId: string;
+    label: string;
+    status: string;
+    actionCount: number;
+    asOfDate?: string;
+    totalValue?: number | null;
+    holdingPnl?: number | null;
+  }>;
+};
+
 export type AllocationRow = {
   name: string;
   value: number | null;

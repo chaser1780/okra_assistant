@@ -62,6 +62,18 @@ class DataContractTests(unittest.TestCase):
         self.assertEqual("conflict", context["freshnessStatus"])
         self.assertEqual(1, context["conflictItemCount"])
 
+    def test_closed_market_snapshot_never_claims_latest(self):
+        context = build_data_context(
+            selected_date="2026-08-27",
+            portfolio={},
+            realtime={
+                "report_date": "2026-08-27",
+                "generated_at": "2026-08-27T21:00:00+08:00",
+                "items": [{"mode": "official_nav", "effective_change_pct": 0.2, "stale": False}],
+            },
+        )
+        self.assertEqual("market_closed", context["freshnessStatus"])
+
     def test_evidence_references_are_stable_and_preserve_time_fields(self):
         source = {
             "news_id": "news-1",
@@ -105,6 +117,8 @@ class DataContractTests(unittest.TestCase):
         normalized = simulation_fields({"status": "submitted"})
         self.assertEqual("user_simulation", normalized["simulation_track"])
         self.assertEqual("planned", normalized["simulation_status"])
+        self.assertFalse(normalized["is_simulation"])
+        self.assertTrue(simulation_fields({"simulation_track": "user_simulation"})["is_simulation"])
         with self.assertRaisesRegex(ValueError, "Unsupported simulation status"):
             simulation_fields({"simulation_status": "filled"})
 

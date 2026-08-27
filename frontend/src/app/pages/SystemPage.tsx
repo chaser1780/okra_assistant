@@ -15,6 +15,8 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
   const latestTraces = Array.isArray(ragRuntime.latestTraces) ? ragRuntime.latestTraces : [];
   const failedAgents = Array.isArray(agentRuntime.failedAgents) ? agentRuntime.failedAgents : [];
   const degradedAgents = Array.isArray(agentRuntime.degradedAgents) ? agentRuntime.degradedAgents : [];
+  const modelRuns = Array.isArray(system.modelRuns) ? system.modelRuns as Array<Record<string, unknown>> : [];
+  const decisionTrace = (system.decisionTrace ?? {}) as Record<string, unknown>;
   const [desktopRuntime, setDesktopRuntime] = useState(buildDesktopRuntimeConfig);
 
   useEffect(() => {
@@ -40,6 +42,21 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
           <StatusTile label="今日分析状态" value={String(todayRuntime.status ?? "暂无")} tone={runtimeStatusMeta(todayRuntime.status).tone} />
           <StatusTile label="当前 Agent" value={String(todayRuntime.currentAgent ?? "暂无")} tone="success" />
           <StatusTile label="长期记忆状态" value={String(longMemoryRuntime.status ?? "暂无")} tone={runtimeStatusMeta(longMemoryRuntime.status).tone} />
+        </div>
+      </Card>
+
+      <Card className="p-4 lg:col-span-2">
+        <SectionTitle title="模型运行与决策追溯" meta="只记录哈希、耗时和状态，不保存密钥或完整 Prompt" />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3 text-sm leading-6 text-slate-400">
+            <div>决策来源：{valueLabel(decisionTrace.decisionSource)}</div>
+            <div>建议轨道：{valueLabel(decisionTrace.formalTrack)}</div>
+            <div>建议数量：{Array.isArray(decisionTrace.decisions) ? decisionTrace.decisions.length : 0}</div>
+            <div>证据快照：{String((decisionTrace.evidenceSnapshot as Record<string, unknown> | undefined)?.itemCount ?? 0)} 条</div>
+          </div>
+          <div className="max-h-44 overflow-auto rounded-md border border-slate-800">
+            {modelRuns.length ? modelRuns.map((run) => <div key={String(run.modelRunId)} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-slate-800/70 px-3 py-2 last:border-b-0"><div className="min-w-0"><div className="truncate text-sm font-semibold text-slate-200">{String(run.requestName ?? "模型调用")}</div><div className="mt-1 truncate text-xs text-slate-500">{String(run.model ?? "")}</div></div><div className="text-right text-xs text-slate-500"><div>{String(run.latencyMs ?? "-")} ms</div><Badge tone={run.status === "ok" ? "success" : "danger"}>{run.status === "ok" ? "完成" : "失败"}</Badge></div></div>) : <div className="p-4 text-sm text-slate-500">当前日期没有模型运行记录。</div>}
+          </div>
         </div>
       </Card>
 

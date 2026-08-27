@@ -35,7 +35,7 @@ export function tradeTitle(item: Record<string, unknown>) {
   if (item.operation_type === "convert") {
     return `${text(item.out_fund_name ?? item.out_fund_code)} -> ${text(item.in_fund_name ?? item.in_fund_code)}`;
   }
-  return text(item.fund_name ?? item.fund_code ?? item.trade_id, "真实操作");
+  return text(item.fund_name ?? item.fund_code ?? item.trade_id, "模拟操作");
 }
 
 export function operationText(value: unknown) {
@@ -53,10 +53,13 @@ export function operationText(value: unknown) {
 
 export function statusText(value: unknown) {
   const map: Record<string, string> = {
+    planned: "计划中",
+    simulated: "已记录模拟",
     submitted: "待确认",
     confirmed: "已确认待到账",
     settled: "已完成",
-    canceled: "已撤单",
+    cancelled: "已取消",
+    canceled: "已取消",
     failed: "失败"
   };
   return map[String(value ?? "")] ?? "待确认";

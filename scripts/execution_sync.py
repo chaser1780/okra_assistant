@@ -415,7 +415,7 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "units": _units(payload.get("units")),
         "nav": _units(payload.get("nav")),
         "fee": _money(payload.get("fee")),
-        "status": str(payload.get("status") or "submitted"),
+        "status": str(payload.get("simulation_status") or "planned") if payload.get("is_simulation") else str(payload.get("status") or "submitted"),
         "confirm_date": lifecycle["confirm_date"],
         "settlement_date": lifecycle["settlement_date"],
         "linked_suggestion_id": str(payload.get("linked_suggestion_id", "") or ""),
@@ -503,7 +503,7 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "out_confirm_date": out_lifecycle["confirm_date"],
         "in_confirm_date": in_lifecycle["confirm_date"],
         "settlement_date": in_lifecycle["settlement_date"],
-        "status": str(payload.get("status") or lifecycle_status(in_lifecycle, operation_type="convert_in")),
+        "status": str(payload.get("simulation_status") or "planned") if payload.get("is_simulation") else str(payload.get("status") or lifecycle_status(in_lifecycle, operation_type="convert_in")),
         "linked_suggestion_id": str(payload.get("linked_suggestion_id", "") or ""),
         "linked_advice_date": str(payload.get("linked_advice_date", "") or trade_date),
         "user_note": str(payload.get("user_note", "") or payload.get("note", "") or ""),
@@ -540,6 +540,12 @@ def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None =
     apply_errors: list[dict[str, Any]] = []
     for item in pending:
         entry = dict(item)
+        if entry.get("is_simulation"):
+            entry["status"] = str(entry.get("simulation_status") or entry.get("status") or "planned")
+            entry["updated_at"] = timestamp_now()
+            _update_actual_trade_record(agent_home, entry)
+            updated.append(entry)
+            continue
         if entry.get("operation_type") == "convert":
             status = lifecycle_status((entry.get("lifecycle", {}) or {}).get("in", {}), as_of_date, operation_type="convert_in")
         else:
@@ -1057,6 +1063,7 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
 def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     pending = load_pending_confirmations(agent_home)
     trades = [{**item, **simulation_fields(item)} for item in load_actual_trades(agent_home, limit=120)]
+    pending_items = [{**item, **simulation_fields(item)} for item in pending.get("items", []) or []]
     reports = []
     report_dir = execution_sync_dir(agent_home) / "reconciliation_reports"
     if report_dir.exists():
@@ -1065,12 +1072,12 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     deviations = [item for item in trades if (item.get("execution_deviation") or {}).get("type") not in {"", "matched", None}]
     return {
         "updatedAt": timestamp_now(),
-        "pending": pending.get("items", []),
+        "pending": pending_items,
         "trades": trades,
         "deviations": deviations[:80],
         "reconciliationReports": reports,
         "counts": {
-            "pending": len(pending.get("items", []) or []),
+            "pending": len(pending_items),
             "trades": len(trades),
             "deviations": len(deviations),
             "reports": len(reports),

@@ -7,7 +7,8 @@ import type {
   FundLookupResponse,
   MemoryAction,
   ScreenshotPreview,
-  Snapshot
+  Snapshot,
+  StrategySimulationOverview
 } from "./types";
 import { getDesktopRuntimeConfig } from "./desktopRuntime";
 
@@ -166,6 +167,27 @@ export function applyExecutionReconcile(payload: {
 
 export function updateExecutionConfirmations(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return request("/api/execution-sync/confirmation/update", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getStrategySimulation(): Promise<StrategySimulationOverview> {
+  return request<StrategySimulationOverview>("/api/strategy-simulation");
+}
+
+export function createStrategyExperiment(payload: { experimentId?: string; label: string; asOfDate?: string; note?: string }): Promise<Record<string, unknown>> {
+  return request("/api/strategy-simulation/experiment", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function recordStrategySimulationAction(payload: {
+  experimentId: string;
+  action: "buy" | "sell" | "switch_in" | "switch_out";
+  fundCode: string;
+  amount: number;
+  tradeNav?: number;
+  units?: number;
+  asOfDate?: string;
+  note?: string;
+}): Promise<Record<string, unknown>> {
+  return request("/api/strategy-simulation/action", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export function runLongMemoryAction(

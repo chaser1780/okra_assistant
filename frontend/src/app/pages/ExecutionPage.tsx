@@ -23,6 +23,7 @@ import { signedMoney, text } from "../../lib/format";
 import { cleanPayload, extractPreviewRows, fileToDataUrl, hasValidPreviewIntegrity, operationText, statusText, tradeTitle } from "../../lib/executionSync";
 import { Badge, Button, Card, SectionTitle } from "../../components/ui";
 import { TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
+import { SimulationTrackRail } from "../../components/okra/ResearchContext";
 
 type Props = {
   executionSync: ExecutionSyncPayload;
@@ -212,14 +213,14 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       }
     }
     setBusy(true);
-    setMessage(`正在记录${tradeLabels[tradeKind]}...`);
+    setMessage(`正在记录${tradeLabels[tradeKind]}模拟操作...`);
     try {
       if (tradeKind === "convert") {
-        await recordExecutionConversion(cleanPayload({ ...conversion, source: "manual", platform: "alipay" }));
-        setMessage("转换已记录为一组真实转换单；确认日到期后会自动落入真实仓位。");
+        await recordExecutionConversion(cleanPayload({ ...conversion, source: "user_simulation", platform: "local_simulation", simulation_track: "user_simulation", simulation_status: "simulated" }));
+        setMessage("转换已记录到用户模拟轨道。组合仓位仍以你确认同步的组合快照为准。");
       } else {
-        await recordExecutionTrade(cleanPayload({ ...trade, operation_type: tradeKind, source: "manual", platform: "alipay" }));
-        setMessage(`${tradeLabels[tradeKind]}已记录；未确认前进入待确认列表，到期后自动更新真实仓位。`);
+        await recordExecutionTrade(cleanPayload({ ...trade, operation_type: tradeKind, source: "user_simulation", platform: "local_simulation", simulation_track: "user_simulation", simulation_status: "simulated" }));
+        setMessage(`${tradeLabels[tradeKind]}已记录到用户模拟轨道；不会自动改写当前组合仓位。`);
       }
       onRefresh();
     } catch (error) {
@@ -314,7 +315,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       return;
     }
     setBusy(true);
-    setMessage(mode === "replace" ? "正在按截图全部替换真实仓位..." : "正在按截图更新真实仓位...");
+    setMessage(mode === "replace" ? "正在按截图全部替换用户模拟组合..." : "正在按截图更新用户模拟组合...");
     try {
       await applyExecutionReconcile({
         reconcileId: screenshotPreview.reconcile_id,
@@ -326,7 +327,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
       setScreenshotPreview(null);
       setReplaceConfirm("");
       setFundLookups({});
-      setMessage(mode === "replace" ? "真实仓位已完全按截图替换。" : "真实仓位已按截图更新，未出现在截图中的持仓已保留。");
+      setMessage(mode === "replace" ? "用户模拟组合已完全按截图替换。" : "用户模拟组合已按截图更新，未出现在截图中的持仓已保留。");
       onRefresh();
     } catch (error) {
       setMessage(`仓位同步失败：${errorMessage(error)}`);
@@ -339,7 +340,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
     setBusy(true);
     try {
       const result = await updateExecutionConfirmations({ date: today });
-      setMessage(`待确认状态已刷新，落入真实仓位 ${text(result.portfolio_applied_count, "0")} 笔。`);
+      setMessage(`模拟记录状态已刷新；当前组合不会因状态刷新自动改写。`);
       onRefresh();
     } catch (error) {
       setMessage(`确认状态刷新失败：${errorMessage(error)}`);
@@ -350,25 +351,26 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
 
   return (
     <div className="space-y-4">
+      <SimulationTrackRail simulation={executionSync.simulation ?? portfolio.simulation} />
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric title="待确认" value={executionSync.counts.pending ?? 0} body="未确认份额、未到账赎回或转换未完成" />
-        <Metric title="真实操作" value={executionSync.counts.trades ?? 0} body="已写入本地真实执行账本" />
+        <Metric title="模拟记录" value={executionSync.counts.pending ?? 0} body="计划中或已记录的用户模拟操作" />
+        <Metric title="用户操作" value={executionSync.counts.trades ?? 0} body="已写入用户模拟账本" />
         <Metric title="执行偏差" value={executionSync.counts.deviations ?? 0} body="只用于执行纪律，不影响策略胜率" />
-        <Metric title="同步报告" value={executionSync.counts.reports ?? 0} body="截图或快照更新真实仓位后的记录" />
+        <Metric title="组合同步" value={executionSync.counts.reports ?? 0} body="截图或快照更新用户模拟组合的记录" />
       </section>
 
-      <TerminalPanel title="执行状态轨道" meta={`UPDATED ${executionSync.updatedAt || "暂无"}`} className="grid grid-cols-2 gap-px bg-slate-800/60 md:grid-cols-4">
+      <TerminalPanel title="模拟状态" meta={`UPDATED ${executionSync.updatedAt || "暂无"}`} className="grid grid-cols-2 gap-px bg-slate-800/60 md:grid-cols-4">
         <ExecutionState label="建议生成" value="已读取" tone="success" />
-        <ExecutionState label="交易录入" value={`${executionSync.counts.trades ?? 0} 笔`} tone="info" />
-        <ExecutionState label="待确认" value={`${executionSync.counts.pending ?? 0} 笔`} tone={executionSync.counts.pending ? "warning" : "success"} />
-        <ExecutionState label="真实落仓" value={`${executionSync.counts.reports ?? 0} 份同步`} tone="accent" />
+        <ExecutionState label="用户记录" value={`${executionSync.counts.trades ?? 0} 笔`} tone="info" />
+        <ExecutionState label="模拟待办" value={`${executionSync.counts.pending ?? 0} 笔`} tone={executionSync.counts.pending ? "warning" : "success"} />
+        <ExecutionState label="组合同步" value={`${executionSync.counts.reports ?? 0} 份`} tone="accent" />
       </TerminalPanel>
 
       {message ? <div className="rounded-md border border-cyan-500/30 bg-cyan-950/25 px-4 py-3 text-sm text-cyan-100">{message}</div> : null}
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4 xl:col-span-7">
-          <SectionTitle title="记录真实操作" meta="手动录入后写入真实执行账本" />
+          <SectionTitle title="记录用户模拟操作" meta="只写入用户模拟账本，不自动改写组合" />
           <div className="mb-4 inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
             {(["buy", "sell", "convert"] as TradeKind[]).map((kind) => (
               <button
@@ -398,7 +400,7 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
         </Card>
 
         <Card className="col-span-12 p-4 xl:col-span-5">
-          <SectionTitle title="同步支付宝持仓" meta="识别后确认更新真实仓位" />
+          <SectionTitle title="同步用户组合快照" meta="识别后确认更新用户模拟组合" />
           <input
             type="file"
             multiple
@@ -456,8 +458,8 @@ export function ExecutionPage({ executionSync, portfolio, onRefresh }: Props) {
           <TradeList items={executionSync.pending} empty="暂无待确认交易" />
         </Card>
         <Card className="col-span-12 p-4 lg:col-span-6">
-          <SectionTitle title="最近真实操作" meta="本地账本记录" />
-          <TradeList items={executionSync.trades} empty="暂无真实操作记录" />
+          <SectionTitle title="最近用户模拟操作" meta="本地账本记录" />
+          <TradeList items={executionSync.trades} empty="暂无用户模拟操作记录" />
         </Card>
       </section>
     </div>

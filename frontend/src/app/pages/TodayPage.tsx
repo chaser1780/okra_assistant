@@ -6,6 +6,7 @@ import { compactMoney, lines, text } from "../../lib/format";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { DrawdownChart, RiskScatterChart, TrendChart } from "../../components/okra/ChartPrimitives";
 import { ChartFrame, TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext, SimulationTrackRail } from "../../components/okra/ResearchContext";
 import { actionLabel, memoryText, memoryTitle, narrativeText, statusLabel, valueLabel } from "../../lib/display";
 import { getTodayAnalysis, getTodayAnalysisSystem, pickAnalysisValue } from "../../lib/todayAnalysis";
 import { routeForPage } from "../routeMeta";
@@ -71,13 +72,15 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={snapshot.portfolio.dataContext} />
+      <SimulationTrackRail simulation={snapshot.portfolio.simulation} />
       <section className="grid grid-cols-1 gap-4">
-        <Card className="p-5">
+        <TerminalPanel title="研究结论 / DECISION" meta={snapshot.selectedDate} className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 text-xs font-black tracking-wide text-cyan-300">
                 <span className="h-2 w-2 rounded-sm bg-cyan-300" />
-                今日分析决策
+                组合研究结论
               </div>
               <div className="mt-4 max-w-3xl text-2xl font-black leading-tight text-slate-50 lg:text-3xl">{main?.value ?? "暂无主动作"}</div>
               <div className="mt-2 text-sm font-semibold text-slate-300">{main?.title ?? "今日判断"}</div>
@@ -87,11 +90,11 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
           <div className="mt-5 grid gap-3 border-t border-slate-800/80 pt-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-end">
             <p className="max-w-3xl text-sm leading-7 text-slate-400">{narrativeText(main?.body, "暂无需要立刻执行的动作。")}</p>
             <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-500">
-              <div>执行判断</div>
-              <div className="mt-1 font-semibold text-slate-200">{main?.tone === "danger" ? "存在风险限制" : main?.tone === "accent" ? "等待决策确认" : "继续观察"}</div>
+              <div>模拟建议状态</div>
+              <div className="mt-1 font-semibold text-slate-200">{main?.tone === "danger" ? "存在风险限制" : main?.tone === "accent" ? "可进入模拟观察" : "继续观察"}</div>
             </div>
           </div>
-        </Card>
+        </TerminalPanel>
         <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-3">
           {metrics.slice(1, 4).map((metric) => (
             <MetricCard key={metric.title} {...metric} />
@@ -103,7 +106,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
         <ChartFrame title="组合净值 / COMMAND VIEW" meta={`SNAPSHOT ${snapshot.portfolio.asOfDate || snapshot.selectedDate}`} height="h-72" className="col-span-12 xl:col-span-8">
           <TrendChart data={snapshot.portfolio.history.totalValueNormalized ?? snapshot.portfolio.history.totalValue} benchmark={snapshot.portfolio.benchmark?.normalized ?? []} yFormatter={(value) => value.toFixed(2)} />
         </ChartFrame>
-        <TerminalPanel title="今日动作 / ACTION STREAM" meta={`${fundTickets.length} 项`} className="col-span-12 p-0 xl:col-span-4">
+        <TerminalPanel title="研究建议 / ACTION STREAM" meta={`${fundTickets.length} 项`} className="col-span-12 p-0 xl:col-span-4">
           <div className="max-h-72 overflow-auto p-3">
             {fundTickets.length ? fundTickets.slice(0, 7).map((ticket, index) => (
               <div key={ticket.ticketId} className="flex items-start gap-3 border-b border-slate-800/70 py-3 last:border-b-0">
@@ -123,7 +126,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="p-4">
-          <SectionTitle title="今日分析链路" meta={snapshot.selectedDate} />
+          <SectionTitle title="研究与学习状态" meta={snapshot.selectedDate} />
           <div className="grid grid-cols-2 gap-3">
             <MiniStat label="记忆总数" value={String(snapshot.longMemory.counts.total ?? 0)} />
             <MiniStat label="待确认" value={String(snapshot.longMemory.counts.pending ?? 0)} tone="warning" />
@@ -140,12 +143,12 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
         </Card>
 
         <Card className="p-4">
-          <SectionTitle title="今日禁止动作" />
+          <SectionTitle title="模拟约束" />
           <ActionList items={prohibited.length ? prohibited : lines(snapshot.dashboard.market_text).slice(0, 4)} tone="danger" />
         </Card>
 
         <Card className="p-4">
-          <SectionTitle title="允许动作与条件" />
+          <SectionTitle title="建议与前提" />
           <ActionList items={allowed.length ? allowed : lines(snapshot.dashboard.focus_text).slice(0, 4)} tone="success" />
         </Card>
       </section>
