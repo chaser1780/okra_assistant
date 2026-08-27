@@ -23,7 +23,7 @@ from execution_sync import (
     record_conversion,
     update_pending_confirmations,
 )
-from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_records
+from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_events, list_memory_records
 from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, simulation_fields
 from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
@@ -426,8 +426,15 @@ class PageService:
             "execution": [item for item in records if item.get("domain") == "execution"],
             "portfolio": [item for item in records if item.get("domain") == "portfolio"],
         }
-        pending = [item for item in records if item.get("status") == "strategic" and can_promote_to_permanent(item)]
+        pending = [item for item in records if item.get("status") in {"strategic", "validated_strategy"} and can_promote_to_permanent(item)]
         counts = {key: len(value) for key, value in grouped.items()}
+        status_counts: dict[str, int] = {}
+        track_counts: dict[str, int] = {}
+        for item in records:
+            status = str(item.get("status") or "candidate")
+            track = str((item.get("metadata") or {}).get("sourceTrack") or "user_simulation")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            track_counts[track] = track_counts.get(track, 0) + 1
         counts.update({"pending": len(pending), "total": len(records)})
         return {
             "updatedAt": timestamp_now(),
@@ -438,6 +445,8 @@ class PageService:
             "execution": _to_jsonable(grouped["execution"]),
             "portfolio": _to_jsonable(grouped["portfolio"]),
             "counts": counts,
+            "lifecycle": {"statusCounts": status_counts, "trackCounts": track_counts},
+            "recentEvents": _to_jsonable(list_memory_events(self.home, limit=40)),
         }
 
     def fund_long_memory_payload(self, fund_code: str) -> dict[str, Any]:
@@ -446,7 +455,7 @@ class PageService:
         portfolio_rules = [
             item
             for item in list_memory_records(self.home, domain="portfolio", limit=120)
-            if item.get("status") in {"strategic", "permanent"}
+            if item.get("status") in {"strategic", "validated_strategy", "permanent"}
         ]
         return {"fund": _to_jsonable(fund_records), "execution": _to_jsonable(execution_records[:12]), "rules": _to_jsonable(portfolio_rules[:12])}
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import uuid
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,8 @@ from common import (
 
 
 SCHEMA_VERSION = 1
-ACTIVE_STATUSES = {"candidate", "strategic", "permanent"}
+ACTIVE_STATUSES = {"candidate", "experimental_active", "validated_strategy", "strategic", "permanent"}
+MEMORY_STATUSES = ACTIVE_STATUSES | {"archived", "rejected"}
 PERMANENT_REQUIRES_APPROVAL = True
 PERMANENT_ELIGIBLE_DOMAINS = {"market", "execution", "portfolio"}
 PERMANENT_ELIGIBLE_MEMORY_TYPES = {"market_regime_memory", "execution_memory", "portfolio_policy_memory"}
@@ -106,9 +108,27 @@ def init_long_memory(agent_home: Path) -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_events (
+                event_id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                from_status TEXT NOT NULL DEFAULT '',
+                to_status TEXT NOT NULL DEFAULT '',
+                actor TEXT NOT NULL DEFAULT 'system',
+                note TEXT NOT NULL DEFAULT '',
+                source_track TEXT NOT NULL DEFAULT '',
+                experiment_id TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memory_domain_entity ON memory_records(domain, entity_key)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_status ON memory_records(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_memory ON memory_events(memory_id, created_at DESC)")
         _ensure_memory_record_columns(conn)
     init_search_index(agent_home)
 
@@ -155,6 +175,63 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False, sort_keys=True)
 
 
+def _safe_version(value: Any, default: int = 1) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _write_memory_event(
+    conn: sqlite3.Connection,
+    *,
+    memory_id: str,
+    event_type: str,
+    from_status: str = "",
+    to_status: str = "",
+    actor: str = "system",
+    note: str = "",
+    metadata: dict[str, Any] | None = None,
+    created_at: str,
+) -> dict[str, Any]:
+    metadata = dict(metadata or {})
+    event = {
+        "eventId": f"memory_event_{uuid.uuid4().hex}",
+        "memoryId": memory_id,
+        "eventType": event_type,
+        "fromStatus": from_status,
+        "toStatus": to_status,
+        "actor": actor,
+        "note": note,
+        "sourceTrack": str(metadata.get("sourceTrack") or metadata.get("simulationSource") or ""),
+        "experimentId": str(metadata.get("experimentId") or ""),
+        "metadata": metadata,
+        "createdAt": created_at,
+    }
+    conn.execute(
+        """
+        INSERT INTO memory_events(
+            event_id, memory_id, event_type, from_status, to_status, actor, note,
+            source_track, experiment_id, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event["eventId"],
+            event["memoryId"],
+            event["eventType"],
+            event["fromStatus"],
+            event["toStatus"],
+            event["actor"],
+            event["note"],
+            event["sourceTrack"],
+            event["experimentId"],
+            _json_dumps(event["metadata"]),
+            event["createdAt"],
+        ),
+    )
+    return event
+
+
 def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
@@ -181,6 +258,14 @@ def normalize_memory_provenance(record: dict[str, Any], metadata: dict[str, Any]
     normalized["sourceTrack"] = track
     normalized["experimentId"] = experiment_id
     normalized["formalInfluence"] = bool(formal_influence) and track == "user_simulation"
+    status = str(record.get("status", "") or "candidate")
+    if status == "strategic" and track == "strategy_simulation":
+        promotion_level = "validated_strategy"
+    else:
+        promotion_level = str(normalized.get("promotionLevel") or normalized.get("promotion_level") or status)
+    normalized["promotionLevel"] = promotion_level
+    normalized["sourceSnapshotHash"] = str(normalized.get("sourceSnapshotHash") or normalized.get("source_snapshot_hash") or record.get("source_snapshot_hash") or "")
+    normalized["version"] = _safe_version(normalized.get("version", 1) or 1)
     return normalized
 
 
@@ -262,6 +347,8 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
             str(record.get("memory_type", "")),
         )
     status = str(record.get("status", "candidate") or "candidate")
+    if status not in MEMORY_STATUSES:
+        raise ValueError(f"Unsupported memory status: {status}")
     approved_by = str(record.get("approved_by", "") or "")
     approved_at = str(record.get("approved_at", "") or "")
     if status == "permanent" and PERMANENT_REQUIRES_APPROVAL and not approved_by:
@@ -295,15 +382,24 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
         "created_at": str(record.get("created_at", "") or now),
         "updated_at": now,
     }
+    if normalized["status"] == "permanent":
+        normalized["metadata"]["promotionLevel"] = "permanent"
+    elif normalized["status"] in {"candidate", "experimental_active", "validated_strategy", "strategic"}:
+        normalized["metadata"]["promotionLevel"] = normalized["status"]
     normalized["can_promote_permanent"] = can_promote_to_permanent(normalized)
     with _connect(long_memory_db_path(agent_home)) as conn:
-        existing = conn.execute("SELECT created_at, approved_by, approved_at, status FROM memory_records WHERE memory_id = ?", (memory_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM memory_records WHERE memory_id = ?", (memory_id,)).fetchone()
+        previous_record = _row_to_record(existing) if existing else None
         if existing:
             normalized["created_at"] = existing["created_at"] or normalized["created_at"]
+            previous_metadata = dict(previous_record.get("metadata", {}) or {}) if previous_record else {}
+            normalized["metadata"]["version"] = _safe_version(previous_metadata.get("version"), 1) + 1
             if normalized["status"] != "permanent" and existing["status"] == "permanent":
                 normalized["status"] = "permanent"
                 normalized["approved_by"] = existing["approved_by"]
                 normalized["approved_at"] = existing["approved_at"]
+        if normalized["status"] == "permanent":
+            normalized["metadata"]["promotionLevel"] = "permanent"
         conn.execute(
             """
             INSERT INTO memory_records (
@@ -384,6 +480,17 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
                     """,
                     (normalized["memory_id"], ref_text, kind, evidence_date, now),
                 )
+        _write_memory_event(
+            conn,
+            memory_id=normalized["memory_id"],
+            event_type=("created" if previous_record is None else "transition" if previous_record.get("status") != normalized["status"] else "updated"),
+            from_status=str(previous_record.get("status") or "") if previous_record else "",
+            to_status=normalized["status"],
+            actor=str(record.get("source_agent") or record.get("actor") or "system"),
+            note=str(record.get("event_note") or ""),
+            metadata=normalized["metadata"],
+            created_at=now,
+        )
     sync_search_index(agent_home, normalized)
     write_domain_mirrors(agent_home)
     return normalized
@@ -450,6 +557,36 @@ def search_long_memory(agent_home: Path, query: str, *, limit: int = 12) -> list
     return [by_id[item] for item in ids if item in by_id]
 
 
+def list_memory_events(agent_home: Path, *, memory_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    init_long_memory(agent_home)
+    where = "WHERE memory_id = ?" if memory_id else ""
+    params: list[Any] = [memory_id] if memory_id else []
+    with _connect(long_memory_db_path(agent_home)) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM memory_events
+            {where}
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ?
+            """,
+            [*params, max(1, int(limit))],
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["eventId"] = item.pop("event_id")
+        item["memoryId"] = item.pop("memory_id")
+        item["eventType"] = item.pop("event_type")
+        item["fromStatus"] = item.pop("from_status")
+        item["toStatus"] = item.pop("to_status")
+        item["sourceTrack"] = item.pop("source_track")
+        item["experimentId"] = item.pop("experiment_id")
+        item["createdAt"] = item.pop("created_at")
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        result.append(item)
+    return result
+
+
 def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str = "", actor: str = "user") -> dict[str, Any]:
     init_long_memory(agent_home)
     now = timestamp_now()
@@ -475,6 +612,9 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
         approved_by = actor if action == "approve" else ""
         approved_at = now if action == "approve" else ""
         current_metadata = dict(current.get("metadata", {}) or {})
+        updated_metadata = dict(current_metadata)
+        updated_metadata["promotionLevel"] = "permanent" if action == "approve" else next_status
+        updated_metadata["version"] = _safe_version(current_metadata.get("version"), 1) + 1
         superseded_ids: list[str] = []
         superseded_records: list[dict[str, Any]] = []
         if action == "approve":
@@ -492,6 +632,8 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
                 previous_metadata["superseded_by"] = memory_id
                 previous_metadata["superseded_at"] = now
                 previous_metadata["superseded_reason"] = note or "replaced_by_newer_strategy"
+                previous_metadata["promotionLevel"] = "archived"
+                previous_metadata["version"] = _safe_version(previous_metadata.get("version"), 1) + 1
                 previous["status"] = "archived"
                 previous["metadata"] = previous_metadata
                 previous["updated_at"] = now
@@ -504,6 +646,17 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
                     """,
                     (_json_dumps(previous_metadata), now, previous["memory_id"]),
                 )
+                _write_memory_event(
+                    conn,
+                    memory_id=previous["memory_id"],
+                    event_type="superseded",
+                    from_status="permanent",
+                    to_status="archived",
+                    actor=actor,
+                    note=note or "replaced_by_newer_strategy",
+                    metadata=previous_metadata,
+                    created_at=now,
+                )
                 superseded_records.append(previous)
         conn.execute(
             """
@@ -515,7 +668,7 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
                 next_status,
                 approved_by,
                 approved_at,
-                _json_dumps({**current_metadata, "supersedes": superseded_ids, "version_state": "current" if action == "approve" else current_metadata.get("version_state", "")}),
+                _json_dumps({**updated_metadata, "supersedes": superseded_ids, "version_state": "current" if action == "approve" else current_metadata.get("version_state", "")}),
                 now,
                 memory_id,
             ),
@@ -528,13 +681,24 @@ def approve_memory(agent_home: Path, memory_id: str, *, action: str, note: str =
             """,
             (approval_id, memory_id, action, note, actor, now),
         )
+        _write_memory_event(
+            conn,
+            memory_id=memory_id,
+            event_type="approval" if action == "approve" else "transition",
+            from_status=str(current.get("status") or ""),
+            to_status=next_status,
+            actor=actor,
+            note=note,
+            metadata={**updated_metadata, "supersedes": superseded_ids, "version_state": "current" if action == "approve" else current_metadata.get("version_state", "")},
+            created_at=now,
+        )
     updated = {
         **current,
         "status": next_status,
         "approved_by": approved_by,
         "approved_at": approved_at,
         "updated_at": now,
-        "metadata": {**dict(current.get("metadata", {}) or {}), "supersedes": superseded_ids, "version_state": "current" if action == "approve" else dict(current.get("metadata", {}) or {}).get("version_state", "")},
+        "metadata": {**updated_metadata, "supersedes": superseded_ids, "version_state": "current" if action == "approve" else current_metadata.get("version_state", "")},
     }
     updated["can_promote_permanent"] = can_promote_to_permanent(updated)
     sync_search_index(agent_home, updated)

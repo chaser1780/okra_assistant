@@ -44,6 +44,8 @@ const actionLabels: Record<string, string> = {
 
 const statusLabels: Record<string, string> = {
   candidate: "候选",
+  experimental_active: "实验中",
+  validated_strategy: "验证策略",
   strategic: "策略",
   permanent: "永久",
   archived: "归档",
@@ -355,7 +357,9 @@ export function valueLabel(value: unknown): string {
     ready: "就绪",
     not_run: "未运行",
     display_only: "仅供审查",
-    non_executable: "不可执行"
+    non_executable: "不可执行",
+    experimental_active: "实验中",
+    validated_strategy: "验证策略"
   };
   return (
     map[raw] ||

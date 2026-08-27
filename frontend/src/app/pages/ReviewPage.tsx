@@ -68,15 +68,18 @@ export function ReviewPage({
           <MetricCard key={metric.title} {...metric} />
         ))}
       </div>
-      <TerminalPanel title="记忆生命周期" meta="候选 → 观察 → 策略 → 永久" className="p-4">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <TerminalPanel title="记忆生命周期" meta="候选 → 实验中 → 验证策略 → 永久；永久影响必须显式确认" className="p-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <LifecycleNode label="候选" value={longMemory.counts.pending ?? 0} tone="warning" />
-          <LifecycleNode label="观察" value={review.metrics.find((item) => item.title === "待确认策略")?.value ?? "0"} tone="info" />
-          <LifecycleNode label="策略" value={review.metrics.find((item) => item.title === "战略规则")?.value ?? "0"} tone="accent" />
+          <LifecycleNode label="实验中" value={longMemory.lifecycle?.statusCounts?.experimental_active ?? 0} tone="info" />
+          <LifecycleNode label="验证策略" value={longMemory.lifecycle?.statusCounts?.validated_strategy ?? 0} tone="accent" />
+          <LifecycleNode label="兼容策略" value={longMemory.lifecycle?.statusCounts?.strategic ?? review.metrics.find((item) => item.title === "战略规则")?.value ?? "0"} tone="accent" />
           <LifecycleNode label="永久" value={review.metrics.find((item) => item.title === "永久规则")?.value ?? "0"} tone="success" />
           <LifecycleNode label="审计状态" value={trust?.trustedForLearning ? "通过" : "阻断"} tone={trust?.trustedForLearning ? "success" : "danger"} />
         </div>
       </TerminalPanel>
+
+      <MemoryEventTimeline events={longMemory.recentEvents ?? []} />
 
       <DecisionTracePanel trace={review.decisionTrace} />
 
@@ -170,6 +173,32 @@ export function ReviewPage({
 
 function LifecycleNode({ label, value, tone }: { label: string; value: string | number; tone: Tone }) {
   return <div className="border border-slate-800 bg-[#0b0e12] px-3 py-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div><div className={`metric-number mt-2 text-xl font-semibold ${tone === "success" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : tone === "warning" ? "text-amber-300" : "text-cyan-200"}`}>{value}</div></div>;
+}
+
+function MemoryEventTimeline({ events }: { events: NonNullable<LongMemoryPayload["recentEvents"]> }) {
+  return (
+    <TerminalPanel title="记忆迁移账本" meta="创建、状态迁移、审批和替代均以本地事件记录为准" className="p-4">
+      {events.length ? (
+        <div className="max-h-64 overflow-auto divide-y divide-slate-800/80 border border-slate-800">
+          {events.slice(0, 16).map((event) => (
+            <div key={event.eventId} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-2 text-sm">
+              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge tone={event.sourceTrack === "strategy_simulation" ? "warning" : "info"}>{memoryEventLabel(event.eventType)}</Badge><span className="metric-number truncate text-xs text-slate-400">{event.memoryId}</span>{event.experimentId ? <Badge tone="warning">实验来源</Badge> : null}</div><div className="mt-1 truncate text-xs text-slate-500">{memoryStatusLabel(event.fromStatus)} → {memoryStatusLabel(event.toStatus)}{event.note ? ` · ${event.note}` : ""}</div></div>
+              <div className="shrink-0 text-right text-xs text-slate-500"><div>{event.actor || "system"}</div><div className="mt-1">{event.createdAt ? event.createdAt.slice(0, 16).replace("T", " ") : "暂无时间"}</div></div>
+            </div>
+          ))}
+        </div>
+      ) : <EmptyState title="暂无记忆迁移事件" body="新建记忆、进入实验策略、用户确认、归档或替代后，这里会留下本地审计记录。" />}
+    </TerminalPanel>
+  );
+}
+
+function memoryEventLabel(value: string) {
+  const labels: Record<string, string> = { created: "创建", updated: "更新", transition: "状态迁移", approval: "用户确认", superseded: "被替代" };
+  return labels[value] ?? "记忆事件";
+}
+
+function memoryStatusLabel(value: string) {
+  return value ? statusLabel(value) : "初始";
 }
 
 function DecisionTracePanel({ trace }: { trace?: ReviewPayload["decisionTrace"] }) {
@@ -319,6 +348,8 @@ function canApprovePermanent(record: LongMemoryRecord) {
 
 function statusTone(status: string): Tone {
   if (status === "permanent") return "success";
+  if (status === "experimental_active") return "info";
+  if (status === "validated_strategy") return "accent";
   if (status === "strategic") return "warning";
   if (status === "rejected") return "danger";
   if (status === "archived") return "neutral";

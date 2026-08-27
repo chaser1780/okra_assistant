@@ -351,7 +351,23 @@ export const longMemorySchema = z.object({
     portfolio: z.number().optional(),
     pending: z.number().optional(),
     total: z.number().optional()
-  }).passthrough()
+  }).passthrough(),
+  lifecycle: z.object({
+    statusCounts: numberRecordSchema.optional(),
+    trackCounts: numberRecordSchema.optional()
+  }).passthrough().optional(),
+  recentEvents: z.array(z.object({
+    eventId: z.string().catch(""),
+    memoryId: z.string().catch(""),
+    eventType: z.string().catch(""),
+    fromStatus: z.string().catch(""),
+    toStatus: z.string().catch(""),
+    actor: z.string().catch(""),
+    note: z.string().catch(""),
+    sourceTrack: z.string().catch(""),
+    experimentId: z.string().catch(""),
+    createdAt: z.string().catch("")
+  }).passthrough()).catch([]).optional()
 }).passthrough();
 
 const fundAnalysisAgentCardSchema = z.object({

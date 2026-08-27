@@ -570,7 +570,7 @@ export type ShadowReviewPagePayload = Record<string, unknown> & {
   }>;
 };
 
-export type MemoryStatus = "candidate" | "strategic" | "permanent" | "archived" | "rejected";
+export type MemoryStatus = "candidate" | "experimental_active" | "validated_strategy" | "strategic" | "permanent" | "archived" | "rejected";
 export type MemoryDomain = "fund" | "market" | "execution" | "portfolio";
 export type MemoryAction = "approve" | "reject" | "archive" | "demote";
 
@@ -614,6 +614,22 @@ export type LongMemoryPayload = {
     pending?: number;
     total?: number;
   };
+  lifecycle?: {
+    statusCounts?: Record<string, number>;
+    trackCounts?: Record<string, number>;
+  };
+  recentEvents?: Array<Record<string, unknown> & {
+    eventId: string;
+    memoryId: string;
+    eventType: string;
+    fromStatus: string;
+    toStatus: string;
+    actor: string;
+    note: string;
+    sourceTrack: string;
+    experimentId: string;
+    createdAt: string;
+  }>;
 };
 
 export type DailyFirstOpenPayload = {
