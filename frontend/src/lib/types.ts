@@ -757,6 +757,7 @@ export type SystemPayload = {
   todayAnalysisRuntime?: TodayAnalysisRuntimePayload;
   longMemoryRuntime?: Record<string, unknown>;
   agentRuntime?: Record<string, unknown>;
+  simulation?: SimulationPayload;
   ragRuntime?: RagRuntimePayload;
   rag?: RagRuntimePayload;
   todayAnalysis?: TodayAnalysisSystemPayload;
@@ -1017,6 +1018,22 @@ export type FundDetailPayload = {
     benchmarkStatus?: string;
   };
   tradeMarkers: TradeMarker[];
+  strategyExperiments?: Array<{
+    experimentId: string;
+    label: string;
+    status: string;
+    asOfDate: string;
+    actionCount: number;
+    totalValue: number | null;
+    initialTotalValue: number | null;
+    valueDelta: number | null;
+    fundCode: string;
+    fundValue: number | null;
+    fundHoldingPnl: number | null;
+    fundHoldingUnits: number | null;
+    affectsFormalPortfolio: false;
+    actions: Array<{ action: string; amount: number | null; asOfDate: string; simulationStatus: string }>;
+  }>;
   longMemory: FundLongMemoryPayload;
   dataContext?: DataContext;
   simulation?: SimulationPayload;

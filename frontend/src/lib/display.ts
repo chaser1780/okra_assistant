@@ -381,11 +381,13 @@ export function valueLabel(value: unknown): string {
     fund_news: "基金资讯",
     theme_news: "主题资讯",
     market_news: "市场资讯",
+    sentiment_news: "情绪资讯",
     official_notice: "官方公告",
     regulatory_notice: "监管公告",
     scored: "已评估",
     pending: "待评估",
-    none: "无"
+    none: "无",
+    disabled: "已停用"
   };
   return (
     map[raw] ||

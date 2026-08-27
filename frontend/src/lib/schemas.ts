@@ -477,6 +477,28 @@ const fundLongMemorySchema = z.object({
   rules: z.array(longMemoryRecordSchema).catch([])
 }).passthrough();
 
+const fundExperimentResultSchema = z.object({
+  experimentId: z.string().catch(""),
+  label: z.string().catch("策略实验"),
+  status: z.string().catch("active"),
+  asOfDate: z.string().catch(""),
+  actionCount: z.number().catch(0),
+  totalValue: financialNumberSchema,
+  initialTotalValue: financialNumberSchema,
+  valueDelta: financialNumberSchema,
+  fundCode: z.string().catch(""),
+  fundValue: financialNumberSchema,
+  fundHoldingPnl: financialNumberSchema,
+  fundHoldingUnits: financialNumberSchema,
+  affectsFormalPortfolio: z.literal(false),
+  actions: z.array(z.object({
+    action: z.string().catch(""),
+    amount: financialNumberSchema,
+    asOfDate: z.string().catch(""),
+    simulationStatus: z.string().catch("simulated")
+  }).passthrough()).catch([])
+}).passthrough();
+
 export const fundDetailSchema = z.object({
   fundCode: z.string(),
   fundName: z.string(),
@@ -497,6 +519,7 @@ export const fundDetailSchema = z.object({
     benchmarkStatus: z.string().optional()
   }).passthrough(),
   tradeMarkers: z.array(tradeMarkerSchema).catch([]),
+  strategyExperiments: z.array(fundExperimentResultSchema).catch([]),
   longMemory: fundLongMemorySchema,
   dataContext: dataContextSchema.optional(),
   simulation: simulationPayloadSchema.optional()
@@ -547,6 +570,7 @@ export const systemSchema = z.object({
   todayAnalysisRuntime: unknownRecordSchema.optional(),
   longMemoryRuntime: unknownRecordSchema.optional(),
   agentRuntime: unknownRecordSchema.optional(),
+  simulation: simulationPayloadSchema.optional(),
   ragRuntime: ragRuntimeSchema.optional(),
   rag: ragRuntimeSchema.optional(),
   todayAnalysis: unknownRecordSchema.optional(),

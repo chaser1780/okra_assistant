@@ -204,6 +204,7 @@ class FundDetailDto(ContractModel):
     history: dict[str, Any] = Field(default_factory=dict)
     performance: dict[str, Any] = Field(default_factory=dict)
     tradeMarkers: list[dict[str, Any]] = Field(default_factory=list)
+    strategyExperiments: list[dict[str, Any]] = Field(default_factory=list)
     longMemory: dict[str, Any] = Field(default_factory=dict)
     dataContext: DataContextDto = Field(default_factory=DataContextDto)
     simulation: SimulationPayloadDto = Field(default_factory=SimulationPayloadDto)

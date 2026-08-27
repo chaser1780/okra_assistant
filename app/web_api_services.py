@@ -694,6 +694,9 @@ class PageService:
         planned_dca_markers = self._planned_dca_markers(fund_code, portfolio_item or {}, snapshot.dates, range_label)
         planned_dca_markers = [item for item in planned_dca_markers if str(item.get("date", ""))[:10] <= end_date]
         decision_markers = _decision_markers(research_item, _markers(trade_markers) + planned_dca_markers, end_date)
+        from strategy_simulation import list_fund_experiment_results
+
+        strategy_experiments = list_fund_experiment_results(self.home, fund_code)
         fund_name = (
             (portfolio_item or {}).get("fundName")
             or (realtime_item or {}).get("fund_name")
@@ -738,6 +741,7 @@ class PageService:
                 "benchmarkStatus": benchmark_status,
             },
             "tradeMarkers": sorted(_markers(trade_markers) + planned_dca_markers, key=lambda item: item.get("date", "")),
+            "strategyExperiments": strategy_experiments,
             "longMemory": self.fund_long_memory_payload(fund_code, snapshot.selected_date),
             "dataContext": self.data_context(state),
             "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
@@ -1011,6 +1015,13 @@ class PageService:
         memory_cycle = workspace / "memory_cycle.json"
         today_analysis_runtime = workspace / "today_analysis_runtime.json"
         long_memory_runtime = workspace / "long_memory_runtime.json"
+        news_payload = self.read_json_file(self.home / "raw" / "news" / f"{selected}.json")
+        source_health_payload = state.get("source_health", {}) or {}
+        if not list(source_health_payload.get("items", []) or []):
+            source_health_payload = {
+                "items": list(news_payload.get("source_health", []) or []),
+                "summary": _source_health_summary(list(news_payload.get("source_health", []) or [])),
+            }
         today_decision_payload = state.get("today_analysis_decision", {}) or self.read_json_file(today_decision)
         today_analysis_payload = state.get("today_analysis", {}) or self.read_json_file(today_analysis)
         today_analysis_meta_payload = state.get("today_analysis_meta", {}) or self.read_json_file(today_analysis_meta)
@@ -1058,7 +1069,7 @@ class PageService:
 
         decision_trace_payload = self.read_json_file(self.home / "db" / "decision_traces" / f"{selected}.json")
         return {
-            "sourceHealth": state.get("source_health", {}) or {},
+            "sourceHealth": source_health_payload,
             "preflightStatus": (state.get("summary", {}) or {}).get("preflight_status", ""),
             "settings": state.get("settings", {}) or {},
             "llmRuntime": {
@@ -1082,6 +1093,7 @@ class PageService:
             },
             "modelRuns": list_model_runs(self.home, selected, limit=12),
             "decisionTrace": decision_trace_payload,
+            "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
             "ragRuntime": self.rag_runtime_payload(full=include_full_rag),

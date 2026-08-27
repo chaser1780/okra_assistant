@@ -3,8 +3,9 @@ import { fieldLabel, valueLabel } from "../../lib/display";
 import { buildDesktopRuntimeConfig, getDesktopRuntimeConfig } from "../../lib/desktopRuntime";
 import { ragRuntimeSchema } from "../../lib/schemas";
 import { runtimeStatusMeta } from "../../lib/todayAnalysis";
-import type { RagRuntimePayload, Tone } from "../../lib/types";
+import type { RagRuntimePayload, SimulationPayload, Tone } from "../../lib/types";
 import { Badge, Card, SectionTitle } from "../../components/ui";
+import { SimulationTrackRail } from "../../components/okra/ResearchContext";
 
 export function SystemPage({ system, summary }: { system: Record<string, unknown>; summary: Record<string, unknown> }) {
   const llmRuntime = (system.llmRuntime ?? {}) as Record<string, unknown>;
@@ -19,6 +20,9 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
   const degradedAgents = Array.isArray(agentRuntime.degradedAgents) ? agentRuntime.degradedAgents : [];
   const modelRuns = Array.isArray(system.modelRuns) ? system.modelRuns as Array<Record<string, unknown>> : [];
   const decisionTrace = (system.decisionTrace ?? {}) as Record<string, unknown>;
+  const sourceHealth = (system.sourceHealth ?? {}) as Record<string, unknown>;
+  const simulation = system.simulation as SimulationPayload | undefined;
+  const sourceHealthItems = Array.isArray(sourceHealth.items) ? sourceHealth.items as Array<Record<string, unknown>> : [];
   const [desktopRuntime, setDesktopRuntime] = useState(buildDesktopRuntimeConfig);
 
   useEffect(() => {
@@ -45,6 +49,17 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
           <StatusTile label="当前 Agent" value={agentLabel(todayRuntime.currentAgent)} tone={todayRuntime.currentAgent ? "success" : "neutral"} />
           <StatusTile label="长期记忆状态" value={runtimeStatusLabel(longMemoryRuntime.status)} tone={runtimeStatusMeta(longMemoryRuntime.status).tone} />
         </div>
+      </Card>
+
+      <SimulationTrackRail simulation={simulation} />
+
+      <Card className="p-4 lg:col-span-2">
+        <SectionTitle title="数据采集运行轨道" meta="按来源展示本地采集健康与降级状态" />
+        {sourceHealthItems.length ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {sourceHealthItems.slice(0, 9).map((item, index) => <SourceHealthTile key={`${String(item.source_key ?? item.provider ?? "source")}-${index}`} item={item} />)}
+          </div>
+        ) : <div className="text-sm text-slate-500">当前日期没有来源运行记录；运行采集后会显示各来源的状态、延迟与降级信息。</div>}
       </Card>
 
       <Card className="p-4 lg:col-span-2">
@@ -248,6 +263,17 @@ function enabledLabel(value: unknown) {
   return value === true ? "开启" : value === false ? "关闭" : "暂无";
 }
 
+function SourceHealthTile({ item }: { item: Record<string, unknown> }) {
+  const runtime = item.runtime && typeof item.runtime === "object" ? item.runtime as Record<string, unknown> : {};
+  const metrics = item.metrics && typeof item.metrics === "object" ? item.metrics as Record<string, unknown> : {};
+  const status = valueLabel(item.status);
+  const tone: Tone = item.status === "ok" ? "success" : item.status === "disabled" ? "neutral" : "warning";
+  const source = sourceHealthLabel(item.provider ?? item.source_key);
+  const requests = Number(metrics.request_skipped ?? 0);
+  const failures = Number(runtime.consecutive_failures ?? 0);
+  return <div className="border border-slate-800 bg-slate-950/40 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-semibold text-slate-200">{source}</div><div className="mt-1 text-xs text-slate-500">{valueLabel(item.source_role)}</div></div><Badge tone={tone}>{status}</Badge></div><div className="mt-3 text-xs leading-5 text-slate-500">{requests ? "本轮已跳过" : failures ? `连续失败 ${failures} 次` : "本轮已完成健康检查"}</div></div>;
+}
+
 function ragModeLabel(value: unknown) {
   if (value === "hybrid_lexical_semantic") return "词法 + 语义重排";
   return "词法检索 + 重排";
@@ -439,4 +465,16 @@ function ragProfileLabel(value: unknown) {
 
 function runtimeStatusLabel(value: unknown) {
   return String(value ?? "").trim() ? runtimeStatusMeta(value).label : "暂无";
+}
+
+function sourceHealthLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const labels: Record<string, string> = {
+    eastmoney_notice_and_articles: "东方财富公告与资讯",
+    eastmoney_search_api: "东方财富检索",
+    openai_web_search: "网页检索",
+    xueqiu_web: "雪球资讯",
+    douyin_web: "短视频资讯"
+  };
+  return labels[raw] || raw.replace(/^rss:/, "RSS / ").replace(/^reg:/, "监管 / ").replace(/_/g, " ") || "未知来源";
 }

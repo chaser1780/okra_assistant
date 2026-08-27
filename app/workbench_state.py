@@ -686,6 +686,16 @@ def _review_decision_trace(home: Path, report_date: str) -> dict[str, Any]:
                 "confidence": item.get("confidence"),
                 "executionEligible": bool(item.get("executionEligible")),
                 "section": str(item.get("section") or ""),
+                "runId": str(item.get("runId") or ""),
+                "decisionCutoff": str(item.get("decisionCutoff") or ""),
+                "modelRunScope": str(item.get("modelRunScope") or "unavailable"),
+                "evidenceRefs": [dict(value) for value in item.get("evidenceRefs", []) or [] if isinstance(value, dict)][:6],
+                "supportingSignals": [str(value) for value in item.get("supportingSignals", []) or []][:6],
+                "opposingSignals": [str(value) for value in item.get("opposingSignals", []) or []][:6],
+                "policyHits": [str(value) for value in item.get("policyHits", []) or []][:6],
+                "constraintResults": [str(value) for value in item.get("constraintResults", []) or []][:6],
+                "abstentionReason": str(item.get("abstentionReason") or ""),
+                "executionState": str(item.get("executionState") or "simulated_advice"),
             }
         )
     return {

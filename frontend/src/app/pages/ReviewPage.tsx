@@ -225,7 +225,12 @@ function DecisionTracePanel({ trace }: { trace?: ReviewPayload["decisionTrace"] 
         {decisions.length ? decisions.map((item, index) => {
           const fund = `${String(item.fundName || "")} ${String(item.fundCode || "")}`.trim() || "未标注基金";
           const confidence = Number(item.confidence);
-          return <div key={`${String(item.fundCode)}-${index}`} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-slate-800/70 px-3 py-2 text-sm last:border-b-0"><div className="min-w-0"><div className="truncate font-semibold text-slate-200">{fund}</div><div className="mt-1 text-xs text-slate-500">{String(item.section || "建议")}</div></div><div className="text-right text-slate-400">{item.amount == null ? "金额未设" : compactMoney(item.amount)}</div><div className="text-right"><Badge tone={item.executionEligible ? "info" : "neutral"}>{actionLabel(item.action)} {Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : ""}</Badge></div></div>;
+          const evidenceRefs = Array.isArray(item.evidenceRefs) ? item.evidenceRefs as Array<Record<string, unknown>> : [];
+          const supporting = stringTraceItems(item.supportingSignals);
+          const opposing = stringTraceItems(item.opposingSignals);
+          const policyHits = stringTraceItems(item.policyHits);
+          const constraints = stringTraceItems(item.constraintResults);
+          return <details key={`${String(item.fundCode)}-${index}`} className="border-b border-slate-800/70 px-3 py-2 text-sm last:border-b-0"><summary className="grid cursor-pointer grid-cols-[minmax(0,1fr)_auto_auto] gap-3"><div className="min-w-0"><div className="truncate font-semibold text-slate-200">{fund}</div><div className="mt-1 text-xs text-slate-500">{String(item.section || "建议")} · {String(item.decisionCutoff || "未报告决策截点")}</div></div><div className="text-right text-slate-400">{item.amount == null ? "金额未设" : compactMoney(item.amount)}</div><div className="text-right"><Badge tone={item.executionEligible ? "info" : "neutral"}>{actionLabel(item.action)} {Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : ""}</Badge></div></summary><div className="mt-3 grid gap-3 border-t border-slate-800/70 pt-3 md:grid-cols-2"><TraceList title="证据" items={evidenceRefs.map((entry) => String(entry.text ?? entry.path ?? entry.kind ?? ""))} empty="暂无证据" /><TraceList title="反向证据" items={opposing} empty="暂无反向证据" /><TraceList title="支持信号" items={supporting} empty="暂无支持信号" /><TraceList title="规则与约束" items={[...policyHits, ...constraints]} empty="暂无命中规则或约束" /></div><div className="mt-3 text-xs text-slate-500">模型关联：{traceModelScope(item.modelRunScope)} · 执行状态：{traceExecutionState(item.executionState)}{item.abstentionReason ? ` · 弃答原因：${String(item.abstentionReason)}` : ""}</div></details>;
         }) : <div className="p-3 text-sm text-slate-500">决策追溯已生成，但没有可展示的建议记录。</div>}
       </div>
     </TerminalPanel>
@@ -234,6 +239,23 @@ function DecisionTracePanel({ trace }: { trace?: ReviewPayload["decisionTrace"] 
 
 function TraceMetric({ label, value, tone = "accent" }: { label: string; value: string; tone?: Tone }) {
   return <div className="border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-xs text-slate-500">{label}</div><div className="mt-2 flex items-center justify-between gap-2"><span className="metric-number text-sm font-semibold text-slate-200">{value}</span><Badge tone={tone}>{tone === "warning" ? "受限" : "追溯"}</Badge></div></div>;
+}
+
+function TraceList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  const rows = items.filter(Boolean);
+  return <div className="rounded border border-slate-800 bg-slate-950/55 p-3"><div className="text-xs font-bold text-slate-400">{title}</div><div className="mt-2 text-xs leading-5 text-slate-500">{rows.length ? rows.slice(0, 5).join(" / ") : empty}</div></div>;
+}
+
+function stringTraceItems(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function traceModelScope(value: unknown) {
+  return value === "decision" ? "单条建议" : value === "pipeline" ? "管线级关联" : "未报告";
+}
+
+function traceExecutionState(value: unknown) {
+  return String(value ?? "") === "simulated_advice" ? "模拟建议" : "仅供审查";
 }
 
 function ReviewQualityPanels({ quality }: { quality?: ReviewPayload["quality"] }) {

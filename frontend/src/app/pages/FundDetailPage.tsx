@@ -13,7 +13,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import type { FundAnalysisAgentCard, LongMemoryRecord } from "../../lib/types";
+import type { FundAnalysisAgentCard, FundDetailPayload, LongMemoryRecord } from "../../lib/types";
 import { useFundDetailQuery } from "../../lib/workbenchQuery";
 import { asNumber, compactMoney, lines, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, evidencePathLabel, memoryText, memoryTitle, narrativeText, roleLabel, statusLabel, styleLabel, valueLabel } from "../../lib/display";
@@ -270,6 +270,8 @@ export function FundDetailPage({
         </Card>
       </section>
 
+      <StrategyExperimentResults experiments={detail.strategyExperiments ?? []} />
+
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4">
           <SectionTitle title="AI 今日分析明细" meta="按 agent 阶段展开这只基金的具体判断" />
@@ -326,6 +328,24 @@ function simulationMarkerSource(value: unknown) {
   if (source === "planned_dca") return "按定投日生成";
   if (source.includes("user_simulation") || source.includes("configured_dca") || source.includes("local_simulation")) return "用户模拟操作";
   return "模拟历史标记";
+}
+
+function StrategyExperimentResults({ experiments }: { experiments: NonNullable<FundDetailPayload["strategyExperiments"]> }) {
+  return (
+    <TerminalPanel title="策略实验结果" meta="只读 · 仅展示关联本基金的假设操作，不影响用户模拟组合" className="p-4">
+      {experiments.length ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {experiments.map((experiment) => (
+            <div key={experiment.experimentId} className="border border-amber-500/20 bg-amber-950/10 p-3">
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-semibold text-slate-100">{experiment.label}</div><div className="mt-1 text-xs text-slate-500">{experiment.asOfDate || "暂无日期"}</div></div><Badge tone="warning">仅实验</Badge></div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><div className="text-xs text-slate-500">假设操作</div><div className="metric-number mt-1 text-slate-200">{experiment.actionCount} 笔</div></div><div><div className="text-xs text-slate-500">实验内持仓盈亏</div><div className="metric-number mt-1 text-slate-200">{signedMoney(experiment.fundHoldingPnl)}</div></div></div>
+              <div className="mt-3 border-t border-amber-500/10 pt-2 text-xs text-slate-500">{experiment.actions.map((item) => `${actionLabel(item.action)} ${item.amount == null ? "" : compactMoney(item.amount)}`).join(" / ")}</div>
+            </div>
+          ))}
+        </div>
+      ) : <EmptyState title="暂无关联策略实验" body="策略实验中的假设操作只会在这里以只读方式显示，不会混入用户模拟组合或正式建议。" />}
+    </TerminalPanel>
+  );
 }
 
 function MemoryList({ records, empty, compact = false }: { records: LongMemoryRecord[]; empty: string; compact?: boolean }) {

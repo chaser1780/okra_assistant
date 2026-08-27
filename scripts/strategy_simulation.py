@@ -36,6 +36,59 @@ def list_experiments(agent_home: Path, *, limit: int = 40) -> list[dict[str, Any
     return result
 
 
+def list_fund_experiment_results(agent_home: Path, fund_code: str, *, limit: int = 12) -> list[dict[str, Any]]:
+    """Return read-only strategy-experiment results relevant to one fund."""
+    code = str(fund_code or "").strip()
+    if not code:
+        return []
+    base = experiment_dir(agent_home)
+    if not base.exists():
+        return []
+    results: list[dict[str, Any]] = []
+    for path in sorted(base.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        payload = _read(path)
+        if not payload:
+            continue
+        actions = [
+            item
+            for item in payload.get("actions", []) or []
+            if isinstance(item, dict) and str(item.get("fundCode") or "") == code
+        ]
+        if not actions:
+            continue
+        summary = _summary(agent_home, payload, path)
+        fund = next(
+            (
+                item
+                for item in (payload.get("portfolio", {}) or {}).get("funds", []) or []
+                if isinstance(item, dict) and str(item.get("fund_code") or item.get("code") or "") == code
+            ),
+            {},
+        )
+        results.append(
+            {
+                **summary,
+                "fundCode": code,
+                "affectsFormalPortfolio": False,
+                "actions": [
+                    {
+                        "action": str(item.get("action") or ""),
+                        "amount": _optional_number(item.get("amount")),
+                        "asOfDate": str(item.get("asOfDate") or ""),
+                        "simulationStatus": str(item.get("simulationStatus") or "simulated"),
+                    }
+                    for item in actions[-6:]
+                ],
+                "fundValue": _optional_number(fund.get("current_value")),
+                "fundHoldingPnl": _optional_number(fund.get("holding_pnl")),
+                "fundHoldingUnits": _optional_number(fund.get("holding_units")),
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
 def create_experiment(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
     with file_lock(lock_path(agent_home, "strategy_simulation")):
         experiment_id = _safe_id(str(payload.get("experimentId") or payload.get("experiment_id") or f"experiment_{uuid.uuid4().hex[:12]}"))
