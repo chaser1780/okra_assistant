@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from data_contracts import build_data_context, normalize_evidence_refs  # noqa: E402
-from simulation_tracks import build_simulation_payload, simulation_fields  # noqa: E402
+from simulation_tracks import build_simulation_payload, simulation_fields, user_simulation_fields  # noqa: E402
 
 
 class DataContractTests(unittest.TestCase):
@@ -123,6 +123,15 @@ class DataContractTests(unittest.TestCase):
         self.assertTrue(simulation_fields({"simulation_track": "user_simulation"})["is_simulation"])
         with self.assertRaisesRegex(ValueError, "Unsupported simulation status"):
             simulation_fields({"simulation_status": "filled"})
+
+    def test_desktop_user_simulation_defaults_legacy_status_to_simulation(self):
+        planned = user_simulation_fields({"status": "submitted"})
+        confirmed = user_simulation_fields({"status": "settled"})
+        self.assertTrue(planned["is_simulation"])
+        self.assertEqual("planned", planned["simulation_status"])
+        self.assertEqual("confirmed", confirmed["simulation_status"])
+        with self.assertRaisesRegex(ValueError, "user_simulation"):
+            user_simulation_fields({"simulation_track": "strategy_simulation"})
 
 
 if __name__ == "__main__":

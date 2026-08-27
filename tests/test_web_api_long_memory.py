@@ -661,6 +661,21 @@ class WebApiLongMemoryTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         record.assert_called_once()
+        normalized = record.call_args.args[1]
+        self.assertTrue(normalized["is_simulation"])
+        self.assertEqual("user_simulation", normalized["simulation_track"])
+        self.assertEqual("planned", normalized["simulation_status"])
+        self.assertEqual("local_simulation", normalized["platform"])
+
+    def test_execution_api_never_forwards_real_settlement_status(self):
+        controller = ExecutionController(self.agent.root)
+        with patch("app.web_api_services.record_actual_trade", return_value={"ok": True}) as record:
+            controller.execution_trade({"fund_code": "F1", "operation_type": "buy", "amount": 100, "status": "settled"})
+
+        normalized = record.call_args.args[1]
+        self.assertTrue(normalized["is_simulation"])
+        self.assertEqual("confirmed", normalized["simulation_status"])
+        self.assertEqual("local_simulation", normalized["platform"])
 
     def test_contract_trade_request_rejects_shadow_extra_fields(self):
         with self.assertRaises(HTTPError) as ctx:

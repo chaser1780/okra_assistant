@@ -24,7 +24,7 @@ from execution_sync import (
     update_pending_confirmations,
 )
 from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_events, list_memory_records
-from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, simulation_fields
+from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, user_simulation_fields
 from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
 from ui_tasks import build_portfolio_alignment_command, desktop_log_path, portfolio_alignment_target_date, should_align_portfolio_on_boot
@@ -341,9 +341,7 @@ class ExecutionController:
 
     def execution_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution trade")
-        simulation = simulation_fields(payload)
-        if simulation["simulation_track"] != USER_SIMULATION_TRACK:
-            raise ValueError("The simulation execution endpoint only records the user_simulation track.")
+        simulation = user_simulation_fields(payload)
         if not str(payload.get("fund_code", "") or "").strip():
             raise ValueError("fund_code is required")
         operation_type = str(payload.get("operation_type", "") or "").strip().lower()
@@ -351,13 +349,11 @@ class ExecutionController:
             raise ValueError("operation_type must be buy, sell, add, reduce, fee, dividend, or cancel")
         if operation_type in {"buy", "sell", "add", "reduce"} and not _positive_number(payload, "amount", "units"):
             raise ValueError("amount or units must be greater than 0")
-        return _to_jsonable(record_actual_trade(self.home, {**payload, **simulation}))
+        return _to_jsonable(record_actual_trade(self.home, {**payload, **simulation, "platform": "local_simulation"}))
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution conversion")
-        simulation = simulation_fields(payload)
-        if simulation["simulation_track"] != USER_SIMULATION_TRACK:
-            raise ValueError("The simulation execution endpoint only records the user_simulation track.")
+        simulation = user_simulation_fields(payload)
         out_code = str(payload.get("out_fund_code", "") or "").strip()
         in_code = str(payload.get("in_fund_code", "") or "").strip()
         if not out_code or not in_code:
@@ -366,7 +362,7 @@ class ExecutionController:
             raise ValueError("conversion source and target funds must be different")
         if not _positive_number(payload, "out_amount", "out_units"):
             raise ValueError("out_amount or out_units must be greater than 0")
-        return _to_jsonable(record_conversion(self.home, {**payload, **simulation}))
+        return _to_jsonable(record_conversion(self.home, {**payload, **simulation, "platform": "local_simulation"}))
 
     def execution_screenshot_parse(self, payload: dict[str, Any]) -> dict[str, Any]:
         return _to_jsonable(parse_alipay_screenshot_upload(self.home, payload))

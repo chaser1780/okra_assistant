@@ -75,6 +75,30 @@ def simulation_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def user_simulation_fields(payload: dict[str, Any], *, default_status: str = "planned") -> dict[str, Any]:
+    """Normalize desktop execution input to the only formal, local simulation track.
+
+    The desktop API must never infer a broker/real-trade operation from legacy
+    request fields. Missing simulation fields become a planned simulation; a
+    legacy completion status is reduced to its equivalent simulation state.
+    """
+    requested_track = str(payload.get("simulation_track") or payload.get("simulationTrack") or USER_SIMULATION_TRACK)
+    if requested_track != USER_SIMULATION_TRACK:
+        raise ValueError("The simulation execution endpoint only records the user_simulation track.")
+    requested_status = str(payload.get("simulation_status") or payload.get("simulationStatus") or "").lower()
+    if not requested_status:
+        requested_status = _simulation_status(payload)
+        if requested_status == "planned" and not str(payload.get("status") or "").strip():
+            requested_status = default_status
+    if requested_status not in SIMULATION_STATUSES:
+        raise ValueError(f"Unsupported simulation status: {requested_status}")
+    return {
+        "simulation_track": USER_SIMULATION_TRACK,
+        "simulation_status": requested_status,
+        "is_simulation": True,
+    }
+
+
 def _user_simulation_trades(agent_home: Path) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     base = actual_trade_dir(agent_home)
