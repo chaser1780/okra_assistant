@@ -30,6 +30,7 @@ def calculate_portfolio_performance(snapshots: list[dict[str, Any]]) -> dict[str
     if twr is None:
         return _unavailable("现金流调整后的时间加权收益无法计算。", ordered, flows)
     mwr = _xirr(ordered, flows)
+    adjusted_drawdown = _cashflow_adjusted_drawdown(ordered, flows)
     return {
         "status": "available",
         "methodology": "explicit_external_cashflow",
@@ -38,6 +39,7 @@ def calculate_portfolio_performance(snapshots: list[dict[str, Any]]) -> dict[str
         "cashflowCount": len(flows),
         "twr": {"available": True, "returnPct": round(twr * 100.0, 4)},
         "mwr": {"available": mwr is not None, "returnPct": round(mwr * 100.0, 4) if mwr is not None else None},
+        "cashflowAdjustedDrawdown": adjusted_drawdown,
         "reason": "仅使用显式外部现金流；基金买卖、定投、换仓和现金池内部转移不计为外部现金流。",
     }
 
@@ -117,6 +119,31 @@ def _xirr(snapshots: list[dict[str, Any]], flows: list[CashFlow]) -> float | Non
     return (low + high) / 2
 
 
+def _cashflow_adjusted_drawdown(snapshots: list[dict[str, Any]], flows: list[CashFlow]) -> dict[str, Any]:
+    """Drawdown of a time-weighted unit series, not of raw assets after deposits or withdrawals."""
+    flow_by_date = {flow.date: flow for flow in flows}
+    unit_value = 1.0
+    peak = 1.0
+    points = [{"date": snapshots[0]["date"], "value": 0.0}]
+    for previous, current in zip(snapshots, snapshots[1:]):
+        flow = flow_by_date.get(current["date"])
+        denominator = previous["total_value"] + (flow.amount if flow and flow.timing == "start" else 0.0)
+        numerator = current["total_value"] - (flow.amount if flow and flow.timing == "end" else 0.0)
+        if denominator <= 0:
+            return {"available": False, "currentPct": None, "maxPct": None, "series": []}
+        unit_value *= numerator / denominator
+        peak = max(peak, unit_value)
+        drawdown = ((unit_value / peak) - 1.0) * 100.0 if peak else 0.0
+        points.append({"date": current["date"], "value": round(drawdown, 4)})
+    values = [point["value"] for point in points]
+    return {
+        "available": True,
+        "currentPct": points[-1]["value"] if points else None,
+        "maxPct": min(values) if values else None,
+        "series": points,
+    }
+
+
 def _npv(rate: float, start_date: date, values: list[tuple[date, float]]) -> float:
     return sum(value / ((1.0 + rate) ** ((day - start_date).days / 365.0)) for day, value in values)
 
@@ -130,6 +157,7 @@ def _unavailable(reason: str, snapshots: list[dict[str, Any]], flows: list[CashF
         "cashflowCount": len(flows or []),
         "twr": {"available": False, "returnPct": None},
         "mwr": {"available": False, "returnPct": None},
+        "cashflowAdjustedDrawdown": {"available": False, "currentPct": None, "maxPct": None, "series": []},
         "reason": reason,
     }
 

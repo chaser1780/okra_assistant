@@ -28,6 +28,20 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertEqual("available", result["status"])
         self.assertAlmostEqual(12.0091, result["twr"]["returnPct"], places=4)
         self.assertTrue(result["mwr"]["available"])
+        self.assertTrue(result["cashflowAdjustedDrawdown"]["available"])
+
+    def test_cashflow_adjusted_drawdown_does_not_treat_deposit_as_return(self):
+        result = calculate_portfolio_performance([
+            {"date": "2026-01-01", "total_value": 1000},
+            {"date": "2026-01-02", "total_value": 990, "external_cashflow": 100, "external_cashflow_timing": "start"},
+            {"date": "2026-01-03", "total_value": 1100},
+        ])
+
+        adjusted = result["cashflowAdjustedDrawdown"]
+        self.assertTrue(adjusted["available"])
+        self.assertEqual(-10.0, adjusted["series"][1]["value"])
+        self.assertEqual(0.0, adjusted["currentPct"])
+        self.assertEqual(-10.0, adjusted["maxPct"])
 
     def test_requires_cashflow_timing(self):
         result = calculate_portfolio_performance([

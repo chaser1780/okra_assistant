@@ -216,6 +216,12 @@ export const portfolioSchema = z.object({
     cashflowCount: z.number(),
     twr: z.object({ available: z.boolean(), returnPct: financialNumberSchema }),
     mwr: z.object({ available: z.boolean(), returnPct: financialNumberSchema }),
+    cashflowAdjustedDrawdown: z.object({
+      available: z.boolean(),
+      currentPct: financialNumberSchema,
+      maxPct: financialNumberSchema,
+      series: z.array(chartPointSchema)
+    }).optional(),
     reason: z.string()
   }).passthrough().optional(),
   dataContext: dataContextSchema.optional(),

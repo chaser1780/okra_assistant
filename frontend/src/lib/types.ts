@@ -193,6 +193,7 @@ export type PortfolioPerformanceMetrics = {
   cashflowCount: number;
   twr: { available: boolean; returnPct: number | null };
   mwr: { available: boolean; returnPct: number | null };
+  cashflowAdjustedDrawdown?: { available: boolean; currentPct: number | null; maxPct: number | null; series: ChartPoint[] };
   reason: string;
 };
 
