@@ -196,6 +196,8 @@ function MemoryCard({
 }) {
   const evidence = record.evidence_refs ?? [];
   const canApprove = canApprovePermanent(record);
+  const metadata = record.metadata ?? {};
+  const strategyExperiment = metadata.sourceTrack === "strategy_simulation" || metadata.simulationSource === "strategy_simulation";
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4">
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
@@ -205,6 +207,7 @@ function MemoryCard({
             <Badge tone={statusTone(record.status)}>{statusLabel(record.status)}</Badge>
             <Badge tone="info">{domainLabel(record.domain)}</Badge>
             <Badge tone="neutral">{entityLabel(record.entity_key)}</Badge>
+            {strategyExperiment ? <Badge tone="warning">实验来源</Badge> : <Badge tone="success">用户轨道</Badge>}
           </div>
           <p className="mt-2 text-sm leading-6 text-slate-400">{memoryText(record.text)}</p>
           {!canApprove && record.domain === "fund" ? (
@@ -218,6 +221,7 @@ function MemoryCard({
           <div>
             支持 {record.support_count} / 反例 {record.contradiction_count}
           </div>
+          {strategyExperiment ? <div>仅用于策略验证</div> : null}
         </div>
       </div>
 

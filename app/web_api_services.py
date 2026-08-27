@@ -41,6 +41,7 @@ from workbench_history import (
     collect_estimate_history,
     collect_holding_history,
     collect_portfolio_history,
+    collect_portfolio_snapshots,
     collect_proxy_history,
     collect_quote_history,
     collect_trade_markers,
@@ -51,6 +52,7 @@ from workbench_history import (
     stage_return,
 )
 from workbench_state import WorkbenchStateService
+from performance_metrics import calculate_portfolio_performance
 
 
 def _coerce_task_date(value: Any) -> str:
@@ -452,6 +454,7 @@ class PageService:
         selected = str(state.get("selected_date", "") or today_str())
         news_payload = self.read_json_file(self.home / "raw" / "news" / f"{selected}.json")
         news_items = _with_news_ids(list(news_payload.get("items", []) or []))
+        events = list(news_payload.get("events", []) or [])
         source_health = state.get("source_health", {}) or {}
         source_health_items = list(source_health.get("items", []) or llm_context.get("source_health_summary", []) or news_payload.get("source_health", []) or [])
         news_digest = llm_context.get("news_digest", {}) or {}
@@ -502,6 +505,8 @@ class PageService:
             "related_news_by_fund": _related_news_by_fund(news_items, limit_per_fund=6),
             "source_breakdown": news_digest.get("source_breakdown") or _count_by(news_items, "provider"),
             "event_risks": event_risks,
+            "events": events,
+            "eventSummary": news_payload.get("event_summary", {}) or {},
             "evidenceRefs": normalize_evidence_refs(important_news + event_risks),
             "dataContext": self.data_context(state),
             "generated_at": news_payload.get("generated_at") or llm_context.get("generated_at") or "",
@@ -725,6 +730,7 @@ class PageService:
         drawdown_points = drawdown_series(total_points)
         style_history = allocation_history(self.home, "style_group", "成立以来", end_date=history_end_date)
         role_history = allocation_history(self.home, "role", "成立以来", end_date=history_end_date)
+        performance_metrics = calculate_portfolio_performance(collect_portfolio_snapshots(self.home, end_date=history_end_date))
         realtime = state.get("live_realtime", {}) or state.get("realtime", {}) or {}
         realtime_map = {str(item.get("fund_code") or ""): item for item in realtime.get("items", []) or []}
         risk_scatter = []
@@ -784,6 +790,7 @@ class PageService:
             },
             "riskScatter": risk_scatter,
             "benchmark": {"status": "not_configured", "normalized": [], "excessReturnPct": []},
+            "performanceMetrics": performance_metrics,
             "dataContext": data_context,
             "simulation": build_simulation_payload(self.home, portfolio=portfolio),
             "items": items,

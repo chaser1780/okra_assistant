@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 from common import dump_json, ensure_layout, load_llm_config, load_portfolio, load_settings, load_watchlist, news_path, news_query_plan_path, resolve_agent_home, resolve_date, timestamp_now
 from multiagent_utils import ProviderRequestError, call_json_agent, call_responses_text, parse_json_text
 from news_query_planner import build_news_query_plan, sentiment_queries_from_plan
+from news.event_cluster import cluster_news_items
 from news_evidence_guard import canonical_citation_url, extract_web_search_citation_urls, timestamp_not_after_cutoff
 from provider_adapters import build_provider_payload, build_provider_result, build_source_health_item, normalize_provider_item, resolve_provider_chain
 
@@ -908,6 +909,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
                 report_date=report_date,
             )
             result_items = {int(item.get("index", -1)): item for item in (response.get("response_json", {}) or {}).get("items", []) or []}
+            model_run_id = str((response.get("model_run") or {}).get("modelRunId") or "")
             llm_batches += 1
             for index, item in enumerate(batch):
                 parsed = result_items.get(index)
@@ -919,6 +921,7 @@ def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], 
                         "classifier": model_override or "llm",
                         "classifier_version": CLASSIFIER_VERSION,
                         "classification_status": "llm",
+                        "classifier_model_run_id": model_run_id,
                         "impact": impact_from_classification(str(parsed.get("sentiment_label", "neutral")), str(parsed.get("risk_level", "low"))),
                     }
                 item.update(parsed)
@@ -2678,6 +2681,7 @@ def main() -> None:
 
     items = filter_news_items_by_report_date(items, report_date, args.decision_cutoff)
     global_dedup_summary = news_dedup_summary(items, dedup_window_hours=dedup_window_hours)
+    items, events, event_summary = cluster_news_items(items)
     items.sort(key=lambda item: item.get("published_at", ""), reverse=True)
     payload = build_provider_payload(
         report_date,
@@ -2690,6 +2694,8 @@ def main() -> None:
         dedup_summary=dedup_stats,
         global_dedup_summary=global_dedup_summary,
         classification_summary=classification_summary,
+        events=events,
+        event_summary=event_summary,
     )
     freshness_status = "stale" if any(item.get("stale", False) for item in items) else "fresh"
     payload = build_provider_result(

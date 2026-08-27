@@ -628,6 +628,10 @@ def main() -> None:
                     "source": "replay_experiment",
                     "metadata": {
                         "experiment_id": summary.get("experiment_id", ""),
+                        "experimentId": summary.get("experiment_id", ""),
+                        "sourceTrack": "strategy_simulation",
+                        "simulationSource": "strategy_simulation",
+                        "formalInfluence": False,
                         "mode": summary.get("mode", ""),
                         "learning_trust_status": "trusted",
                         "fund_codes": impact.get("fund_codes", []),

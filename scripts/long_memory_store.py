@@ -159,8 +159,29 @@ def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
     item["evidence_refs"] = json.loads(item.pop("evidence_refs_json") or "[]")
+    item["metadata"] = normalize_memory_provenance(item, item["metadata"])
     item["can_promote_permanent"] = can_promote_to_permanent(item)
     return item
+
+
+def normalize_memory_provenance(record: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Keep user and strategy-experiment learning visibly separated."""
+    normalized = dict(metadata or {})
+    source = str(record.get("source", "") or "")
+    experiment_id = str(normalized.get("experimentId") or normalized.get("experiment_id") or "")
+    track = str(normalized.get("sourceTrack") or normalized.get("source_track") or normalized.get("simulationSource") or "")
+    if not track:
+        track = "strategy_simulation" if experiment_id or source in {"replay_experiment", "adaptive_policy", "strategy_skill"} else "user_simulation"
+    if track not in {"user_simulation", "strategy_simulation"}:
+        track = "user_simulation"
+    formal_influence = normalized.get("formalInfluence")
+    if formal_influence is None:
+        formal_influence = track == "user_simulation"
+    normalized["simulationSource"] = track
+    normalized["sourceTrack"] = track
+    normalized["experimentId"] = experiment_id
+    normalized["formalInfluence"] = bool(formal_influence) and track == "user_simulation"
+    return normalized
 
 
 def learning_lineage_is_trusted(record: dict[str, Any]) -> bool:
@@ -269,7 +290,7 @@ def upsert_memory_record(agent_home: Path, record: dict[str, Any]) -> dict[str, 
         "source_analysis_run_id": str(record.get("source_analysis_run_id", "") or ""),
         "source_analysis_quality": str(record.get("source_analysis_quality", "") or ""),
         "source_agent": str(record.get("source_agent", "") or ""),
-        "metadata": dict(record.get("metadata", {}) or {}),
+        "metadata": normalize_memory_provenance(record, dict(record.get("metadata", {}) or {})),
         "evidence_refs": list(record.get("evidence_refs", []) or []),
         "created_at": str(record.get("created_at", "") or now),
         "updated_at": now,

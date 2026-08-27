@@ -301,6 +301,42 @@ class WebApiLongMemoryTests(unittest.TestCase):
         result = api.long_memory_action({"memoryId": trusted_id, "action": "approve"})
         self.assertEqual("permanent", result["record"]["status"])
 
+    def test_strategy_experiment_memory_is_marked_as_non_formal(self):
+        record = upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "experiment_rule",
+                "title": "实验规则",
+                "text": "Only validated in a strategy experiment.",
+                "status": "candidate",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "exp-1"},
+            },
+        )
+        self.assertEqual("strategy_simulation", record["metadata"]["sourceTrack"])
+        self.assertEqual("exp-1", record["metadata"]["experimentId"])
+        self.assertFalse(record["metadata"]["formalInfluence"])
+
+    def test_strategy_experiment_memory_is_marked_as_non_formal(self):
+        record = upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "experiment_rule",
+                "title": "实验规则",
+                "text": "Only validated in a strategy experiment.",
+                "status": "candidate",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "exp-1"},
+            },
+        )
+        self.assertEqual("strategy_simulation", record["metadata"]["sourceTrack"])
+        self.assertEqual("exp-1", record["metadata"]["experimentId"])
+        self.assertFalse(record["metadata"]["formalInfluence"])
+
     def test_contract_handler_wraps_page_payload_in_envelope(self):
         payload = self._request_json("/api/today")
         self.assertTrue(payload["ok"])

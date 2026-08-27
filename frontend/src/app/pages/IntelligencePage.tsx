@@ -22,6 +22,7 @@ export function IntelligencePage({
   const regulatoryItems = entryArray(intelligence.regulatory_items);
   const szseItems = entryArray(intelligence.szse_items);
   const eventRisks = entryArray(intelligence.event_risks);
+  const events = entryArray(intelligence.events);
   const relatedByFund = intelligence.related_news_by_fund ?? {};
   const sentiment = (intelligence.sentiment_digest ?? {}) as Record<string, unknown>;
   const sourceHealth = ((intelligence.source_health ?? {}) as Record<string, unknown>) || {};
@@ -72,7 +73,7 @@ export function IntelligencePage({
         <MetricCard title="文本情绪" value={scoreText(metrics.text_sentiment_score)} body={`热度 ${scoreText(metrics.heat_score)} / 派生 ${scoreText(metrics.derived_sentiment_score)}`} tone={sentimentTone(metrics.text_sentiment_score)} />
         <MetricCard title="来源健康" value={text(metrics.source_count, String(healthItems.length))} body={`需关注 ${text(metrics.warning_source_count, String(warningItems.length))} 个来源`} tone={warningItems.length ? "warning" : "success"} />
       </div>
-      <IntelligenceTimeline importantNews={importantNews} eventRisks={eventRisks} sentiment={sentiment} />
+      <IntelligenceTimeline importantNews={events.length ? events : importantNews} eventRisks={eventRisks} sentiment={sentiment} />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <DigestPanel title="来源分布" icon={<Newspaper className="h-4 w-4" />} rows={breakdownRows(intelligence.source_breakdown)} empty="暂无来源统计" />
@@ -81,7 +82,7 @@ export function IntelligencePage({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <NewsList title="重要新闻" icon={<Flame className="h-4 w-4" />} items={importantNews} empty="暂无重要新闻，等待新闻抓取或上下文构建。" onOpenNews={openNews} />
+        <NewsList title="重点事件" icon={<Flame className="h-4 w-4" />} items={events.length ? events : importantNews} empty="暂无重点事件，等待新闻抓取或上下文构建。" onOpenNews={openNews} />
         <NewsList title="风险事件" icon={<AlertTriangle className="h-4 w-4" />} items={eventRisks} empty="暂无高优先级风险事件。" onOpenNews={openNews} />
       </div>
 
@@ -228,6 +229,8 @@ function NewsLine({ item, compact = false, onOpen }: { item: ResearchDigestEntry
       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
         <span>{text(item.published_at, "暂无时间")}</span>
         <span>{sourceLabel(providerName(item))}</span>
+        {Array.isArray(item.fund_codes) && item.fund_codes.length > 1 ? <span>关联 {item.fund_codes.length} 只基金</span> : null}
+        {item.source_count !== undefined ? <span>{text(item.source_count, "0")} 个来源</span> : null}
         {text(item.heat_score, "") ? <span>热度 {scoreText(item.heat_score)}</span> : null}
       </div>
     </button>

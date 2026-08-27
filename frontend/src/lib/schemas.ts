@@ -175,6 +175,16 @@ export const portfolioSchema = z.object({
     normalized: z.array(chartPointSchema),
     excessReturnPct: z.array(chartPointSchema)
   }).passthrough().optional(),
+  performanceMetrics: z.object({
+    status: z.string(),
+    methodology: z.string(),
+    periodStart: z.string(),
+    periodEnd: z.string(),
+    cashflowCount: z.number(),
+    twr: z.object({ available: z.boolean(), returnPct: financialNumberSchema }),
+    mwr: z.object({ available: z.boolean(), returnPct: financialNumberSchema }),
+    reason: z.string()
+  }).passthrough().optional(),
   dataContext: dataContextSchema.optional(),
   simulation: simulationPayloadSchema.optional(),
   items: z.array(portfolioItemSchema)
@@ -613,6 +623,8 @@ export const intelligenceSchema = z.object({
   related_news_by_fund: z.record(z.string(), z.array(unknownRecordSchema)).optional(),
   source_breakdown: z.union([unknownRecordSchema, z.array(unknownRecordSchema)]).optional(),
   event_risks: z.array(unknownRecordSchema).optional(),
+  events: z.array(unknownRecordSchema).optional(),
+  eventSummary: unknownRecordSchema.optional(),
   evidenceRefs: z.array(unknownRecordSchema).optional(),
   dataContext: dataContextSchema.optional()
 }).passthrough();

@@ -153,6 +153,17 @@ export type PortfolioBenchmark = {
   excessReturnPct: ChartPoint[];
 };
 
+export type PortfolioPerformanceMetrics = {
+  status: string;
+  methodology: string;
+  periodStart: string;
+  periodEnd: string;
+  cashflowCount: number;
+  twr: { available: boolean; returnPct: number | null };
+  mwr: { available: boolean; returnPct: number | null };
+  reason: string;
+};
+
 export type PortfolioPayload = {
   asOfDate: string;
   totalValue: number | null;
@@ -178,6 +189,7 @@ export type PortfolioPayload = {
   riskSnapshot?: PortfolioRiskSnapshot;
   riskScatter?: PortfolioRiskPoint[];
   benchmark?: PortfolioBenchmark;
+  performanceMetrics?: PortfolioPerformanceMetrics;
   dataContext?: DataContext;
   simulation?: SimulationPayload;
   items: PortfolioItem[];
@@ -349,6 +361,8 @@ export type ResearchPayload = {
   news_digest?: ResearchNewsDigest;
   sentiment_digest?: ResearchSentimentDigest;
   event_risks?: ResearchDigestEntry[];
+  events?: ResearchDigestEntry[];
+  eventSummary?: Record<string, unknown>;
 };
 
 export type NewsIntelligencePayload = Record<string, unknown> & {

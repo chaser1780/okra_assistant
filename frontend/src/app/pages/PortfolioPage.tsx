@@ -74,6 +74,14 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
         </div>
       </TerminalPanel>
 
+      <TerminalPanel title="收益口径 / PERFORMANCE" meta={portfolio.performanceMetrics?.status === "available" ? "CASHFLOW ADJUSTED" : "NEEDS CASHFLOW"} className="p-4">
+        {portfolio.performanceMetrics?.status === "available" ? (
+          <div className="grid gap-3 sm:grid-cols-3"><TerminalReadout label="TWR" value={`${portfolio.performanceMetrics.twr.returnPct?.toFixed(2) ?? "暂无"}%`} /><TerminalReadout label="MWR / XIRR" value={`${portfolio.performanceMetrics.mwr.returnPct?.toFixed(2) ?? "暂无"}%`} /><TerminalReadout label="外部现金流" value={`${portfolio.performanceMetrics.cashflowCount} 笔`} /></div>
+        ) : (
+          <p className="text-sm leading-6 text-slate-400">{portfolio.performanceMetrics?.reason ?? "缺少显式外部入金/出金数据，不把组合资产变化误作投资收益。"}</p>
+        )}
+      </TerminalPanel>
+
       <section className="grid grid-cols-12 gap-4">
         <ChartFrame title="组合净值 / NORMALIZED" meta="portfolio_state 历史快照" height="h-80" className="col-span-12 xl:col-span-8">
           <TrendChart data={portfolio.history.totalValueNormalized ?? portfolio.history.totalValue} benchmark={portfolio.benchmark?.normalized ?? []} yFormatter={(value) => value.toFixed(2)} />
