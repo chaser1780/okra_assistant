@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from common import is_trading_day, timestamp_now
+from data_contracts import build_data_context, normalize_evidence_refs
 from execution_sync import (
     apply_saved_reconciliation,
     build_execution_sync_payload,
@@ -23,6 +24,7 @@ from execution_sync import (
     update_pending_confirmations,
 )
 from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_records
+from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, simulation_fields
 from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
 from ui_tasks import build_portfolio_alignment_command, desktop_log_path, portfolio_alignment_target_date, should_align_portfolio_on_boot
@@ -317,10 +319,15 @@ class ExecutionController:
         self.home = home
 
     def execution_sync_payload(self) -> dict[str, Any]:
-        return _to_jsonable(build_execution_sync_payload(self.home))
+        payload = _to_jsonable(build_execution_sync_payload(self.home))
+        payload["simulation"] = build_simulation_payload(self.home)
+        return payload
 
     def execution_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution trade")
+        simulation = simulation_fields(payload)
+        if simulation["simulation_track"] != USER_SIMULATION_TRACK:
+            raise ValueError("The simulation execution endpoint only records the user_simulation track.")
         if not str(payload.get("fund_code", "") or "").strip():
             raise ValueError("fund_code is required")
         operation_type = str(payload.get("operation_type", "") or "").strip().lower()
@@ -328,10 +335,13 @@ class ExecutionController:
             raise ValueError("operation_type must be buy, sell, add, reduce, fee, dividend, or cancel")
         if operation_type in {"buy", "sell", "add", "reduce"} and not _positive_number(payload, "amount", "units"):
             raise ValueError("amount or units must be greater than 0")
-        return _to_jsonable(record_actual_trade(self.home, payload))
+        return _to_jsonable(record_actual_trade(self.home, {**payload, **simulation}))
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution conversion")
+        simulation = simulation_fields(payload)
+        if simulation["simulation_track"] != USER_SIMULATION_TRACK:
+            raise ValueError("The simulation execution endpoint only records the user_simulation track.")
         out_code = str(payload.get("out_fund_code", "") or "").strip()
         in_code = str(payload.get("in_fund_code", "") or "").strip()
         if not out_code or not in_code:
@@ -340,7 +350,7 @@ class ExecutionController:
             raise ValueError("conversion source and target funds must be different")
         if not _positive_number(payload, "out_amount", "out_units"):
             raise ValueError("out_amount or out_units must be greater than 0")
-        return _to_jsonable(record_conversion(self.home, payload))
+        return _to_jsonable(record_conversion(self.home, {**payload, **simulation}))
 
     def execution_screenshot_parse(self, payload: dict[str, Any]) -> dict[str, Any]:
         return _to_jsonable(parse_alipay_screenshot_upload(self.home, payload))
@@ -492,6 +502,8 @@ class PageService:
             "related_news_by_fund": _related_news_by_fund(news_items, limit_per_fund=6),
             "source_breakdown": news_digest.get("source_breakdown") or _count_by(news_items, "provider"),
             "event_risks": event_risks,
+            "evidenceRefs": normalize_evidence_refs(important_news + event_risks),
+            "dataContext": self.data_context(state),
             "generated_at": news_payload.get("generated_at") or llm_context.get("generated_at") or "",
         }
 
@@ -511,7 +523,7 @@ class PageService:
             "portfolio": self.portfolio_payload(state),
             "research": _to_jsonable(research),
             "intelligence": self.intelligence_payload(state),
-            "realtime": _to_jsonable(realtime),
+            "realtime": self.realtime_payload(state, realtime=_to_jsonable(realtime)),
             "review": _to_jsonable(review),
             "longMemory": self.long_memory_payload(),
             "executionSync": self.execution_controller.execution_sync_payload(),
@@ -608,6 +620,8 @@ class PageService:
             },
             "tradeMarkers": sorted(_markers(trade_markers) + planned_dca_markers, key=lambda item: item.get("date", "")),
             "longMemory": self.fund_long_memory_payload(fund_code),
+            "dataContext": self.data_context(state),
+            "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "system": system_payload(state),
         }
 
@@ -737,6 +751,7 @@ class PageService:
         current_drawdown = drawdown_points[-1].value if drawdown_points else None
         max_drawdown = min((point.value for point in drawdown_points), default=None)
         cash_weight = float(cash or 0) / float(total_value or 1) * 100.0 if total_value else None
+        data_context = self.data_context(state)
         return {
             "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             "totalValue": total_value,
@@ -769,8 +784,28 @@ class PageService:
             },
             "riskScatter": risk_scatter,
             "benchmark": {"status": "not_configured", "normalized": [], "excessReturnPct": []},
+            "dataContext": data_context,
+            "simulation": build_simulation_payload(self.home, portfolio=portfolio),
             "items": items,
         }
+
+    def data_context(self, state: dict[str, Any]) -> dict[str, Any]:
+        realtime = state.get("live_realtime", {}) or state.get("realtime", {}) or {}
+        realtime_date = str(state.get("live_realtime_date") or state.get("realtime_date") or "")
+        return build_data_context(
+            selected_date=str(state.get("selected_date") or today_str()),
+            portfolio=state.get("portfolio", {}) or {},
+            realtime=realtime,
+            portfolio_as_of_date=str(state.get("portfolio_date") or ""),
+            realtime_as_of_date=realtime_date,
+            decision=state.get("today_analysis_decision", {}) or state.get("validated", {}) or {},
+        )
+
+    def realtime_payload(self, state: dict[str, Any], *, realtime: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = dict(realtime or {})
+        payload["dataContext"] = self.data_context(state)
+        payload["observationOnly"] = True
+        return payload
 
     def read_json_file(self, path: Path) -> dict[str, Any]:
         if not path.exists():

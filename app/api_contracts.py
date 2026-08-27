@@ -41,6 +41,36 @@ class MetricDto(ContractModel):
     tone: str = "neutral"
 
 
+class DataContextDto(ContractModel):
+    snapshotId: str = ""
+    selectedDate: str = ""
+    portfolioAsOfDate: str = ""
+    realtimeAsOfDate: str = ""
+    latestRetrievedAt: str = ""
+    decisionCutoff: str = ""
+    sessionStatus: str = "unknown"
+    freshnessStatus: str = "unavailable"
+    freshnessReason: str = ""
+    sourceKey: str = ""
+    sourceAuthority: str = ""
+    sourceConfidence: float | None = None
+    payloadHash: str = ""
+
+
+class SimulationTrackDto(ContractModel):
+    trackId: Literal["user_simulation", "strategy_simulation"]
+    label: str = ""
+    formalTrack: bool = False
+    affectsFormalPortfolio: bool = False
+
+
+class SimulationPayloadDto(ContractModel):
+    activeTrack: Literal["user_simulation"] = "user_simulation"
+    formalTrack: Literal["user_simulation"] = "user_simulation"
+    simulationOnly: Literal[True] = True
+    tracks: list[SimulationTrackDto] = Field(default_factory=list)
+
+
 class ShellPageDto(ContractModel):
     dates: list[str] = Field(default_factory=list)
     selectedDate: str = ""
@@ -173,6 +203,8 @@ class FundDetailDto(ContractModel):
     performance: dict[str, Any] = Field(default_factory=dict)
     tradeMarkers: list[dict[str, Any]] = Field(default_factory=list)
     longMemory: dict[str, Any] = Field(default_factory=dict)
+    dataContext: DataContextDto = Field(default_factory=DataContextDto)
+    simulation: SimulationPayloadDto = Field(default_factory=SimulationPayloadDto)
     system: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -195,6 +227,8 @@ class ExecutionTradeRequestDto(MutationRequestModel):
     source: str | None = None
     platform: str | None = None
     user_note: str | None = None
+    simulation_track: Literal["user_simulation"] | None = None
+    simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
 
 
 class ExecutionConversionRequestDto(MutationRequestModel):
@@ -218,6 +252,8 @@ class ExecutionConversionRequestDto(MutationRequestModel):
     source: str | None = None
     platform: str | None = None
     user_note: str | None = None
+    simulation_track: Literal["user_simulation"] | None = None
+    simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
 
 
 class ScreenshotFileDto(MutationRequestModel):

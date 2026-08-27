@@ -27,6 +27,7 @@ from common import (
 )
 from portfolio_state import _save_portfolio_state_unlocked, ensure_portfolio_definition, portfolio_state_event_path, portfolio_state_hash, upsert_execution_status
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
+from simulation_tracks import simulation_fields
 from update_portfolio_from_trade import apply_trade
 
 
@@ -423,6 +424,7 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "created_at": timestamp_now(),
         "updated_at": timestamp_now(),
         "lifecycle": lifecycle,
+        **simulation_fields(payload),
     }
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
     existing = _existing_record_result(agent_home, item, result_key="trade")
@@ -509,6 +511,7 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "updated_at": timestamp_now(),
         "lifecycle": {"out": out_lifecycle, "in": in_lifecycle},
         "execution_deviation": {"type": "conversion_substitute", "label": "转换替代执行", "affects_advice_accuracy": False},
+        **simulation_fields(payload),
     }
     existing = _existing_record_result(agent_home, item, result_key="conversion")
     if existing is not None:
@@ -1053,7 +1056,7 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
 
 def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     pending = load_pending_confirmations(agent_home)
-    trades = load_actual_trades(agent_home, limit=120)
+    trades = [{**item, **simulation_fields(item)} for item in load_actual_trades(agent_home, limit=120)]
     reports = []
     report_dir = execution_sync_dir(agent_home) / "reconciliation_reports"
     if report_dir.exists():

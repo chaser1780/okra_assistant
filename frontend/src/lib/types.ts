@@ -55,6 +55,51 @@ export type ChartPoint = {
   value: number | null;
 };
 
+export type DataContext = {
+  snapshotId: string;
+  selectedDate: string;
+  portfolioAsOfDate: string;
+  realtimeAsOfDate: string;
+  latestRetrievedAt: string;
+  decisionCutoff: string;
+  sessionStatus: string;
+  freshnessStatus: "latest" | "market_closed" | "official_nav_pending" | "proxy_observation" | "delayed_1d" | "delayed_multi_day" | "unavailable" | "conflict" | string;
+  freshnessReason: string;
+  sourceKey: string;
+  sourceAuthority: string;
+  sourceConfidence: number | null;
+  payloadHash: string;
+  itemCount?: number;
+  staleItemCount?: number;
+  conflictItemCount?: number;
+  modeCounts?: Record<string, number>;
+};
+
+export type SimulationTrack = {
+  trackId: "user_simulation" | "strategy_simulation";
+  label: string;
+  description?: string;
+  formalTrack: boolean;
+  affectsFormalPortfolio: boolean;
+  executionMode?: string;
+  asOfDate?: string;
+  positionCount?: number;
+  operationCounts?: Record<string, number>;
+  experimentCount?: number;
+  activeExperimentCount?: number;
+  experiments?: Array<Record<string, unknown>>;
+};
+
+export type SimulationPayload = {
+  activeTrack: "user_simulation";
+  formalTrack: "user_simulation";
+  simulationOnly: true;
+  updatedAt: string;
+  tracks: SimulationTrack[];
+  userSimulation: SimulationTrack;
+  strategySimulation: SimulationTrack;
+};
+
 export type AllocationRow = {
   name: string;
   value: number | null;
@@ -119,6 +164,8 @@ export type PortfolioPayload = {
   riskSnapshot?: PortfolioRiskSnapshot;
   riskScatter?: PortfolioRiskPoint[];
   benchmark?: PortfolioBenchmark;
+  dataContext?: DataContext;
+  simulation?: SimulationPayload;
   items: PortfolioItem[];
 };
 
@@ -331,6 +378,8 @@ export type RealtimePayload = {
   metrics: Metric[];
   items: Record<string, unknown>[];
   summary_text: string;
+  dataContext?: DataContext;
+  observationOnly?: boolean;
 };
 
 export type ReviewPayload = {
@@ -584,6 +633,7 @@ export type ExecutionSyncPayload = {
     deviations?: number;
     reports?: number;
   };
+  simulation?: SimulationPayload;
 };
 
 export type ScreenshotPreviewRow = Record<string, unknown> & {
@@ -824,4 +874,6 @@ export type FundDetailPayload = {
   };
   tradeMarkers: TradeMarker[];
   longMemory: FundLongMemoryPayload;
+  dataContext?: DataContext;
+  simulation?: SimulationPayload;
 };

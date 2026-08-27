@@ -362,7 +362,10 @@ class OkraWebApi:
         snapshot = self.state_service.load_snapshot(selected)
         return self.state_service.build_realtime_page_dto(
             snapshot,
-            realtime=_to_jsonable(self.state_service.build_realtime_view_model(snapshot)),
+            realtime=self.page_service.realtime_payload(
+                snapshot.state,
+                realtime=_to_jsonable(self.state_service.build_realtime_view_model(snapshot)),
+            ),
         )
 
     def review_page(self, selected: str | None = None) -> dict:

@@ -96,6 +96,38 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertTrue(snapshot["system"]["todayAnalysis"]["memory_eligible"])
         self.assertEqual(snapshot["system"]["todayAnalysis"]["task"], "today_analysis")
 
+    def test_page_payloads_expose_simulation_and_data_context(self):
+        report_date = "2026-05-06"
+        self.agent.write_json(
+            f"db/realtime_monitor/{report_date}.json",
+            {
+                "report_date": report_date,
+                "generated_at": "2026-05-06T21:00:00+08:00",
+                "realtime_policy": {"provider": "fund_estimate_proxy"},
+                "items": [
+                    {
+                        "fund_code": "F1",
+                        "mode": "proxy_fallback",
+                        "effective_change_pct": 1.2,
+                        "estimate_change_pct": 1.0,
+                        "proxy_change_pct": 1.2,
+                        "stale": True,
+                        "freshness_age_business_days": 0,
+                    }
+                ],
+            },
+        )
+        api = OkraWebApi(self.agent.root)
+        portfolio = api.portfolio_page(report_date)["portfolio"]
+        realtime = api.realtime_page(report_date)["realtime"]
+        execution = api.execution_page(report_date)["executionSync"]
+
+        self.assertEqual(report_date, portfolio["dataContext"]["selectedDate"])
+        self.assertTrue(portfolio["simulation"]["simulationOnly"])
+        self.assertEqual("user_simulation", execution["simulation"]["formalTrack"])
+        self.assertTrue(realtime["observationOnly"])
+        self.assertIn(realtime["dataContext"]["freshnessStatus"], {"official_nav_pending", "delayed_1d", "proxy_observation"})
+
     def test_snapshot_exposes_today_analysis_runtime_fields(self):
         report_date = "2026-05-06"
         self.agent.write_json(

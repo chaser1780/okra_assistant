@@ -23,6 +23,48 @@ const apiMetaSchema = z.object({
   version: z.string().optional()
 }).passthrough();
 const chartPointSchema = z.object({ date: z.string(), value: financialNumberSchema }).passthrough();
+const dataContextSchema = z.object({
+  snapshotId: z.string().catch(""),
+  selectedDate: z.string().catch(""),
+  portfolioAsOfDate: z.string().catch(""),
+  realtimeAsOfDate: z.string().catch(""),
+  latestRetrievedAt: z.string().catch(""),
+  decisionCutoff: z.string().catch(""),
+  sessionStatus: z.string().catch("unknown"),
+  freshnessStatus: z.string().catch("unavailable"),
+  freshnessReason: z.string().catch(""),
+  sourceKey: z.string().catch(""),
+  sourceAuthority: z.string().catch(""),
+  sourceConfidence: financialNumberSchema,
+  payloadHash: z.string().catch(""),
+  itemCount: z.number().optional(),
+  staleItemCount: z.number().optional(),
+  conflictItemCount: z.number().optional(),
+  modeCounts: numberRecordSchema.optional()
+}).passthrough();
+const simulationTrackSchema = z.object({
+  trackId: z.enum(["user_simulation", "strategy_simulation"]),
+  label: z.string().catch(""),
+  description: z.string().optional(),
+  formalTrack: z.boolean().catch(false),
+  affectsFormalPortfolio: z.boolean().catch(false),
+  executionMode: z.string().optional(),
+  asOfDate: z.string().optional(),
+  positionCount: z.number().optional(),
+  operationCounts: numberRecordSchema.optional(),
+  experimentCount: z.number().optional(),
+  activeExperimentCount: z.number().optional(),
+  experiments: z.array(unknownRecordSchema).optional()
+}).passthrough();
+const simulationPayloadSchema = z.object({
+  activeTrack: z.literal("user_simulation"),
+  formalTrack: z.literal("user_simulation"),
+  simulationOnly: z.literal(true),
+  updatedAt: z.string().catch(""),
+  tracks: z.array(simulationTrackSchema).catch([]),
+  userSimulation: simulationTrackSchema,
+  strategySimulation: simulationTrackSchema
+}).passthrough();
 const metricSchema = z.object({
   title: z.string(),
   value: z.string(),
@@ -133,6 +175,8 @@ export const portfolioSchema = z.object({
     normalized: z.array(chartPointSchema),
     excessReturnPct: z.array(chartPointSchema)
   }).passthrough().optional(),
+  dataContext: dataContextSchema.optional(),
+  simulation: simulationPayloadSchema.optional(),
   items: z.array(portfolioItemSchema)
 }).passthrough();
 
@@ -179,7 +223,9 @@ export const realtimeSchema = z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
   items: z.array(unknownRecordSchema),
-  summary_text: z.string()
+  summary_text: z.string(),
+  dataContext: dataContextSchema.optional(),
+  observationOnly: z.boolean().optional()
 }).passthrough();
 
 export const reviewSchema = z.object({
@@ -336,7 +382,9 @@ export const fundDetailSchema = z.object({
     benchmarkStatus: z.string().optional()
   }).passthrough(),
   tradeMarkers: z.array(tradeMarkerSchema).catch([]),
-  longMemory: fundLongMemorySchema
+  longMemory: fundLongMemorySchema,
+  dataContext: dataContextSchema.optional(),
+  simulation: simulationPayloadSchema.optional()
 }).passthrough();
 
 export const dailyFirstOpenSchema = z.object({
@@ -400,7 +448,8 @@ export const executionSyncSchema = z.object({
     trades: z.number().optional(),
     deviations: z.number().optional(),
     reports: z.number().optional()
-  }).passthrough()
+  }).passthrough(),
+  simulation: simulationPayloadSchema.optional()
 }).passthrough();
 
 const screenshotPreviewRowSchema = z.object({
@@ -563,7 +612,9 @@ export const intelligenceSchema = z.object({
   szse_items: z.array(unknownRecordSchema).optional(),
   related_news_by_fund: z.record(z.string(), z.array(unknownRecordSchema)).optional(),
   source_breakdown: z.union([unknownRecordSchema, z.array(unknownRecordSchema)]).optional(),
-  event_risks: z.array(unknownRecordSchema).optional()
+  event_risks: z.array(unknownRecordSchema).optional(),
+  evidenceRefs: z.array(unknownRecordSchema).optional(),
+  dataContext: dataContextSchema.optional()
 }).passthrough();
 
 export const intelligencePageSchema = z.object({
