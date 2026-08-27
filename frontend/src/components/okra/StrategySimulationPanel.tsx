@@ -3,6 +3,7 @@ import { FlaskConical, Plus, Play } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createStrategyExperiment, getStrategySimulation, recordStrategySimulationAction } from "../../lib/api";
 import { compactMoney } from "../../lib/format";
+import { valueLabel } from "../../lib/display";
 import { Badge, Button, EmptyState } from "../ui";
 import { TerminalPanel } from "./TerminalChrome";
 
@@ -61,7 +62,7 @@ export function StrategySimulationPanel({ selectedDate }: { selectedDate: string
             <input value={label} onChange={(event) => setLabel(event.target.value)} className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm text-slate-100 outline-none focus:border-cyan-600" aria-label="策略实验名称" />
             <Button variant="secondary" className="gap-2" disabled={create.isPending} onClick={() => create.mutate()}><Plus className="h-4 w-4" />创建</Button>
           </div>
-          {experiments.length ? <div className="space-y-2">{experiments.slice(0, 5).map((item) => <button key={item.experimentId} type="button" onClick={() => setExperimentId(item.experimentId)} className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left ${item.experimentId === selectedId ? "border-amber-400/50 bg-amber-950/20" : "border-slate-800 bg-slate-950/50 hover:border-slate-700"}`}><span className="min-w-0 truncate text-sm font-semibold text-slate-200">{item.label}</span><span className="flex shrink-0 items-center gap-2"><Badge tone="warning">{item.actionCount} 笔</Badge><span className="text-xs text-slate-500">{item.status}</span></span></button>)}</div> : <EmptyState title="暂无策略实验" body="创建一个实验后，可在隔离组合中执行假设买卖并观察策略路径。" />}
+          {experiments.length ? <div className="space-y-2">{experiments.slice(0, 5).map((item) => <button key={item.experimentId} type="button" onClick={() => setExperimentId(item.experimentId)} className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left ${item.experimentId === selectedId ? "border-amber-400/50 bg-amber-950/20" : "border-slate-800 bg-slate-950/50 hover:border-slate-700"}`}><span className="min-w-0 truncate text-sm font-semibold text-slate-200">{item.label}</span><span className="flex shrink-0 items-center gap-2"><Badge tone="warning">{item.actionCount} 笔</Badge><span className="text-xs text-slate-500">{valueLabel(item.status)}</span></span></button>)}</div> : <EmptyState title="暂无策略实验" body="创建一个实验后，可在隔离组合中执行假设买卖并观察策略路径。" />}
         </section>
         <section className="space-y-3 border-t border-slate-800 pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
           <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-100">假设交易</div><div className="mt-1 text-xs text-slate-500">{active ? `${active.label} · 当前市值 ${compactMoney(active.totalValue)}` : "先选择或创建策略实验"}</div></div><Badge tone="info">实验轨道</Badge></div>

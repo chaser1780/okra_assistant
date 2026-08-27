@@ -292,6 +292,14 @@ export function fieldLabel(value: unknown) {
     status_mode: "状态模式",
     auto_run_needed: "需要自动运行",
     today_analysis: "今日分析",
+    legacy_advice: "官方建议",
+    action_tickets: "影子建议卡",
+    retrieval_packs: "检索追溯包",
+    action_debates: "影子辩论",
+    adaptive_policies: "策略记忆调整",
+    strategy_skills: "策略技能",
+    outcome_events: "复盘结果",
+    eval_report: "审查报告",
     memory_cycle: "记忆周期",
     provider: "数据提供方",
     run_date: "运行日期",
@@ -324,6 +332,7 @@ export function valueLabel(value: unknown): string {
   if (value === false) return "否";
   if (value === null || value === undefined || value === "") return "暂无";
   if (typeof value === "number") return String(value);
+  if (typeof value === "object") return textValue(value, "暂无");
   const raw = String(value);
   const map: Record<string, string> = {
     unknown: "未知",
@@ -355,11 +364,28 @@ export function valueLabel(value: unknown): string {
     degraded: "降级运行",
     blocked: "已阻断",
     ready: "就绪",
+    active: "生效",
     not_run: "未运行",
     display_only: "仅供审查",
     non_executable: "不可执行",
     experimental_active: "实验中",
-    validated_strategy: "验证策略"
+    validated_strategy: "验证策略",
+    same: "一致",
+    changed: "存在变化",
+    new_shadow_only: "仅实验侧",
+    legacy_only: "仅正式侧",
+    missing_source: "缺少来源",
+    not_generated: "尚未生成",
+    invalid_json: "产物格式无效",
+    regulatory_news: "监管资讯",
+    fund_news: "基金资讯",
+    theme_news: "主题资讯",
+    market_news: "市场资讯",
+    official_notice: "官方公告",
+    regulatory_notice: "监管公告",
+    scored: "已评估",
+    pending: "待评估",
+    none: "无"
   };
   return (
     map[raw] ||
