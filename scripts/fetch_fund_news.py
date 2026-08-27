@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
-import hashlib
 import json
 import math
 import os
@@ -15,7 +14,6 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,59 +59,56 @@ DOUYIN_HEADERS = {
 }
 _SESSION_LOCAL = local()
 NOTICE_CATEGORY_MAP = {"1": "发行运作", "2": "分红送配", "3": "定期报告", "4": "人事调整", "5": "基金销售", "6": "其他公告"}
-NEGATIVE_KEYWORDS = ("风险", "下调", "离任", "清盘", "终止", "停牌", "处罚", "违约", "预警", "大幅回撤", "限制")
-POSITIVE_KEYWORDS = ("分红", "增持", "上调", "获批", "成立", "开放", "扩募", "利好")
-def infer_impact(title: str) -> str:
-    if any(keyword in title for keyword in NEGATIVE_KEYWORDS):
-        return "negative"
-    if any(keyword in title for keyword in POSITIVE_KEYWORDS):
-        return "positive"
-    return "neutral"
+CLASSIFIER_VERSION = news_normalizer.DEFAULT_CLASSIFIER_VERSION
+HIGH_RISK_KEYWORDS = news_classifier.HIGH_RISK_KEYWORDS
+canonicalize_url = news_normalizer.canonicalize_url
+extract_plain_text = news_normalizer.extract_plain_text
+normalize_title_text = news_normalizer.normalize_title_text
+news_content_hash = news_normalizer.news_content_hash
+impact_from_classification = news_normalizer.impact_from_classification
+enrich_news_item = lambda item, *, query_type="", matched_keywords=None: news_normalizer.enrich_news_item(
+    item,
+    query_type=query_type,
+    matched_keywords=matched_keywords,
+    classifier_version=CLASSIFIER_VERSION,
+)
+rule_classify_news_item = lambda item: news_classifier.rule_classify_news_item(item, classifier_version=CLASSIFIER_VERSION)
+build_news_classification_prompts = news_classifier.build_classification_prompts
+NEWS_CLASSIFICATION_SCHEMA = news_classifier.NEWS_CLASSIFICATION_SCHEMA
 
 
-HIGH_RISK_KEYWORDS = ("风险", "清盘", "停牌", "处罚", "违约", "预警", "暂停", "排查", "调查", "减持", "离任")
-POLICY_KEYWORDS = ("证监会", "发改委", "工信部", "财政部", "政策", "监管", "制度", "指引", "改革")
-HYPE_KEYWORDS = ("热议", "热度", "爆了", "揭秘", "直播", "视频", "#", "短视频", "新声计划", "创作浪潮")
-CLASSIFIER_VERSION = "news_v1"
+def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], *, report_date: str = "") -> tuple[list[dict], dict]:
+    return news_classifier.classify_news_with_llm(
+        agent_home,
+        settings,
+        items,
+        report_date=report_date,
+        call_json_agent=call_json_agent,
+        provider_error_type=ProviderRequestError,
+        classifier_version=CLASSIFIER_VERSION,
+    )
 
-NEWS_CLASSIFICATION_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "index": {"type": "integer"},
-                    "sentiment_label": {"type": "string", "enum": ["positive", "neutral", "negative", "mixed"]},
-                    "sentiment_score": {"type": "number"},
-                    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "risk_tags": {"type": "array", "items": {"type": "string"}},
-                    "topic_tags": {"type": "array", "items": {"type": "string"}},
-                    "is_policy_signal": {"type": "boolean"},
-                    "is_hype_signal": {"type": "boolean"},
-                    "reason_short": {"type": "string"},
-                    "classification_confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                },
-                "required": [
-                    "index",
-                    "sentiment_label",
-                    "sentiment_score",
-                    "risk_level",
-                    "risk_tags",
-                    "topic_tags",
-                    "is_policy_signal",
-                    "is_hype_signal",
-                    "reason_short",
-                ],
-            },
-        }
-    },
-    "required": ["items"],
-}
 
+def compute_heat_metrics(items: list[dict]) -> None:
+    news_quality.compute_heat_metrics(items, parse_datetime=parse_iso_datetime)
+
+
+def dedupe_news_items(items: list[dict], *, dedup_window_hours: int) -> tuple[list[dict], dict]:
+    return news_quality.dedupe_news_items(
+        items,
+        dedup_window_hours=dedup_window_hours,
+        enrich_item=enrich_news_item,
+        content_hash=news_content_hash,
+    )
+
+
+def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
+    return news_quality.news_dedup_summary(
+        items,
+        dedup_window_hours=dedup_window_hours,
+        enrich_item=enrich_news_item,
+        content_hash=news_content_hash,
+    )
 OPENAI_WEB_SEARCH_NEWS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -169,46 +164,6 @@ OPENAI_WEB_SEARCH_NEWS_SCHEMA = {
     "required": ["items"],
 }
 
-
-def canonicalize_url(url: str) -> str:
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-    parsed = urllib.parse.urlparse(raw)
-    query_pairs = []
-    for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
-        lowered = key.lower()
-        if lowered.startswith("spm") or lowered in {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "from"}:
-            continue
-        query_pairs.append((key, value))
-    clean_query = urllib.parse.urlencode(sorted(query_pairs))
-    clean_path = re.sub(r"/+$", "", parsed.path or "")
-    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), clean_path, "", clean_query, ""))
-
-
-def normalize_title_text(title: str) -> str:
-    return re.sub(r"\s+", "", extract_plain_text(title or "").lower())
-
-
-def publish_time_bucket(published_at: str, bucket_hours: int = 6) -> str:
-    published_dt = parse_iso_datetime(published_at)
-    if published_dt is None:
-        return ""
-    hour = (published_dt.hour // max(1, bucket_hours)) * max(1, bucket_hours)
-    return published_dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
-
-
-def news_content_hash(title: str, summary: str, canonical_url: str) -> str:
-    digest = hashlib.sha1(f"{normalize_title_text(title)}|{extract_plain_text(summary)}|{canonical_url}".encode("utf-8")).hexdigest()
-    return digest[:16]
-
-
-def impact_from_classification(sentiment_label: str, risk_level: str) -> str:
-    if sentiment_label == "negative" or risk_level == "high":
-        return "negative"
-    if sentiment_label == "positive":
-        return "positive"
-    return "neutral"
 
 
 def parse_article_timestamp(article_url: str) -> str | None:
@@ -759,19 +714,6 @@ def parse_xueqiu_time(value) -> str | None:
     return datetime.fromtimestamp(numeric, tz=CN_TZ).isoformat(timespec="seconds")
 
 
-def extract_plain_text(value: str) -> str:
-    if not value:
-        return ""
-    raw = str(value)
-    if "<" not in raw and "&" not in raw:
-        return " ".join(raw.split())
-    soup = BeautifulSoup(raw, "html.parser")
-    text = " ".join(soup.get_text(" ", strip=True).split())
-    text = re.sub(r"\s+([，。、；：！？])", r"\1", text)
-    text = re.sub(r"([（【])\s+", r"\1", text)
-    text = re.sub(r"\s+([）】])", r"\1", text)
-    return text
-
 
 def parse_jsonp_payload(text: str) -> dict:
     match = re.search(r"^[^(]*\((.*)\)\s*;?\s*$", text.strip(), flags=re.S)
@@ -779,299 +721,6 @@ def parse_jsonp_payload(text: str) -> dict:
         return json.loads(text)
     return json.loads(match.group(1))
 
-
-def enrich_news_item(item: dict, *, query_type: str = "", matched_keywords: list[str] | None = None) -> dict:
-    canonical_url = canonicalize_url(str(item.get("canonical_url", "") or item.get("source_url", "") or item.get("url", "")))
-    title = str(item.get("title", "") or "")
-    summary = str(item.get("summary", "") or title)
-    sentiment_label = str(item.get("sentiment_label", "") or "neutral")
-    risk_level = str(item.get("risk_level", "") or "low")
-    enriched = dict(item)
-    enriched["canonical_url"] = canonical_url
-    enriched["content_hash"] = str(item.get("content_hash", "") or news_content_hash(title, summary, canonical_url))
-    enriched["query_type"] = str(query_type or item.get("query_type", "") or "")
-    enriched["matched_keywords"] = list(matched_keywords or item.get("matched_keywords", []) or [])
-    enriched["topic_tags"] = list(item.get("topic_tags", []) or [])
-    enriched["risk_tags"] = list(item.get("risk_tags", []) or [])
-    enriched["sentiment_label"] = sentiment_label
-    enriched["risk_level"] = risk_level
-    enriched["classifier"] = str(item.get("classifier", "") or "rule")
-    enriched["classifier_version"] = str(item.get("classifier_version", "") or CLASSIFIER_VERSION)
-    enriched["classification_status"] = str(item.get("classification_status", "") or "unclassified")
-    confidence = item.get("classification_confidence")
-    try:
-        enriched["classification_confidence"] = max(0.0, min(1.0, float(confidence))) if confidence not in (None, "") else None
-    except (TypeError, ValueError):
-        enriched["classification_confidence"] = None
-    enriched["classifier_model_run_id"] = str(item.get("classifier_model_run_id", "") or "")
-    enriched["classifier_prompt_version"] = str(item.get("classifier_prompt_version", "") or "")
-    enriched["impact"] = str(item.get("impact", "") or impact_from_classification(sentiment_label, risk_level))
-    enriched["heat_score"] = float(item.get("heat_score", 0.0) or 0.0)
-    enriched["heat_rank"] = int(item.get("heat_rank", 0) or 0)
-    enriched["is_policy_signal"] = bool(item.get("is_policy_signal", False))
-    enriched["is_hype_signal"] = bool(item.get("is_hype_signal", False))
-    enriched["reason_short"] = str(item.get("reason_short", "") or "")
-    return enriched
-
-
-def rule_classify_news_item(item: dict) -> dict:
-    title = str(item.get("title", "") or "")
-    summary = str(item.get("summary", "") or "")
-    source_name = str(item.get("source_name", "") or "")
-    evidence_type = str(item.get("evidence_type", "") or "")
-    joined = f"{title} {summary}"
-    sentiment_label = "neutral"
-    sentiment_score = float(item.get("sentiment_score", 0.0) or 0.0)
-    if any(keyword in joined for keyword in NEGATIVE_KEYWORDS):
-        sentiment_label = "negative"
-        sentiment_score = min(sentiment_score, -0.45) if sentiment_score else -0.45
-    elif any(keyword in joined for keyword in POSITIVE_KEYWORDS):
-        sentiment_label = "positive"
-        sentiment_score = max(sentiment_score, 0.45) if sentiment_score else 0.45
-    risk_level = "high" if any(keyword in joined for keyword in HIGH_RISK_KEYWORDS) or evidence_type == "official_notice" else "low"
-    if risk_level != "high" and any(keyword in joined for keyword in POLICY_KEYWORDS):
-        risk_level = "medium"
-    risk_tags = []
-    if risk_level == "high":
-        risk_tags.append("event_risk")
-    if any(keyword in joined for keyword in POLICY_KEYWORDS):
-        risk_tags.append("policy")
-    topic_tags = list({keyword for keyword in (item.get("matched_keywords", []) or []) if keyword})
-    is_policy_signal = any(keyword in joined for keyword in POLICY_KEYWORDS)
-    is_hype_signal = any(keyword in joined for keyword in HYPE_KEYWORDS)
-    if is_hype_signal and risk_level == "low":
-        risk_level = "medium"
-    if source_name == "eastmoney_notice" and risk_level == "low":
-        risk_level = "medium"
-    return {
-        "sentiment_label": sentiment_label,
-        "sentiment_score": round(max(-1.0, min(1.0, sentiment_score)), 4),
-        "risk_level": risk_level,
-        "risk_tags": risk_tags,
-        "topic_tags": topic_tags,
-        "is_policy_signal": is_policy_signal,
-        "is_hype_signal": is_hype_signal,
-        "reason_short": "rule fallback",
-        "classification_confidence": None,
-        "classifier": "rule",
-        "classifier_version": CLASSIFIER_VERSION,
-        "classification_status": "rule_fallback",
-        "impact": impact_from_classification(sentiment_label, risk_level),
-    }
-
-
-def build_news_classification_prompts(batch: list[dict]) -> tuple[str, str]:
-    system_prompt = (
-        "You classify Chinese finance news into structured portfolio-research signals. "
-        "Return strict JSON only. Use title and summary only. Be conservative on positive sentiment. "
-        "High risk is for enforcement, liquidation, suspension, termination, manager departure, major policy shock, or severe warning."
-    )
-    lines = []
-    for index, item in enumerate(batch):
-        lines.append(
-            json.dumps(
-                {
-                    "index": index,
-                    "title": item.get("title", ""),
-                    "summary": item.get("summary", ""),
-                    "source_name": item.get("source_name", ""),
-                    "source_role": item.get("source_role", ""),
-                    "published_at": item.get("published_at", ""),
-                    "matched_keywords": item.get("matched_keywords", []),
-                },
-                ensure_ascii=False,
-            )
-        )
-    user_prompt = (
-        "Classify each item. topic_tags and risk_tags should be short identifiers. "
-        "Return one result per input index.\n" + "\n".join(lines)
-    )
-    return system_prompt, user_prompt
-
-
-def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], *, report_date: str = "") -> tuple[list[dict], dict]:
-    cfg = settings.get("providers", {}).get("news_classification", {}) or {}
-    if not bool(cfg.get("enabled", True)) or not items:
-        return items, {"enabled": bool(cfg.get("enabled", True)), "mode": "disabled", "status": "disabled", "llm_batches": 0, "fallback_batches": 0}
-    batch_size = int(cfg.get("batch_size", 20) or 20)
-    timeout_seconds = int(cfg.get("timeout_seconds", 45) or 45)
-    model_override = str(cfg.get("model", "") or "").strip()
-    llm_batches = 0
-    fallback_batches = 0
-    circuit_error = ""
-    classified = [dict(item) for item in items]
-    for start in range(0, len(classified), batch_size):
-        batch = classified[start : start + batch_size]
-        if circuit_error:
-            fallback_batches += 1
-            for item in batch:
-                item.update(rule_classify_news_item(item))
-            continue
-        system_prompt, user_prompt = build_news_classification_prompts(batch)
-        try:
-            response = call_json_agent(
-                agent_home,
-                system_prompt,
-                user_prompt,
-                schema=NEWS_CLASSIFICATION_SCHEMA,
-                max_attempts=1,
-                reasoning_effort="medium",
-                request_name="news_batch_classifier",
-                text_verbosity="low",
-                temperature=0.1,
-                timeout=(10, timeout_seconds),
-                model=model_override or None,
-                report_date=report_date,
-            )
-            result_items = {int(item.get("index", -1)): item for item in (response.get("response_json", {}) or {}).get("items", []) or []}
-            model_run_id = str((response.get("model_run") or {}).get("modelRunId") or "")
-            prompt_version = str((response.get("model_run") or {}).get("promptVersion") or "")
-            llm_batches += 1
-            for index, item in enumerate(batch):
-                parsed = result_items.get(index)
-                if not parsed:
-                    parsed = rule_classify_news_item(item)
-                else:
-                    parsed = {
-                        **parsed,
-                        "classifier": model_override or "llm",
-                        "classifier_version": CLASSIFIER_VERSION,
-                        "classification_status": "llm",
-                        "classifier_model_run_id": model_run_id,
-                        "classifier_prompt_version": prompt_version,
-                        "impact": impact_from_classification(str(parsed.get("sentiment_label", "neutral")), str(parsed.get("risk_level", "low"))),
-                    }
-                item.update(parsed)
-        except Exception as exc:
-            if isinstance(exc, ProviderRequestError) and not exc.retryable:
-                circuit_error = str(exc)
-            fallback_batches += 1
-            for item in batch:
-                item.update(rule_classify_news_item(item))
-    status = "ok" if llm_batches and fallback_batches == 0 else ("mixed" if llm_batches else "fallback_only")
-    reported_confidences = [
-        float(item["classification_confidence"])
-        for item in classified
-        if item.get("classification_confidence") not in (None, "")
-    ]
-    model_run_ids = sorted({str(item.get("classifier_model_run_id") or "") for item in classified if str(item.get("classifier_model_run_id") or "")})
-    return classified, {
-        "enabled": True,
-        "mode": str(cfg.get("mode", "llm_first") or "llm_first"),
-        "status": status,
-        "llm_batches": llm_batches,
-        "fallback_batches": fallback_batches,
-        "batch_size": batch_size,
-        "model": model_override or "default",
-        "circuit_open": bool(circuit_error),
-        "error": circuit_error,
-        "model_run_ids": model_run_ids,
-        "reported_confidence_count": len(reported_confidences),
-        "mean_reported_confidence": round(sum(reported_confidences) / len(reported_confidences), 4) if reported_confidences else None,
-    }
-
-
-def compute_heat_metrics(items: list[dict]) -> None:
-    if not items:
-        return
-    topic_counter: Counter[str] = Counter()
-    source_counter: defaultdict[str, set[str]] = defaultdict(set)
-    duplicate_counter: Counter[str] = Counter()
-    for item in items:
-        canonical_key = str(item.get("canonical_url", "") or item.get("content_hash", "") or item.get("title", ""))
-        duplicate_counter[canonical_key] += 1
-        for keyword in item.get("matched_keywords", []) or []:
-            topic_counter[str(keyword)] += 1
-        source_counter[canonical_key].add(str(item.get("source_name", "") or item.get("provider", "")))
-    scored: list[tuple[float, dict]] = []
-    published_times = [
-        parsed
-        for item in items
-        if (parsed := parse_iso_datetime(str(item.get("published_at", "") or ""))) is not None
-    ]
-    now = max(published_times, default=None)
-    for item in items:
-        canonical_key = str(item.get("canonical_url", "") or item.get("content_hash", "") or item.get("title", ""))
-        topic_hits = sum(topic_counter[str(keyword)] for keyword in item.get("matched_keywords", []) or [])
-        source_diversity = len(source_counter[canonical_key])
-        duplicate_count = duplicate_counter[canonical_key]
-        published_dt = parse_iso_datetime(str(item.get("published_at", "") or ""))
-        recency_bonus = 0.0
-        if now and published_dt:
-            age_hours = max(0.0, (now - published_dt).total_seconds() / 3600.0)
-            recency_bonus = max(0.0, 1.0 - min(age_hours, 24.0) / 24.0)
-        query_bonus = 0.35 if str(item.get("query_type", "")) == "direct" else (0.22 if str(item.get("query_type", "")) == "theme" else 0.15)
-        duplicate_bonus = min(1.0, (duplicate_count - 1) * 0.2)
-        source_bonus = min(1.0, source_diversity * 0.25)
-        topic_bonus = min(1.0, topic_hits * 0.08)
-        heat_score = round(min(1.0, 0.15 + recency_bonus * 0.3 + query_bonus + duplicate_bonus + source_bonus + topic_bonus), 4)
-        item["heat_score"] = heat_score
-        item["virality_score"] = max(float(item.get("virality_score", 0.0) or 0.0), heat_score)
-        sentiment_score = float(item.get("sentiment_score", 0.0) or 0.0)
-        if heat_score >= 0.75 and sentiment_score > 0.2:
-            item["crowding_signal"] = "crowded"
-        elif heat_score >= 0.75 and sentiment_score < -0.2:
-            item["crowding_signal"] = "capitulation"
-        elif heat_score >= 0.45:
-            item["crowding_signal"] = "warming"
-        else:
-            item["crowding_signal"] = str(item.get("crowding_signal", "") or "neutral")
-        scored.append((heat_score, item))
-    scored.sort(key=lambda row: (row[0], row[1].get("published_at", "")), reverse=True)
-    for rank, (_score, item) in enumerate(scored, start=1):
-        item["heat_rank"] = rank
-
-
-def dedupe_news_items(items: list[dict], *, dedup_window_hours: int) -> tuple[list[dict], dict]:
-    deduped: list[dict] = []
-    canonical_seen: set[str] = set()
-    mapped_seen: set[tuple[str, str]] = set()
-    duplicate_item_count = 0
-    dedup_drop_count = 0
-    for item in sorted(items, key=lambda row: row.get("published_at", ""), reverse=True):
-        enriched = enrich_news_item(item, query_type=str(item.get("query_type", "") or ""), matched_keywords=list(item.get("matched_keywords", []) or []))
-        canonical_key = str(enriched.get("canonical_url", "") or news_content_hash(str(enriched.get("title", "")), str(enriched.get("summary", "")), ""))
-        mapped_key = (str(enriched.get("code", "") or ""), canonical_key)
-        if mapped_key in mapped_seen:
-            dedup_drop_count += 1
-            continue
-        if canonical_key in canonical_seen:
-            duplicate_item_count += 1
-        canonical_seen.add(canonical_key)
-        mapped_seen.add(mapped_key)
-        deduped.append(enriched)
-    return deduped, {
-        "mapped_item_count": len(deduped),
-        "unique_item_count": len(canonical_seen),
-        "duplicate_item_count": duplicate_item_count,
-        "dedup_drop_count": dedup_drop_count,
-        "dedup_window_hours": dedup_window_hours,
-    }
-
-
-def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
-    canonical_seen: set[str] = set()
-    mapped_seen: set[tuple[str, str]] = set()
-    duplicate_item_count = 0
-    dedup_drop_count = 0
-    for item in sorted(items, key=lambda row: row.get("published_at", ""), reverse=True):
-        enriched = enrich_news_item(item, query_type=str(item.get("query_type", "") or ""), matched_keywords=list(item.get("matched_keywords", []) or []))
-        canonical_key = str(enriched.get("canonical_url", "") or news_content_hash(str(enriched.get("title", "")), str(enriched.get("summary", "")), ""))
-        mapped_key = (str(enriched.get("code", "") or ""), canonical_key)
-        if mapped_key in mapped_seen:
-            dedup_drop_count += 1
-            continue
-        if canonical_key in canonical_seen:
-            duplicate_item_count += 1
-        canonical_seen.add(canonical_key)
-        mapped_seen.add(mapped_key)
-    return {
-        "mapped_item_count": len(mapped_seen),
-        "unique_item_count": len(canonical_seen),
-        "duplicate_item_count": duplicate_item_count,
-        "dedup_drop_count": dedup_drop_count,
-        "dedup_window_hours": dedup_window_hours,
-    }
 
 
 def parse_rss_datetime(value: str | None, report_date: str) -> str:
@@ -2420,57 +2069,6 @@ def main() -> None:
     )
     print(dump_json(news_path(agent_home, report_date), payload))
 
-
-# These names remain public for CLI and test compatibility. Their runtime
-# implementation lives in the focused news pipeline modules above.
-canonicalize_url = news_normalizer.canonicalize_url
-extract_plain_text = news_normalizer.extract_plain_text
-normalize_title_text = news_normalizer.normalize_title_text
-news_content_hash = news_normalizer.news_content_hash
-impact_from_classification = news_normalizer.impact_from_classification
-enrich_news_item = lambda item, *, query_type="", matched_keywords=None: news_normalizer.enrich_news_item(
-    item,
-    query_type=query_type,
-    matched_keywords=matched_keywords,
-    classifier_version=CLASSIFIER_VERSION,
-)
-rule_classify_news_item = lambda item: news_classifier.rule_classify_news_item(item, classifier_version=CLASSIFIER_VERSION)
-build_news_classification_prompts = news_classifier.build_classification_prompts
-NEWS_CLASSIFICATION_SCHEMA = news_classifier.NEWS_CLASSIFICATION_SCHEMA
-
-
-def classify_news_with_llm(agent_home: Path, settings: dict, items: list[dict], *, report_date: str = "") -> tuple[list[dict], dict]:
-    return news_classifier.classify_news_with_llm(
-        agent_home,
-        settings,
-        items,
-        report_date=report_date,
-        call_json_agent=call_json_agent,
-        provider_error_type=ProviderRequestError,
-        classifier_version=CLASSIFIER_VERSION,
-    )
-
-
-def compute_heat_metrics(items: list[dict]) -> None:
-    news_quality.compute_heat_metrics(items, parse_datetime=parse_iso_datetime)
-
-
-def dedupe_news_items(items: list[dict], *, dedup_window_hours: int) -> tuple[list[dict], dict]:
-    return news_quality.dedupe_news_items(
-        items,
-        dedup_window_hours=dedup_window_hours,
-        enrich_item=enrich_news_item,
-        content_hash=news_content_hash,
-    )
-
-
-def news_dedup_summary(items: list[dict], *, dedup_window_hours: int) -> dict:
-    return news_quality.news_dedup_summary(
-        items,
-        dedup_window_hours=dedup_window_hours,
-        enrich_item=enrich_news_item,
-        content_hash=news_content_hash,
-    )
 
 
 if __name__ == "__main__":
