@@ -77,7 +77,7 @@ export function SystemPage({ system, summary }: { system: Record<string, unknown
         {ragRuntime.statusError ? <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-950/25 p-3 text-sm text-amber-100">{String(ragRuntime.statusError)}</div> : null}
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <MiniPanel title="来源计数" value={ragRuntime.sourceCounts ?? {}} />
-          <MiniPanel title="最近评估" value={ragRuntime.latestEval ?? {}} />
+          <RagEvaluationPanel evaluation={ragRuntime.latestEval ?? {}} />
         </div>
         <RagTraceList traces={latestTraces.slice(0, 5)} />
       </Card>
@@ -288,6 +288,40 @@ function RagTraceList({ traces }: { traces: Array<Record<string, unknown>> }) {
       })}
     </div>
   );
+}
+
+function RagEvaluationPanel({ evaluation }: { evaluation: Record<string, unknown> }) {
+  const metrics = evaluation.metrics as Record<string, unknown> | undefined;
+  const labeledQueries = numberOrNull(metrics?.gold_labeled_query_count);
+  if (labeledQueries === null || labeledQueries === 0) {
+    return <div className="min-h-[160px] rounded-md border border-slate-800 bg-slate-950/40 p-3"><div className="mb-2 text-xs font-bold text-slate-400">离线检索评估</div><div className="text-sm leading-6 text-slate-500">暂无人工标注评估集。系统仍会记录命中、引用完整性和未来数据拒绝，但不会伪造 Recall 或 nDCG。</div></div>;
+  }
+  const rows: Array<[string, unknown, Tone]> = [
+    ["Recall@K", metrics?.recall_at_k, "accent"],
+    ["nDCG@K", metrics?.nDCG_at_k, "accent"],
+    ["证据覆盖", metrics?.evidence_coverage_rate, "success"],
+    ["错误召回", metrics?.erroneous_recall_rate, "warning"],
+    ["引用正确", metrics?.citation_correctness_rate, "success"],
+    ["弃答质量", metrics?.abstention_quality, "info"],
+    ["未来数据拒绝", metrics?.future_data_rejection_rate, "success"],
+  ];
+  return (
+    <div className="min-h-[160px] rounded-md border border-slate-800 bg-slate-950/40 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2"><div className="text-xs font-bold text-slate-400">离线检索评估</div><Badge tone="info">标注 {labeledQueries} 条</Badge></div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+        {rows.map(([label, value, tone]) => <div key={label} className="flex items-center justify-between gap-2"><span className="text-slate-500">{label}</span><Badge tone={tone}>{rateLabel(value)}</Badge></div>)}
+      </div>
+    </div>
+  );
+}
+
+function numberOrNull(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function rateLabel(value: unknown) {
+  const numeric = numberOrNull(value);
+  return numeric === null ? "不可用" : `${(numeric * 100).toFixed(0)}%`;
 }
 
 function ragTraceReason(semantic: Record<string, unknown> | undefined) {

@@ -94,6 +94,66 @@ class RagEvalTests(unittest.TestCase):
         self.assertIn("trace_id", first_query)
         self.assertEqual(0, written["metrics"].get("no_future_violation_count", 0))
 
+    def test_labeled_eval_set_reports_retrieval_quality_without_enabling_hybrid(self):
+        self._seed_context()
+        self._seed_rag()
+        future_doc = RagDocument(
+            doc_id="rag-future",
+            source_kind="evidence_item",
+            source_path="db/llm_context/2026-05-21.json",
+            source_record_id="ev-future",
+            title="Future evidence",
+            summary="Future evidence must be rejected.",
+            as_of_date="2026-05-21",
+            available_from="2026-05-21T09:00:00+08:00",
+            domain="fund",
+            source_tier="daily_evidence",
+            visibility="default",
+            entity_type="fund",
+            entity_id="F1",
+            fund_codes=["F1"],
+        )
+        future_chunk = RagChunk(
+            chunk_id="rag-future:chunk:0",
+            doc_id="rag-future",
+            chunk_index=0,
+            text_for_embedding="F1 future risk",
+            text_for_llm="Future evidence must be rejected.",
+        )
+        upsert_documents(self.agent.root, [future_doc])
+        upsert_chunks(self.agent.root, [future_chunk])
+        self.agent.write_json(
+            "db/rag/eval_sets/2026-05-20.json",
+            {
+                "schemaVersion": "rag_eval_set.v1",
+                "reportDate": "2026-05-20",
+                "queries": [
+                    {
+                        "queryId": "market-f1",
+                        "agentName": "market_analyst",
+                        "scope": "fund",
+                        "fundCode": "F1",
+                        "expectedEvidenceIds": ["ev-1"],
+                        "forbiddenEvidenceIds": ["ev-future"],
+                        "shouldAbstain": False,
+                    }
+                ],
+            },
+        )
+
+        payload = run_eval(self.agent.root, "2026-05-20", compare_legacy=False, write_trace=False)
+
+        self.assertTrue(payload["benchmark"]["available"])
+        self.assertEqual(1, payload["metrics"]["gold_labeled_query_count"])
+        self.assertEqual(1.0, payload["metrics"]["recall_at_k"])
+        self.assertEqual(1.0, payload["metrics"]["nDCG_at_k"])
+        self.assertEqual(0.0, payload["metrics"]["erroneous_recall_rate"])
+        self.assertEqual(1.0, payload["metrics"]["citation_correctness_rate"])
+        self.assertEqual(1.0, payload["metrics"]["abstention_quality"])
+        self.assertGreater(payload["metrics"]["future_rejected_count"], 0)
+        self.assertEqual(1.0, payload["metrics"]["future_data_rejection_rate"])
+        self.assertFalse(payload["rag"]["semantic_vector_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()
