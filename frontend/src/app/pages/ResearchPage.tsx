@@ -15,7 +15,17 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
     const source = research.fund_cards?.length ? research.fund_cards : research.rows.map(rowToFundCard);
     const needle = query.trim().toLowerCase();
     return source.filter((card) => {
-      const matchesQuery = !needle || JSON.stringify(card).toLowerCase().includes(needle);
+      const searchText = [
+        card.fundName,
+        card.fundCode,
+        card.actionLabel,
+        card.thesis,
+        card.profile.category,
+        card.portfolio.styleGroup,
+        card.news.topTitle,
+        card.news.topRiskTitle
+      ].filter(Boolean).join(" ").toLowerCase();
+      const matchesQuery = !needle || searchText.includes(needle);
       const matchesFilter = filter === "all" || (filter === "actionable" ? card.isActionable : filter === "watch" ? !card.isActionable : card.hasConflict);
       return matchesQuery && matchesFilter;
     });
@@ -355,7 +365,7 @@ function SourceHealthPanel({ sourceHealth }: { sourceHealth?: ResearchPayload["s
       rows={[
         `来源 ${text(summary.source_count, String(items.length))} 个`,
         `预警 ${warningCount} / 错误 ${errorCount}`,
-        ...warningItems.map((item) => `${sourceLabel(item.source_key)}：${valueLabel(item.status)}`)
+        ...warningItems.map((item) => `${sourceLabel(item.source_key)}：${valueLabel(item.status)}${sourceRuntimeText(item)}`)
       ]}
     />
   );
@@ -530,6 +540,15 @@ const sourceLabels: Record<string, string> = {
 function sourceLabel(value: unknown) {
   const raw = String(value ?? "").trim();
   return sourceLabels[raw] || raw.replace(/^rss:/, "").replace(/^reg:/, "监管 / ").replace(/_/g, " ") || "未知来源";
+}
+
+function sourceRuntimeText(item: ResearchDigestEntry) {
+  const runtime = asRecord(item.runtime);
+  const metrics = asRecord(item.metrics);
+  if (Number(metrics.request_skipped) > 0) return "（本轮跳过）";
+  if (runtime.circuit_open === true) return "（来源冷却）";
+  const failures = Number(runtime.consecutive_failures ?? 0);
+  return failures > 0 ? `（连续失败 ${failures}）` : "";
 }
 
 function humanizeSourceText(value: string) {

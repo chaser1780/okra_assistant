@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 import execution_sync as execution_sync_module
-from execution_sync import apply_reconciliation, apply_saved_reconciliation, apply_settled_trade_to_portfolio, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, register_reconciliation_fund, update_pending_confirmations
+from execution_sync import apply_reconciliation, apply_saved_reconciliation, apply_settled_trade_to_portfolio, parse_alipay_screenshot_upload, preview_reconciliation, record_actual_trade, record_conversion, register_reconciliation_fund, sync_configured_simulated_dca, update_pending_confirmations
 from common import lock_path, project_path
 from helpers import TempAgentHome
 from long_memory_store import build_fund_memory
@@ -117,6 +117,61 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertFalse(actual["items"][0]["execution_deviation"]["affects_advice_accuracy"])
         self.assertEqual(len(pending["items"]), 1)
         self.assertFalse(lock_path(self.agent.root, "execution_sync").exists())
+
+    def test_explicit_user_simulation_trade_updates_only_user_simulation_portfolio(self):
+        result = record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "sim-buy-1",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "电网设备C",
+                "operation_type": "buy",
+                "amount": 100,
+                "simulation_track": "user_simulation",
+                "simulation_status": "simulated",
+            },
+        )
+        portfolio = json.loads((self.agent.root / "db/portfolio_state/current.json").read_text(encoding="utf-8"))
+        target = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
+        cash = next(item for item in portfolio["funds"] if item["fund_code"] == "017704")
+        pending = json.loads((self.agent.root / "db/execution_sync/pending_confirmations.json").read_text(encoding="utf-8"))
+        replay = record_actual_trade(
+            self.agent.root,
+            {
+                "trade_id": "sim-buy-1",
+                "trade_date": "2026-05-04",
+                "fund_code": "025857",
+                "fund_name": "电网设备C",
+                "operation_type": "buy",
+                "amount": 100,
+                "simulation_track": "user_simulation",
+                "simulation_status": "simulated",
+            },
+        )
+        self.assertTrue(result["trade"]["is_simulation"])
+        self.assertEqual("simulated", result["trade"]["status"])
+        self.assertEqual(1100.0, target["current_value"])
+        self.assertEqual(900.0, cash["current_value"])
+        self.assertEqual([], pending["items"])
+        self.assertTrue(result["trade"]["portfolio_simulation_event_path"])
+        self.assertTrue(replay["idempotent_replay"])
+
+    def test_configured_dca_materializes_once_on_trading_day(self):
+        current_path = self.agent.root / "db/portfolio_state/current.json"
+        portfolio = json.loads(current_path.read_text(encoding="utf-8"))
+        portfolio["funds"][0]["fixed_daily_buy_amount"] = 25.0
+        current_path.write_text(json.dumps(portfolio, ensure_ascii=False), encoding="utf-8")
+        first = sync_configured_simulated_dca(self.agent.root, "2026-05-04")
+        second = sync_configured_simulated_dca(self.agent.root, "2026-05-04")
+        updated = json.loads(current_path.read_text(encoding="utf-8"))
+        target = next(item for item in updated["funds"] if item["fund_code"] == "017641")
+        cash = next(item for item in updated["funds"] if item["fund_code"] == "017704")
+        self.assertEqual("ok", first["status"])
+        self.assertFalse(first["created"][0]["idempotentReplay"])
+        self.assertTrue(second["created"][0]["idempotentReplay"])
+        self.assertEqual(1025.0, target["current_value"])
+        self.assertEqual(975.0, cash["current_value"])
 
     def test_trade_record_id_is_idempotent_and_conflicts_across_dates(self):
         payload = {

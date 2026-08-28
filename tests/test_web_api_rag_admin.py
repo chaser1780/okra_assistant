@@ -102,8 +102,24 @@ class WebApiRagAdminTests(unittest.TestCase):
         payload = api.system_page("2026-05-20")
         rag_runtime = payload["system"]["ragRuntime"]
         self.assertFalse(rag_runtime["enabled"])
+        self.assertFalse(rag_runtime["hybrid"]["enabled"])
         self.assertEqual("full", rag_runtime["statusMode"])
         self.assertEqual(1, rag_runtime["counts"]["documents"])
+        self.assertEqual(0, rag_runtime["counts"]["embedding_vectors"])
+
+    def test_system_page_falls_back_to_news_source_health(self):
+        self.agent.write_json(
+            "raw/news/2026-05-20.json",
+            {
+                "source_health": [
+                    {"source_key": "rss_news:rss:test", "provider": "rss:test", "source_role": "theme_news", "status": "ok"}
+                ]
+            },
+        )
+
+        payload = OkraWebApi(self.agent.root).system_page("2026-05-20")
+
+        self.assertEqual("rss:test", payload["system"]["sourceHealth"]["items"][0]["provider"])
 
     def test_shell_page_uses_lightweight_rag_runtime_status(self):
         self._insert_rag_doc()
@@ -135,6 +151,12 @@ class WebApiRagAdminTests(unittest.TestCase):
         trace = api.rag_trace(result["traceId"])
         self.assertTrue(trace["found"])
         self.assertEqual(result["traceId"], trace["traceId"])
+
+        runtime = api.system_page("2026-05-20")["system"]["ragRuntime"]
+        latest_trace = runtime["latestTraces"][0]
+        self.assertEqual(result["traceId"], latest_trace["traceId"])
+        self.assertEqual("lexical_rerank", latest_trace["mode"])
+        self.assertEqual("hybrid_disabled", latest_trace["semantic"]["reason"])
 
     def test_rag_search_requires_explicit_include_execution(self):
         self._insert_execution_doc()

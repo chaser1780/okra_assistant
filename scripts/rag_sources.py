@@ -256,7 +256,11 @@ def collect_long_memory_documents(agent_home: Path, report_date: str | None = No
         superseded_by = metadata_json.get("superseded_by") or metadata_json.get("superseded_by_id")
         if superseded_by:
             metadata["superseded_by"] = superseded_by
-        visibility = "review_only" if status in NEGATIVE_MEMORY_STATUSES or superseded_by else "default"
+        valid_until = str(item.get("valid_until", "") or "")[:10]
+        expired = bool(report_date and valid_until and valid_until < str(report_date)[:10])
+        metadata["expired"] = expired
+        metadata["valid_until"] = valid_until
+        visibility = "review_only" if status in NEGATIVE_MEMORY_STATUSES or superseded_by or expired else "default"
         learning_scope = str(metadata_json.get("learning_scope", "") or "")
         if item.get("domain") == EXECUTION_DOMAIN or metadata_json.get("visibility") == EXECUTION_VISIBILITY:
             learning_scope = EXECUTION_LEARNING_SCOPE
@@ -270,6 +274,8 @@ def collect_long_memory_documents(agent_home: Path, report_date: str | None = No
             "archived": "negative_memory",
             "rejected": "negative_memory",
         }.get(status, "memory_candidate")
+        if expired:
+            source_tier = "negative_memory"
         fund_codes = metadata_json.get("fund_codes", [])
         if not fund_codes and item.get("domain") == "fund" and item.get("entity_key"):
             fund_codes = [str(item.get("entity_key"))]
@@ -293,7 +299,7 @@ def collect_long_memory_documents(agent_home: Path, report_date: str | None = No
             valid_from=str(item.get("valid_from", "") or ""),
             valid_until=str(item.get("valid_until", "") or ""),
             learning_scope=learning_scope,
-            is_negative_example=status in NEGATIVE_MEMORY_STATUSES,
+            is_negative_example=status in NEGATIVE_MEMORY_STATUSES or expired,
             payload={"record": {key: value for key, value in item.items() if not key.endswith("_json")}, "evidence_refs": evidence_refs},
             metadata=metadata,
         )

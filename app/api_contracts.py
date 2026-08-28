@@ -41,6 +41,38 @@ class MetricDto(ContractModel):
     tone: str = "neutral"
 
 
+class DataContextDto(ContractModel):
+    snapshotId: str = ""
+    subjectId: str = "portfolio"
+    asOfDate: str = ""
+    selectedDate: str = ""
+    portfolioAsOfDate: str = ""
+    realtimeAsOfDate: str = ""
+    latestRetrievedAt: str = ""
+    decisionCutoff: str = ""
+    sessionStatus: str = "unknown"
+    freshnessStatus: str = "unavailable"
+    freshnessReason: str = ""
+    sourceKey: str = ""
+    sourceAuthority: str = ""
+    sourceConfidence: float | None = None
+    payloadHash: str = ""
+
+
+class SimulationTrackDto(ContractModel):
+    trackId: Literal["user_simulation", "strategy_simulation"]
+    label: str = ""
+    formalTrack: bool = False
+    affectsFormalPortfolio: bool = False
+
+
+class SimulationPayloadDto(ContractModel):
+    activeTrack: Literal["user_simulation"] = "user_simulation"
+    formalTrack: Literal["user_simulation"] = "user_simulation"
+    simulationOnly: Literal[True] = True
+    tracks: list[SimulationTrackDto] = Field(default_factory=list)
+
+
 class ShellPageDto(ContractModel):
     dates: list[str] = Field(default_factory=list)
     selectedDate: str = ""
@@ -172,7 +204,10 @@ class FundDetailDto(ContractModel):
     history: dict[str, Any] = Field(default_factory=dict)
     performance: dict[str, Any] = Field(default_factory=dict)
     tradeMarkers: list[dict[str, Any]] = Field(default_factory=list)
+    strategyExperiments: list[dict[str, Any]] = Field(default_factory=list)
     longMemory: dict[str, Any] = Field(default_factory=dict)
+    dataContext: DataContextDto = Field(default_factory=DataContextDto)
+    simulation: SimulationPayloadDto = Field(default_factory=SimulationPayloadDto)
     system: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -195,6 +230,8 @@ class ExecutionTradeRequestDto(MutationRequestModel):
     source: str | None = None
     platform: str | None = None
     user_note: str | None = None
+    simulation_track: Literal["user_simulation"] | None = None
+    simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
 
 
 class ExecutionConversionRequestDto(MutationRequestModel):
@@ -218,6 +255,28 @@ class ExecutionConversionRequestDto(MutationRequestModel):
     source: str | None = None
     platform: str | None = None
     user_note: str | None = None
+    simulation_track: Literal["user_simulation"] | None = None
+    simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
+
+
+class StrategySimulationExperimentRequestDto(MutationRequestModel):
+    experimentId: str | None = Field(default=None, max_length=80)
+    label: str = Field(min_length=1, max_length=160)
+    asOfDate: str | None = None
+    note: str = ""
+    initialPortfolio: dict[str, Any] | None = None
+
+
+class StrategySimulationActionRequestDto(MutationRequestModel):
+    experimentId: str = Field(min_length=1, max_length=80)
+    actionId: str | None = Field(default=None, max_length=80)
+    action: Literal["buy", "sell", "switch_in", "switch_out"]
+    fundCode: str = Field(min_length=1, max_length=40)
+    amount: float | int | str
+    tradeNav: float | int | str | None = None
+    units: float | int | str | None = None
+    asOfDate: str | None = None
+    note: str = ""
 
 
 class ScreenshotFileDto(MutationRequestModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 try:
@@ -10,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from common import load_llm_config
 from multiagent_utils import build_llm_session, consume_sse_response, describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
+from model_run_store import write_model_run
 
 
 def _conversation_history(evidence: dict) -> list[dict[str, str]]:
@@ -66,7 +68,8 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
             "如果 RAG 缺少 validated advice、portfolio state、market/news evidence 或同日数据，要明确指出缺口。"
             "stale 证据必须标明过期或延迟；archived/rejected memory 只能作为历史反例。"
             "不要编造净值、收益、新闻、持仓、交易状态或执行结论。"
-            "回答要先给可执行结论，再说明依据、风险和下一步。不要输出 JSON。"
+            "证据模式回答必须使用五个简短小节，标题依次为：结论、依据、风险、证据缺口、下一步。"
+            "没有证据或没有缺口时，也要明确写暂无；不要输出 JSON。"
         )
     request_payload = {
         "model": config["model"],
@@ -81,6 +84,7 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
         "max_output_tokens": 1400,
     }
     last_error = None
+    started = time.perf_counter()
     for transport_name, use_env_proxy in (("direct", False), ("env_proxy", True)):
         session = build_llm_session(use_env_proxy=use_env_proxy)
         try:
@@ -102,6 +106,18 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
             if not text:
                 text = str(parsed.get("output_text", "") or "").strip()
             if text:
+                write_model_run(
+                    home,
+                    config=config,
+                    request_name="copilot",
+                    request_payload=request_payload,
+                    status="ok",
+                    transport_name=transport_name,
+                    attempt_count=1,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    output_text=text,
+                    report_date=str(evidence.get("sourceDate") or evidence.get("selectedDate") or ""),
+                )
                 return text
             failed_event = parsed.get("failed_event") or parsed.get("error_event")
             raise RuntimeError(json.dumps(failed_event, ensure_ascii=False) if failed_event else "LLM response did not contain output text.")
@@ -109,7 +125,18 @@ def call_copilot_llm(home: Path, context: str, question: str, evidence: dict) ->
             last_error = exc
         finally:
             session.close()
-    raise RuntimeError(f"助手 LLM 请求失败：{last_error}")
+    write_model_run(
+        home,
+        config=config,
+        request_name="copilot",
+        request_payload=request_payload,
+        status="failed",
+        attempt_count=2,
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        error=str(last_error or "copilot request failed"),
+        report_date=str(evidence.get("sourceDate") or evidence.get("selectedDate") or ""),
+    )
+    raise RuntimeError("助手模型当前不可用")
 
 
 def local_copilot_answer(context: str, question: str, evidence: dict, error: str) -> str:
@@ -122,7 +149,7 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
                 "",
                 "请稍后重试；如果你问的是具体基金、持仓、交易或系统决策，我会在可用时结合本地证据回答。",
                 "",
-                f"LLM 调用失败原因：{error[:500]}",
+                "当前未展示底层模型错误，请在运行中心查看模型运行状态。",
             ]
         )
 
@@ -131,20 +158,21 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
         retrieval = evidence.get("retrieval", {}) if isinstance(evidence.get("retrieval"), dict) else {}
         source_date = evidence.get("sourceDate", "")
         lines = [
-            "已检索到 RAG 证据，但这次没有成功连接 LLM。以下是本地证据摘要。",
+            "结论：",
+            "本轮已取得本地证据，但模型未响应，因此只能提供证据摘要，不生成新的投资判断。",
             "",
-            f"页面：{context}",
-            f"日期：{source_date or '未知'}",
-            f"问题：{question}",
-            f"Trace：{evidence.get('traceId', '') or '未知'}",
-            "",
-            "检索：",
-            f"- 命中数：{retrieval.get('hitCount', len(citations))}",
+            "依据：",
+            f"- 页面：{context}；日期：{source_date or '未知'}；检索命中 {retrieval.get('hitCount', len(citations))} 条。",
+            f"- Trace：{evidence.get('traceId', '') or '未知'}。",
         ]
         missing = retrieval.get("missingData") or evidence.get("missingData") or []
-        if missing:
-            lines.append(f"- 缺失数据：{json.dumps(missing, ensure_ascii=False)[:500]}")
-        lines.extend(["", "证据："])
+        lines.extend(["", "风险："])
+        lines.append("- 当前模型不可用，不能把证据摘要解释为新的建议或模拟动作。")
+        lines.extend(["", "证据缺口："])
+        lines.append(f"- {_missing_data_text(missing)}")
+        lines.extend(["", "下一步："])
+        lines.append("- 可先检查下列本地证据；模型恢复后再请求基于证据的完整解释。")
+        lines.extend(["", "可用证据："])
         for item in citations[:5]:
             if not isinstance(item, dict):
                 continue
@@ -155,7 +183,7 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
             )
         if not citations:
             lines.append("- 没有可用证据。")
-        lines.extend(["", f"LLM 调用失败原因：{error[:500]}"])
+        lines.extend(["", "当前未展示底层模型错误，请在运行中心查看模型运行状态。"])
         return "\n".join(lines)
 
     page_data = evidence.get("pageData", {}) if isinstance(evidence, dict) else {}
@@ -172,16 +200,37 @@ def local_copilot_answer(context: str, question: str, evidence: dict, error: str
                 metric_lines.append(f"- {value[:160]}")
     source_date = evidence.get("selectedDate", "")
     lines = [
-        "我已经读取了当前页面的本地数据，但这次没有成功连接 LLM，所以先给出本地证据摘要。",
+        "结论：",
+        "当前页面数据已读取，但模型未响应，因此不生成新的判断。",
         "",
-        f"页面：{context}",
-        f"日期：{source_date or '暂无'}",
-        f"问题：{question}",
-        "",
-        "当前可见证据：",
+        "依据：",
+        f"- 页面：{context}；日期：{source_date or '暂无'}。",
         *(metric_lines or ["- 当前页面没有足够的结构化摘要。"]),
+        "",
+        "风险：",
+        "- 本轮仅展示页面已有信息，不能替代证据模式下的完整分析。",
+        "",
+        "证据缺口：",
+        "- 未建立可用 RAG 证据包或本轮证据不足。",
+        "",
+        "下一步：",
+        "- 模型恢复后，可重新提问以获得结合本地证据的解释。",
     ]
     if summary:
         lines.extend(["", f"状态摘要：{json.dumps(summary, ensure_ascii=False)[:500]}"])
-    lines.extend(["", f"LLM 调用失败原因：{error[:500]}"])
+    lines.extend(["", "当前未展示底层模型错误，请在运行中心查看模型运行状态。"])
     return "\n".join(lines)
+
+
+def _missing_data_text(value: object) -> str:
+    if not value:
+        return "暂无明显缺口记录。"
+    if isinstance(value, list):
+        labels = []
+        for item in value[:3]:
+            if isinstance(item, dict):
+                labels.append(str(item.get("reason") or item.get("field") or item.get("source_kind") or "数据缺失"))
+            else:
+                labels.append(str(item))
+        return "、".join(label for label in labels if label) or "存在未展开的证据缺口。"
+    return "存在未展开的证据缺口。"

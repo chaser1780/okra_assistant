@@ -68,6 +68,9 @@ class NewsItem(TypedDict, total=False):
     classifier: str
     classifier_version: str
     classification_status: str
+    classification_confidence: float | None
+    classifier_model_run_id: str
+    classifier_prompt_version: str
     is_policy_signal: bool
     is_hype_signal: bool
     reason_short: str

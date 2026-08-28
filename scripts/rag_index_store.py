@@ -167,6 +167,17 @@ def init_store(agent_home: Path) -> Path:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS embedding_vectors (
+                vector_ref TEXT PRIMARY KEY,
+                embedding_json TEXT NOT NULL,
+                dimensions INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS query_traces (
                 trace_id TEXT PRIMARY KEY,
                 query_plan_json TEXT NOT NULL,
@@ -582,6 +593,72 @@ def upsert_embedding_cache(agent_home: Path, entry: dict[str, Any]) -> str:
     return cache_key
 
 
+def upsert_embedding_vector(agent_home: Path, vector_ref: str, vector: list[float]) -> None:
+    init_store(agent_home)
+    values = [float(value) for value in vector]
+    if not vector_ref or not values:
+        raise ValueError("vector_ref and vector are required")
+    now = timestamp_now()
+    with connect_store(agent_home) as conn:
+        conn.execute(
+            """
+            INSERT INTO embedding_vectors(vector_ref, embedding_json, dimensions, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(vector_ref) DO UPDATE SET
+                embedding_json=excluded.embedding_json,
+                dimensions=excluded.dimensions,
+                updated_at=excluded.updated_at
+            """,
+            [vector_ref, json_dumps(values), len(values), now, now],
+        )
+
+
+def get_embedding_vector(agent_home: Path, vector_ref: str) -> list[float] | None:
+    if not vector_ref:
+        return None
+    init_store(agent_home)
+    with connect_store(agent_home) as conn:
+        row = conn.execute("SELECT embedding_json FROM embedding_vectors WHERE vector_ref = ?", [vector_ref]).fetchone()
+    if row is None:
+        return None
+    try:
+        values = json.loads(row["embedding_json"] or "[]")
+        return [float(value) for value in values] if isinstance(values, list) and values else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def list_embedding_vectors(agent_home: Path) -> dict[str, list[float]]:
+    """Load persisted local vectors for the mock backend without an external service."""
+    init_store(agent_home)
+    with connect_store(agent_home) as conn:
+        rows = conn.execute("SELECT vector_ref, embedding_json FROM embedding_vectors ORDER BY vector_ref").fetchall()
+    vectors: dict[str, list[float]] = {}
+    for row in rows:
+        try:
+            values = json.loads(row["embedding_json"] or "[]")
+            if isinstance(values, list) and values:
+                vectors[str(row["vector_ref"])] = [float(value) for value in values]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return vectors
+
+
+def get_chunk_embedding_vector(agent_home: Path, chunk_id: str, *, model: str = "") -> list[float] | None:
+    init_store(agent_home)
+    clauses = ["chunk_id = ?", "status = 'ok'", "vector_ref <> ''"]
+    params: list[Any] = [chunk_id]
+    if model:
+        clauses.append("embedding_model = ?")
+        params.append(model)
+    with connect_store(agent_home) as conn:
+        row = conn.execute(
+            f"SELECT vector_ref FROM embedding_cache WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+    return get_embedding_vector(agent_home, str(row["vector_ref"] or "")) if row else None
+
+
 def mark_chunk_embedding(agent_home: Path, chunk_id: str, *, model: str, status: str, embedding_sha256: str = "") -> None:
     init_store(agent_home)
     with connect_store(agent_home) as conn:
@@ -762,6 +839,7 @@ def count_rows(agent_home: Path, table_name: str) -> int:
         "manifest_documents",
         "manifest_chunks",
         "embedding_cache",
+        "embedding_vectors",
         "query_traces",
         "ingest_runs",
     }:

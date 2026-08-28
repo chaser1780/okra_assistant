@@ -55,6 +55,7 @@ Current frontend entry facts:
 - page loading uses page-level `React.lazy` + `Suspense`
 - workbench fetch/query entrypoints live in `frontend/src/lib/workbenchApi.ts` and `frontend/src/lib/workbenchQuery.ts`
 - Tauri configuration lives under `frontend/src-tauri`
+- `/today` is the portfolio research terminal; `execution` is the user-simulation surface; `shadow-review` contains strategy experiments.
 
 Useful checks:
 
@@ -180,6 +181,23 @@ Operational endpoints:
 - `POST /api/long-memory/action`
 - `POST /api/copilot/explain`
 - `POST /api/open-url`
+- `GET /api/strategy-simulation`
+- `POST /api/strategy-simulation/experiment`
+- `POST /api/strategy-simulation/action`
+
+### Simulation Boundary
+
+The current desktop product is a research and simulation system. It does not
+place broker orders or represent a trade as a live fill. `user_simulation`
+records explicit user actions and configured DCA into the simulated portfolio.
+`strategy_simulation` experiments use independent hypothetical portfolios and
+cannot mutate the user simulation portfolio. The legacy `execution_sync`
+name remains for API and storage compatibility.
+
+Every page payload can expose a `dataContext` with selected date, portfolio
+date, realtime observation date, market session, freshness and source reason.
+After market close, proxy observations are labelled as official NAV pending
+rather than `LIVE`. The workbench also exposes `simulation` track summaries.
 
 Reconciliation is a two-step server-bound contract:
 

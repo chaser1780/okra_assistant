@@ -134,6 +134,8 @@ backend = "sqlite_mock"
         results = store.search(vector, top_k=1)
         self.assertEqual(1, len(results))
         self.assertGreaterEqual(results[0]["score"], 0.99)
+        reopened_results = build_vector_store(self.agent.root).search(vector, top_k=1)
+        self.assertEqual(results, reopened_results)
 
     def test_live_embed_sends_only_text_input(self):
         self.agent.write_text(

@@ -122,6 +122,29 @@ class RagMemoryVisibilityTests(unittest.TestCase):
         self.assertEqual("execution_only", doc.visibility)
         self.assertEqual("execution_only", doc.metadata["learning_scope"])
 
+    def test_expired_memory_is_review_only_for_dated_retrieval(self):
+        upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_id": "mem-expired",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "old_window",
+                "title": "expired rule",
+                "text": "This rule has expired.",
+                "status": "strategic",
+                "valid_from": "2026-05-01",
+                "valid_until": "2026-05-10",
+            },
+        )
+
+        doc = next(doc for doc in collect_long_memory_documents(self.agent.root, "2026-05-20").documents if doc.source_record_id == "mem-expired")
+
+        self.assertEqual("review_only", doc.visibility)
+        self.assertTrue(doc.is_negative_example)
+        self.assertTrue(doc.metadata["expired"])
+        self.assertEqual("negative_memory", doc.source_tier)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,6 +70,11 @@ def _question_from_payload(payload: dict[str, Any]) -> str:
 
 
 def _intent_from_payload(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("intent", "") or "").strip()
+    if explicit in {"page_explain", "fund_explain", "decision_explain", "risk_review", "memory_review"}:
+        return explicit
+    if explicit == "execution_review":
+        return "execution_explain"
     page = str(payload.get("page", "") or "").strip()
     question = str(payload.get("question", "") or "").strip().lower()
     if page == "execution":
@@ -149,5 +154,6 @@ def build_copilot_rag_pack(agent_home: Path, payload: dict[str, Any]) -> dict[st
         "candidateCountBeforeFilter": retrieval.get("candidate_count_before_filter", 0),
         "candidateCountAfterFilter": retrieval.get("candidate_count_after_filter", 0),
         "fallbackReason": fallback_reason,
+        "mode": (retrieval.get("semantic", {}) or {}).get("mode", "lexical_rerank"),
     }
     return pack

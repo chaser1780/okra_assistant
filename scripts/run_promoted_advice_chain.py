@@ -29,6 +29,7 @@ from common import (
     validated_advice_path,
 )
 from decision_ledger import build_and_write_decisions
+from decision_trace import write_decision_trace
 from promoted_advice_guardrails import build_validated_payload
 
 
@@ -115,6 +116,7 @@ def write_official_outputs(
             continue
         paths[f"decision_latest:{fund_code}"] = decision_latest_path(agent_home, fund_code)
         paths[f"decision_ledger:{fund_code}"] = decision_ledger_path(agent_home, fund_code)
+    paths["decision_trace"] = write_decision_trace(agent_home, report_date, generated_at=generated_at)
     return paths
 
 

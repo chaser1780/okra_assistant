@@ -87,6 +87,11 @@ def _simple_news_item(item: dict) -> dict:
         "query_type": item.get("query_type", ""),
         "topic_tags": list(item.get("topic_tags", []) or []),
         "risk_tags": list(item.get("risk_tags", []) or []),
+        "classifier": item.get("classifier", ""),
+        "classification_status": item.get("classification_status", ""),
+        "classification_confidence": item.get("classification_confidence"),
+        "classifier_model_run_id": item.get("classifier_model_run_id", ""),
+        "classifier_prompt_version": item.get("classifier_prompt_version", ""),
         "url": item.get("url", item.get("source_url", "")),
     }
 

@@ -8,7 +8,7 @@ from execution_sync import record_actual_trade
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Record an actual Alipay fund operation.")
+    parser = argparse.ArgumentParser(description="Record a local user-simulation fund operation.")
     parser.add_argument("--agent-home")
     parser.add_argument("--date", dest="trade_date")
     parser.add_argument("--time", dest="trade_time", default="")
@@ -45,8 +45,10 @@ def main() -> None:
             "linked_suggestion_id": args.linked_suggestion_id,
             "linked_advice_date": args.linked_advice_date,
             "user_note": args.note,
-            "source": "manual",
-            "platform": "alipay",
+            "source": "user_simulation",
+            "platform": "local_simulation",
+            "simulation_track": "user_simulation",
+            "simulation_status": "simulated",
         },
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

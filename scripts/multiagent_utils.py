@@ -9,6 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from common import dump_json, load_llm_config, project_path, timestamp_now
+from model_run_store import write_model_run
 
 
 DEFAULT_LOCAL_OPENAI_API_KEY_FILE = "config/" + "openai_api_key.txt"
@@ -388,6 +389,7 @@ def call_responses_text(
     request_kind: str,
     max_attempts: int = 3,
     agent_home: Path | str | None = None,
+    report_date: str = "",
     timeout: tuple[int, int] = (30, 300),
 ) -> dict:
     provider_key = config["model_provider"]
@@ -399,6 +401,7 @@ def call_responses_text(
 
     for attempt in range(1, max_attempts + 1):
         for transport_name, use_env_proxy in transport_order:
+            attempt_started = time.perf_counter()
             delta_parts: list[str] = []
             events: list[dict] = []
             session = build_llm_session(use_env_proxy=use_env_proxy)
@@ -424,13 +427,28 @@ def call_responses_text(
                 if not output_text:
                     output_text = parsed.get("output_text", "").strip()
                 if output_text:
-                    return {
+                    result = {
                         "request_payload": payload,
                         "output_text": output_text,
                         "events": events,
                         "stream_incomplete": bool(parsed.get("stream_error")),
                         "transport_name": transport_name,
                     }
+                    if agent_home:
+                        result["model_run"] = write_model_run(
+                            agent_home,
+                            config=config,
+                            request_name=request_kind,
+                            request_payload=payload,
+                            status="ok",
+                            transport_name=transport_name,
+                            attempt_count=attempt,
+                            latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                            output_text=output_text,
+                            stream_incomplete=bool(parsed.get("stream_error")),
+                            report_date=report_date,
+                        )
+                    return result
 
                 failed_event = parsed.get("failed_event") or {}
                 error_event = parsed.get("error_event") or {}
@@ -459,13 +477,28 @@ def call_responses_text(
                 last_error = exc
                 joined = "".join(delta_parts).strip()
                 if joined:
-                    return {
+                    result = {
                         "request_payload": payload,
                         "output_text": joined,
                         "events": events,
                         "stream_incomplete": True,
                         "transport_name": transport_name,
                     }
+                    if agent_home:
+                        result["model_run"] = write_model_run(
+                            agent_home,
+                            config=config,
+                            request_name=request_kind,
+                            request_payload=payload,
+                            status="ok",
+                            transport_name=transport_name,
+                            attempt_count=attempt,
+                            latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                            output_text=joined,
+                            stream_incomplete=True,
+                            report_date=report_date,
+                        )
+                    return result
                 if agent_home:
                     write_agent_debug_log(
                         agent_home,
@@ -480,6 +513,19 @@ def call_responses_text(
                         },
                     )
                 if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                    if agent_home:
+                        write_model_run(
+                            agent_home,
+                            config=config,
+                            request_name=request_kind,
+                            request_payload=payload,
+                            status="failed",
+                            transport_name=transport_name,
+                            attempt_count=attempt,
+                            latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                            error=str(exc),
+                            report_date=report_date,
+                        )
                     raise
             finally:
                 session.close()
@@ -487,6 +533,17 @@ def call_responses_text(
             break
         time.sleep(2 * attempt)
 
+    if agent_home:
+        write_model_run(
+            agent_home,
+            config=config,
+            request_name=request_kind,
+            request_payload=payload,
+            status="failed",
+            attempt_count=max_attempts,
+            error=str(last_error or "request failed"),
+            report_date=report_date,
+        )
     raise RuntimeError(f"{request_kind} request failed after {max_attempts} attempts: {last_error}")
 
 
@@ -678,6 +735,7 @@ def call_json_agent(
     fallback_defaults: dict | None = None,
     timeout: tuple[int, int] = (30, 240),
     model: str | None = None,
+    report_date: str = "",
 ) -> dict:
     config = load_llm_config(agent_home)
     provider = config["model_providers"][config["model_provider"]]
@@ -711,6 +769,7 @@ def call_json_agent(
     transport_order = [("direct", False), ("env_proxy", True)]
     for attempt in range(1, max_attempts + 1):
         for transport_name, use_env_proxy in transport_order:
+            attempt_started = time.perf_counter()
             delta_parts: list[str] = []
             events: list[dict] = []
             session = build_llm_session(use_env_proxy=use_env_proxy)
@@ -784,13 +843,27 @@ def call_json_agent(
                             "use_env_proxy": use_env_proxy,
                         },
                     )
-                return {
+                result = {
                     "request_payload": payload,
                     "response_text": text,
                     "response_json": normalized_json,
                     "events": events,
                     "transport_name": transport_name,
                 }
+                result["model_run"] = write_model_run(
+                    agent_home,
+                    config=config,
+                    request_name=request_name,
+                    request_payload=payload,
+                    status="ok",
+                    transport_name=transport_name,
+                    attempt_count=attempt,
+                    latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                    output_text=text,
+                    stream_incomplete=bool(parsed.get("stream_error")),
+                    report_date=report_date,
+                )
+                return result
             except Exception as exc:
                 last_error = exc
                 joined = "".join(delta_parts).strip()
@@ -801,7 +874,7 @@ def call_json_agent(
                         if missing_paths:
                             raise RuntimeError(f"Agent JSON missing required fields: {', '.join(missing_paths[:12])}")
                         normalized_json = normalize_json_against_schema(parsed_json, effective_schema, defaults=fallback_defaults)
-                        return {
+                        result = {
                             "request_payload": payload,
                             "response_text": joined,
                             "response_json": normalized_json,
@@ -809,6 +882,20 @@ def call_json_agent(
                             "stream_incomplete": True,
                             "transport_name": transport_name,
                         }
+                        result["model_run"] = write_model_run(
+                            agent_home,
+                            config=config,
+                            request_name=request_name,
+                            request_payload=payload,
+                            status="ok",
+                            transport_name=transport_name,
+                            attempt_count=attempt,
+                            latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                            output_text=joined,
+                            stream_incomplete=True,
+                            report_date=report_date,
+                        )
+                        return result
                     except Exception:
                         start = joined.find("{")
                         end = joined.rfind("}")
@@ -831,7 +918,7 @@ def call_json_agent(
                                         "use_env_proxy": use_env_proxy,
                                     },
                                 )
-                                return {
+                                result = {
                                     "request_payload": payload,
                                     "response_text": joined,
                                     "response_json": normalized_json,
@@ -839,6 +926,20 @@ def call_json_agent(
                                     "stream_incomplete": True,
                                     "transport_name": transport_name,
                                 }
+                                result["model_run"] = write_model_run(
+                                    agent_home,
+                                    config=config,
+                                    request_name=request_name,
+                                    request_payload=payload,
+                                    status="ok",
+                                    transport_name=transport_name,
+                                    attempt_count=attempt,
+                                    latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                                    output_text=joined,
+                                    stream_incomplete=True,
+                                    report_date=report_date,
+                                )
+                                return result
                             except Exception:
                                 pass
                 write_agent_debug_log(
@@ -854,10 +955,33 @@ def call_json_agent(
                     },
                 )
                 if isinstance(exc, ProviderRequestError) and not exc.retryable:
+                    write_model_run(
+                        agent_home,
+                        config=config,
+                        request_name=request_name,
+                        request_payload=payload,
+                        status="failed",
+                        transport_name=transport_name,
+                        attempt_count=attempt,
+                        latency_ms=round((time.perf_counter() - attempt_started) * 1000),
+                        error=str(exc),
+                        report_date=report_date,
+                    )
                     raise
             finally:
                 session.close()
         if attempt == max_attempts:
             break
         time.sleep(2 * attempt)
+    if agent_home:
+        write_model_run(
+            agent_home,
+            config=config,
+            request_name=request_name,
+            request_payload=payload,
+            status="failed",
+            attempt_count=max_attempts,
+            error=str(last_error or "agent request failed"),
+            report_date=report_date,
+        )
     raise RuntimeError(f"Agent request failed after {max_attempts} attempts: {last_error}")

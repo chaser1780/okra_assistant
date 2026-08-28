@@ -117,6 +117,7 @@ def run_ingest(agent_home: Path, args: argparse.Namespace) -> dict:
                 "embedded": sum(1 for item in results if item.get("status") == "embedded"),
                 "cached": sum(1 for item in results if item.get("status") == "cached"),
                 "error": sum(1 for item in results if item.get("status") == "error"),
+                "results": results,
             }
         write_ingest_run(
             agent_home,

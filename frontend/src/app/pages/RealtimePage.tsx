@@ -6,6 +6,7 @@ import { narrativeText, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, DetailDrawer, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { ContributionBars, RiskScatterChart } from "../../components/okra/ChartPrimitives";
 import { TerminalPanel } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext } from "../../components/okra/ResearchContext";
 
 type RealtimeViewRow = {
   raw: Record<string, unknown>;
@@ -79,6 +80,10 @@ export function RealtimePage({
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={realtime.dataContext} />
+      <TerminalPanel title="实时观察边界" meta="OBSERVATION ONLY" className="px-4 py-3">
+        <p className="text-sm leading-6 text-slate-400">代理行情和估算净值只用于研究观察、风险提示与图表，不单独构成正式模拟建议或组合变更依据。</p>
+      </TerminalPanel>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {realtime.metrics.map((metric) => (
           <MetricCard key={metric.title} {...metric} body={narrativeText(metric.body, "暂无说明")} value={narrativeText(metric.value, "暂无")} />
@@ -86,7 +91,7 @@ export function RealtimePage({
       </div>
 
       <section className="grid grid-cols-12 gap-4">
-        <TerminalPanel title="实时收益贡献" meta="按组合影响排序" className="col-span-12 p-0 xl:col-span-7">
+        <TerminalPanel title="观察收益贡献" meta="按组合影响排序" className="col-span-12 p-0 xl:col-span-7">
           <div className="h-64 p-3"><ContributionBars points={viewRows.slice(0, 10).map((item) => ({ name: item.code, value: item.pnl }))} /></div>
         </TerminalPanel>
         <TerminalPanel title="风险暴露" meta="权重 VS 异常分数" className="col-span-12 p-0 xl:col-span-5">
@@ -96,7 +101,7 @@ export function RealtimePage({
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-5 p-4">
-          <SectionTitle title="实时摘要" meta={realtime.meta} />
+          <SectionTitle title="观察摘要" meta={realtime.meta} />
           <ul className="space-y-2">
             {lines(realtime.summary_text).map((item) => (
               <li key={item} className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
@@ -107,14 +112,14 @@ export function RealtimePage({
         </Card>
 
         <Card className="col-span-7 p-4">
-          <SectionTitle title={`今日估值与收益（${viewRows.length} 只全量基金）`} meta="按涨跌幅绝对值排序；悬停可同时查看涨跌和金额" />
+          <SectionTitle title={`今日观察（${viewRows.length} 只全量基金）`} meta="按涨跌幅绝对值排序；悬停可同时查看涨跌和金额" />
           <RealtimeStripChart rows={viewRows} hovered={hovered} onHover={setHovered} />
         </Card>
       </section>
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-8 p-4">
-          <SectionTitle title="基金实时监控" meta="点击任意基金进入详情页" />
+          <SectionTitle title="基金观察监控" meta="点击任意基金进入详情页" />
           {viewRows.length ? (
             <div className="max-h-[72vh] overflow-auto rounded-md border border-slate-800">
               <table className="w-full text-sm">
@@ -158,7 +163,7 @@ export function RealtimePage({
               </table>
             </div>
           ) : (
-            <EmptyState title="暂无实时估值" body="点击左侧实时刷新后，会显示每只基金的估值、收益、异常分数和数据时效。" />
+            <EmptyState title="暂无实时观察" body="刷新行情后，会显示每只基金的代理观察、估算净值、异常分数和数据时效。" />
           )}
         </Card>
 

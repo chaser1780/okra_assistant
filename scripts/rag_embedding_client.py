@@ -12,7 +12,7 @@ import requests
 from common import load_llm_config, resolve_agent_home
 from multiagent_utils import resolve_api_key
 from rag_config import embedding_provider_settings, load_rag_config, rag_embedding_settings
-from rag_index_store import get_embedding_cache, mark_chunk_embedding, upsert_embedding_cache
+from rag_index_store import get_embedding_cache, get_embedding_vector, mark_chunk_embedding, upsert_embedding_cache, upsert_embedding_vector
 
 
 def text_sha256(text: str) -> str:
@@ -148,12 +148,13 @@ class RagEmbeddingClient:
         digest = text_sha256(text)
         cache_key = embedding_cache_key(self.model, digest)
         cached = get_embedding_cache(self.agent_home, cache_key)
-        if cached and cached.get("status") == "ok":
+        if cached and cached.get("status") == "ok" and get_embedding_vector(self.agent_home, str(cached.get("vector_ref") or "")):
             mark_chunk_embedding(self.agent_home, chunk_id, model=self.model, status="ok", embedding_sha256=digest)
             return {"status": "cached", "cache_key": cache_key, "chunk_id": chunk_id, "vector_ref": cached.get("vector_ref", "")}
         try:
             vector = self.embed_texts([text], dry_run=dry_run)[0]
             vector_ref = f"sqlite_mock:{cache_key}"
+            upsert_embedding_vector(self.agent_home, vector_ref, vector)
             upsert_embedding_cache(
                 self.agent_home,
                 {

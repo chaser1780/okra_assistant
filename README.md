@@ -1,6 +1,6 @@
 # OKRA Long-Memory Investment Workbench
 
-OKRA is a local-first personal fund research, review, long-memory, and real-position synchronization system. It is organized around two canonical product loops:
+OKRA is a local-first personal fund research, review, long-memory, user-simulation, and strategy-experiment system. It is organized around two canonical product loops:
 
 - `today_analysis`: run the full same-day research and advice chain for one trading day.
 - `long_memory`: promote validated observations into durable memory without contaminating unrelated learning domains.
@@ -9,13 +9,13 @@ OKRA is a local-first personal fund research, review, long-memory, and real-posi
 
 ## Current Capabilities
 
-- **React + Tauri desktop workbench** for Today, Portfolio, Actual Operations, Research, Realtime, Review/Memory, and System views.
+- **React + Tauri desktop workbench** for the Portfolio Research Terminal, user simulation, Research, Realtime Observation, Review/Memory, strategy experiments, and System views.
 - **Local Python API backend** in `app/web_api.py`, serving snapshot data, page-specific workbench payloads, execution sync APIs, fund detail APIs, and runtime task triggers.
 - **Canonical today-analysis route** in `scripts/run_today_analysis.py`, backed by `scripts/today_orchestrator.py`, with runtime state written into `db/daily_workspace/YYYY-MM-DD/`.
 - **Canonical committee research chain** that aggregates analyst outputs into `db/agent_outputs/<date>/aggregate.json`, then produces committee-oriented advice artifacts and validated advice.
 - **Validated advice flow** under `db/validated_advice/`, used as the trusted downstream source for review, reporting, and long-memory promotion.
-- **Actual operation and real-position sync** for manual buy/sell/conversion records and Alipay position screenshot reconciliation.
-- **Strict execution boundary**: real trades affect execution memory and real portfolio state, but do not relabel fund-profile learning, market-regime learning, or system advice win rate.
+- **Two simulation tracks**: user simulation follows manual actions, configured DCA, and screenshot-confirmed portfolio snapshots; strategy experiments hold independent hypothetical portfolios.
+- **Strict simulation boundary**: strategy experiments cannot mutate the user simulation portfolio; user operations and experiments carry separate memory provenance and do not relabel system advice quality.
 - **Local-first storage** under `db/`, `config/`, `reports/`, `logs/`, and related folders for auditability, replay, and backup.
 
 ## Product Loops
@@ -47,8 +47,8 @@ db/long_memory/
 Boundary rules:
 
 - `db/validated_advice/<date>.json` and review outputs can feed fund/profile and market learning.
-- `db/execution_sync/actual_trades/` can feed `execution_memory` only.
-- Real execution does not change whether the system's own advice was correct.
+- `db/execution_sync/actual_trades/` is a compatibility directory for `user_simulation` operations and can feed execution discipline only.
+- User simulation and strategy experiments do not change whether the system's own advice was correct.
 
 ### 2. Today Analysis Loop
 
@@ -61,7 +61,7 @@ python scripts/run_today_analysis.py --date YYYY-MM-DD
 What the canonical route does:
 
 1. Preflight checks for environment and data sources.
-2. Update pending real-trade confirmations.
+2. Refresh user-simulation status and materialize configured same-day simulated DCA when eligible.
 3. Refresh NAV, estimate, proxy, news, and portfolio context.
 4. Process due reviews for earlier system advice.
 5. Refresh long-memory context when eligible.
@@ -105,15 +105,14 @@ The current research/advice chain is:
 
 Operationally, downstream review, reporting, memory promotion, and the Today page should treat validated advice as the stable advice artifact, while the committee artifact remains the canonical trace of how the decision was formed.
 
-### 4. Actual Operations and Real-Position Sync
+### 4. User Simulation and Strategy Experiments
 
-The Actual Operations page maintains real portfolio state:
+The user-simulation track maintains the current simulated portfolio:
 
-- Manual `buy`, `sell`, and grouped `conversion` records.
-- Buy orders can remain pending before confirmation and do not immediately increase confirmed units.
-- Sell orders follow confirmation and settlement lifecycle rules.
-- Conversions are modeled as one grouped conversion order via a shared `conversion_id`, not unrelated buy/sell rows.
-- Alipay position screenshots are parsed into a preview first, then applied by user confirmation.
+- Manual `buy`, `sell`, grouped `conversion`, and configured DCA records apply immediately to `user_simulation` after explicit user action or configuration.
+- Screenshot imports remain preview-first and update the user-simulation portfolio only after confirmation.
+- Strategy experiments have separate hypothetical portfolios under `db/strategy_simulation/`; their actions never mutate `user_simulation`.
+- Every experiment-derived memory stores `sourceTrack=strategy_simulation`, `experimentId`, and `formalInfluence=false`.
 
 Main local storage:
 
@@ -200,7 +199,7 @@ Run realtime refresh:
 python ".\scripts\run_realtime_monitor.py"
 ```
 
-Record an actual trade:
+Record a user-simulation operation:
 
 ```powershell
 python ".\scripts\record_actual_trade.py" --help
@@ -220,12 +219,13 @@ python ".\scripts\update_pending_confirmations.py"
 
 ## Desktop Pages
 
-- **Today**: today-analysis result, validated advice, committee trace, key long memories, and runtime status.
-- **Portfolio**: real portfolio state, allocation, return metrics, and fund detail entry points.
-- **Actual Operations**: buy/sell/conversion records, screenshot import, preview reconciliation, and pending confirmations.
+- **Today**: portfolio research terminal with market facts, data freshness, research conclusions, risk, and simulation context.
+- **Portfolio**: user-simulation allocation, guarded performance metrics, risk and fund detail entry points.
+- **Simulation Execution**: user-simulation buy/sell/conversion records, configured DCA, screenshot import, and preview reconciliation.
 - **Research**: multi-agent and committee artifacts for the selected day.
-- **Realtime**: estimated NAV, daily return change, and intraday proxy views.
-- **Review / Memory**: review outcomes, long-memory candidates, approvals, and execution memory traces.
+- **Realtime**: observation-only estimated NAV, daily change, proxy views, freshness, and anomaly signals.
+- **Review / Memory**: review outcomes, long-memory candidates, approvals, and source-track provenance.
+- **Experiment Review**: read-only shadow artifacts plus interactive strategy-simulation portfolios.
 - **System**: data health, logs, task status, and current runtime metadata.
 - **Intelligence**: news, related items, sentiment, source health, and regulatory information for the selected date.
 
@@ -260,6 +260,9 @@ Operational APIs:
 - `POST /api/execution-sync/reconcile/preview`
 - `POST /api/execution-sync/reconcile/apply`
 - `POST /api/execution-sync/confirmation/update`
+- `GET /api/strategy-simulation`
+- `POST /api/strategy-simulation/experiment`
+- `POST /api/strategy-simulation/action`
 - `POST /api/long-memory/action`
 - `POST /api/copilot/explain`
 
@@ -302,7 +305,7 @@ Retention rules live in `config/retention.toml`. The cleanup script is dry-run b
 
 ## Privacy and Local-First Design
 
-- Portfolio state, trades, reviews, and long memory are stored locally by default.
-- Execution sync, screenshot reconciliation, and memory artifacts are written into repo-local storage.
+- Portfolio state, user-simulation operations, strategy experiments, reviews, and long memory are stored locally by default.
+- `execution_sync` is retained as a compatibility API/storage name; it does not connect to a broker or represent real trades.
 - Embeddings are optional and should be treated as a rebuildable index layer, not the source of truth.
-- Screenshot reconciliation remains preview-first and does not overwrite real positions until the user confirms.
+- Screenshot reconciliation remains preview-first and does not overwrite the user-simulation portfolio until the user confirms.

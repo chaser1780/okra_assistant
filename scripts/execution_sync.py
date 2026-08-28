@@ -14,6 +14,7 @@ from common import (
     actual_trade_dir,
     dump_json,
     ensure_layout,
+    is_trading_day,
     actual_trade_path,
     file_lock,
     load_json,
@@ -35,6 +36,7 @@ from portfolio_state import (
     upsert_execution_status,
 )
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
+from simulation_tracks import simulation_fields
 from update_portfolio_from_trade import apply_trade
 
 
@@ -392,6 +394,7 @@ def record_actual_trade(agent_home: Path, payload: dict[str, Any]) -> dict[str, 
 
 
 def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    simulation = simulation_fields(payload)
     operation = str(payload.get("operation_type") or payload.get("action") or "buy").strip()
     if operation == "planned_dca":
         operation = "dca"
@@ -422,7 +425,7 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "units": _units(payload.get("units")),
         "nav": _units(payload.get("nav")),
         "fee": _money(payload.get("fee")),
-        "status": str(payload.get("status") or "submitted"),
+        "status": simulation["simulation_status"] if simulation["is_simulation"] else str(payload.get("status") or "submitted"),
         "confirm_date": lifecycle["confirm_date"],
         "settlement_date": lifecycle["settlement_date"],
         "linked_suggestion_id": str(payload.get("linked_suggestion_id", "") or ""),
@@ -431,18 +434,27 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "created_at": timestamp_now(),
         "updated_at": timestamp_now(),
         "lifecycle": lifecycle,
+        **simulation,
     }
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
     existing = _existing_record_result(agent_home, item, result_key="trade")
     if existing is not None:
         return existing
+    if item.get("is_simulation") and item.get("simulation_status") == "simulated":
+        _validate_user_simulation_trade(agent_home, item)
     path = _append_actual_trade(agent_home, trade_date, item)
     persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("trade_id") != item["trade_id"]]
-    if item["status"] not in {"settled", "canceled", "failed"}:
+    if item["status"] not in {"settled", "canceled", "failed", "simulated"}:
         pending.append(persisted_item)
     _write_pending_confirmations(agent_home, pending)
+    if item.get("is_simulation") and item.get("simulation_status") == "simulated":
+        applied = apply_user_simulation_trade_to_portfolio(agent_home, persisted_item)
+        item["portfolio_applied_at"] = timestamp_now()
+        item["portfolio_simulation_event_path"] = applied.get("simulation_event_path", "")
+        _update_actual_trade_record(agent_home, item)
+        persisted_item = _with_source_path(agent_home, item, path)
     if item.get("linked_suggestion_id"):
         upsert_execution_status(
             agent_home,
@@ -469,6 +481,7 @@ def record_conversion(agent_home: Path, payload: dict[str, Any]) -> dict[str, An
 
 
 def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    simulation = simulation_fields(payload)
     trade_date = resolve_date(str(payload.get("trade_date") or payload.get("date") or "") or None)
     conversion_id = str(payload.get("conversion_id") or _new_id("conversion"))
     out_lifecycle = resolve_trade_lifecycle(
@@ -509,7 +522,7 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "out_confirm_date": out_lifecycle["confirm_date"],
         "in_confirm_date": in_lifecycle["confirm_date"],
         "settlement_date": in_lifecycle["settlement_date"],
-        "status": str(payload.get("status") or lifecycle_status(in_lifecycle, operation_type="convert_in")),
+        "status": simulation["simulation_status"] if simulation["is_simulation"] else str(payload.get("status") or lifecycle_status(in_lifecycle, operation_type="convert_in")),
         "linked_suggestion_id": str(payload.get("linked_suggestion_id", "") or ""),
         "linked_advice_date": str(payload.get("linked_advice_date", "") or trade_date),
         "user_note": str(payload.get("user_note", "") or payload.get("note", "") or ""),
@@ -517,17 +530,26 @@ def _record_conversion_unlocked(agent_home: Path, payload: dict[str, Any]) -> di
         "updated_at": timestamp_now(),
         "lifecycle": {"out": out_lifecycle, "in": in_lifecycle},
         "execution_deviation": {"type": "conversion_substitute", "label": "转换替代执行", "affects_advice_accuracy": False},
+        **simulation,
     }
     existing = _existing_record_result(agent_home, item, result_key="conversion")
     if existing is not None:
         return existing
+    if item.get("is_simulation") and item.get("simulation_status") == "simulated":
+        _validate_user_simulation_trade(agent_home, item)
     path = _append_actual_trade(agent_home, trade_date, item)
     persisted_item = _with_source_path(agent_home, item, path)
     pending = load_pending_confirmations(agent_home).get("items", []) or []
     pending = [entry for entry in pending if entry.get("conversion_id") != conversion_id]
-    if item["status"] not in {"settled", "canceled", "failed"}:
+    if item["status"] not in {"settled", "canceled", "failed", "simulated"}:
         pending.append(persisted_item)
     _write_pending_confirmations(agent_home, pending)
+    if item.get("is_simulation") and item.get("simulation_status") == "simulated":
+        applied = apply_user_simulation_trade_to_portfolio(agent_home, persisted_item)
+        item["portfolio_applied_at"] = timestamp_now()
+        item["portfolio_simulation_event_path"] = applied.get("simulation_event_path", "")
+        _update_actual_trade_record(agent_home, item)
+        persisted_item = _with_source_path(agent_home, item, path)
     return {"ok": True, "conversion": persisted_item, "path": project_relative_path(agent_home, path)}
 
 
@@ -545,6 +567,12 @@ def _update_pending_confirmations_unlocked(agent_home: Path, as_of: str | None =
     apply_errors: list[dict[str, Any]] = []
     for item in pending:
         entry = dict(item)
+        if entry.get("is_simulation"):
+            entry["status"] = str(entry.get("simulation_status") or entry.get("status") or "planned")
+            entry["updated_at"] = timestamp_now()
+            _update_actual_trade_record(agent_home, entry)
+            updated.append(entry)
+            continue
         if entry.get("operation_type") == "convert":
             status = lifecycle_status((entry.get("lifecycle", {}) or {}).get("in", {}), as_of_date, operation_type="convert_in")
         else:
@@ -1089,7 +1117,8 @@ def parse_alipay_screenshot_upload(agent_home: Path, payload: dict[str, Any]) ->
 
 def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     pending = load_pending_confirmations(agent_home)
-    trades = load_actual_trades(agent_home, limit=120)
+    trades = [{**item, **simulation_fields(item)} for item in load_actual_trades(agent_home, limit=120)]
+    pending_items = [{**item, **simulation_fields(item)} for item in pending.get("items", []) or []]
     reports = []
     report_dir = execution_sync_dir(agent_home) / "reconciliation_reports"
     if report_dir.exists():
@@ -1098,12 +1127,12 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     deviations = [item for item in trades if (item.get("execution_deviation") or {}).get("type") not in {"", "matched", None}]
     return {
         "updatedAt": timestamp_now(),
-        "pending": pending.get("items", []),
+        "pending": pending_items,
         "trades": trades,
         "deviations": deviations[:80],
         "reconciliationReports": reports,
         "counts": {
-            "pending": len(pending.get("items", []) or []),
+            "pending": len(pending_items),
             "trades": len(trades),
             "deviations": len(deviations),
             "reports": len(reports),
@@ -1111,9 +1140,116 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
     }
 
 
+def sync_configured_simulated_dca(agent_home: Path, report_date: str | None = None) -> dict[str, Any]:
+    """Materialize configured DCA as an idempotent user-simulation operation."""
+    as_of = resolve_date(report_date)
+    if not is_trading_day(agent_home, as_of):
+        return {"asOfDate": as_of, "status": "skipped", "reason": "not_trading_day", "created": [], "skipped": []}
+    portfolio = load_portfolio(agent_home)
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for fund in portfolio.get("funds", []) or []:
+        try:
+            amount = round(float(fund.get("fixed_daily_buy_amount", 0) or 0), 2)
+        except (TypeError, ValueError):
+            amount = 0.0
+        code = str(fund.get("fund_code", "") or "")
+        if amount <= 0 or not code:
+            continue
+        if fund.get("allow_trade") is False:
+            skipped.append({"fundCode": code, "reason": "trade_disabled"})
+            continue
+        trade_id = f"configured_dca_{as_of}_{code}"
+        try:
+            result = record_actual_trade(
+                agent_home,
+                {
+                    "trade_id": trade_id,
+                    "trade_date": as_of,
+                    "fund_code": code,
+                    "fund_name": str(fund.get("fund_name", "") or ""),
+                    "operation_type": "dca",
+                    "amount": amount,
+                    "source": "configured_dca",
+                    "platform": "local_simulation",
+                    "simulation_track": "user_simulation",
+                    "simulation_status": "simulated",
+                    "linked_advice_date": as_of,
+                    "user_note": "按固定定投配置自动生成的模拟操作。",
+                },
+            )
+            created.append({"fundCode": code, "amount": amount, "idempotentReplay": bool(result.get("idempotent_replay")), "tradeId": trade_id})
+        except RuntimeError as exc:
+            skipped.append({"fundCode": code, "reason": str(exc)})
+    return {"asOfDate": as_of, "status": "ok", "created": created, "skipped": skipped}
+
+
 def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:
     with file_lock(lock_path(agent_home, "portfolio_state")):
         return _apply_settled_trade_to_portfolio_unlocked(agent_home, trade)
+
+
+def _apply_operation_to_portfolio(portfolio: dict[str, Any], trade: dict[str, Any]) -> dict[str, Any]:
+    operation = str(trade.get("operation_type", ""))
+    if operation == "convert":
+        portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", _money(trade.get("out_amount")), trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"))
+        return apply_trade(portfolio, str(trade.get("in_fund_code", "")), "switch_in", _money(trade.get("in_amount")), trade_nav=trade.get("in_nav"), trade_units=trade.get("in_units"))
+    if operation in {"buy", "dca"}:
+        return apply_trade(portfolio, str(trade.get("fund_code", "")), "buy", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
+    if operation == "sell":
+        return apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
+    raise RuntimeError(f"operation {operation} does not update a simulation portfolio")
+
+
+def _validate_user_simulation_trade(agent_home: Path, trade: dict[str, Any]) -> None:
+    _apply_operation_to_portfolio(deepcopy(load_portfolio(agent_home)), trade)
+
+
+def apply_user_simulation_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:
+    """Apply an explicit user simulation action, never a strategy experiment."""
+    if not trade.get("is_simulation") or str(trade.get("simulation_track") or "") != "user_simulation":
+        raise ValueError("only explicit user_simulation actions may update the user simulation portfolio")
+    with file_lock(lock_path(agent_home, "portfolio_state")):
+        simulation_id = f"user_simulation:{settlement_idempotency_key(trade)}"
+        event_path = portfolio_state_event_path(agent_home, str(trade.get("trade_date") or resolve_date()), "user_simulation_manual", simulation_id)
+        portfolio = load_portfolio(agent_home)
+        metadata = portfolio.get("state_metadata", {}) or {}
+        applied_ids = {str(value) for value in metadata.get("applied_user_simulation_ids", []) or []}
+        if simulation_id in applied_ids or event_path.exists():
+            return {"ok": True, "skipped": True, "reason": "simulation_already_applied", "simulation_event_path": project_relative_path(agent_home, event_path)}
+        before_hash = portfolio_state_hash(portfolio)
+        portfolio = _apply_operation_to_portfolio(portfolio, trade)
+        portfolio.setdefault("state_metadata", {})["applied_user_simulation_ids"] = sorted(applied_ids | {simulation_id})
+        after_hash = portfolio_state_hash(portfolio)
+        current_path, snapshot_path = _save_portfolio_state_unlocked(
+            agent_home,
+            portfolio,
+            source="user_simulation_manual",
+            event_date=str(trade.get("trade_date") or resolve_date()),
+            event_type="user_simulation_manual",
+            event_id=simulation_id,
+            source_path=str(trade.get("source_path", "")),
+            extra_meta={
+                "simulation_id": simulation_id,
+                "before_state_hash": before_hash,
+                "after_state_hash": after_hash,
+                "simulation_track": "user_simulation",
+            },
+        )
+        dump_json(
+            event_path,
+            {
+                "event_type": "user_simulation_manual",
+                "simulation_id": simulation_id,
+                "trade_id": trade.get("trade_id", ""),
+                "before_state_hash": before_hash,
+                "after_state_hash": after_hash,
+                "current_path": project_relative_path(agent_home, current_path),
+                "snapshot_path": project_relative_path(agent_home, snapshot_path),
+                "created_at": timestamp_now(),
+            },
+        )
+        return {"ok": True, "simulation_event_path": project_relative_path(agent_home, event_path), "current_path": project_relative_path(agent_home, current_path), "snapshot_path": project_relative_path(agent_home, snapshot_path)}
 
 
 def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str, Any]) -> dict[str, Any]:

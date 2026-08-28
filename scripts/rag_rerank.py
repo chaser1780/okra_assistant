@@ -73,7 +73,7 @@ def _confidence(hit: dict[str, Any]) -> float:
         return 0.5
 
 
-def rerank_hits(hits: list[dict[str, Any]], plan: RagQueryPlan) -> list[dict[str, Any]]:
+def rerank_hits(hits: list[dict[str, Any]], plan: RagQueryPlan, *, semantic_weight: float = 0.0) -> list[dict[str, Any]]:
     scored: list[dict[str, Any]] = []
     seen_sources: set[str] = set()
     for hit in hits:
@@ -88,8 +88,10 @@ def rerank_hits(hits: list[dict[str, Any]], plan: RagQueryPlan) -> list[dict[str
         diversity_score = 0.2 if source_key in seen_sources else 1.0
         seen_sources.add(source_key)
         penalty = 0.25 if hit.get("visibility") == "review_only" and not plan.include_negative_memory else 0.0
+        normalized_semantic_weight = max(0.0, min(0.35, float(semantic_weight or 0.0))) if hit.get("semantic_score") is not None else 0.0
+        lexical_weight = 0.45 - normalized_semantic_weight
         final = (
-            base_score * 0.45
+            base_score * lexical_weight
             + source_score * 0.18
             + date_score * 0.14
             + entity_score * 0.12
@@ -98,10 +100,13 @@ def rerank_hits(hits: list[dict[str, Any]], plan: RagQueryPlan) -> list[dict[str
             + diversity_score * 0.02
             - penalty
         )
+        if normalized_semantic_weight:
+            final += float(hit.get("semantic_score", 0.0) or 0.0) * normalized_semantic_weight
         updated = dict(hit)
         updated["score"] = round(final, 6)
         updated["score_breakdown"] = {
             "text": round(base_score, 4),
+            "semantic": round(float(hit.get("semantic_score", 0.0) or 0.0), 4),
             "source_tier": round(source_score, 4),
             "date_fit": round(date_score, 4),
             "entity_match": round(entity_score, 4),

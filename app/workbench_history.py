@@ -288,6 +288,19 @@ def collect_portfolio_history(home: Path, range_label: str = "成立以来", end
     }
 
 
+def collect_portfolio_snapshots(home: Path, end_date: str | None = None) -> list[dict]:
+    rows: list[dict] = []
+    for path in sorted((home / "db" / "portfolio_state" / "snapshots").glob("*.json")):
+        payload = read_json(path, {})
+        if not isinstance(payload, dict):
+            continue
+        date_text = path.stem[:10]
+        if end_date and date_text > end_date[:10]:
+            continue
+        rows.append({"date": date_text, **payload})
+    return rows
+
+
 def collect_holding_history(home: Path, fund_code: str, range_label: str = "成立以来") -> dict:
     value_points: list[SeriesPoint] = []
     pnl_points: list[SeriesPoint] = []

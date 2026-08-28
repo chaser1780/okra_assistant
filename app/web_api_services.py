@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from common import is_trading_day, timestamp_now
+from data_contracts import build_data_context, normalize_evidence_refs
 from execution_sync import (
     apply_saved_reconciliation,
     build_execution_sync_payload,
@@ -22,7 +23,8 @@ from execution_sync import (
     record_conversion,
     update_pending_confirmations,
 )
-from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_records
+from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_events, list_memory_records
+from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, user_simulation_fields
 from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
 from ui_tasks import build_portfolio_alignment_command, desktop_log_path, portfolio_alignment_target_date, should_align_portfolio_on_boot
@@ -39,6 +41,7 @@ from workbench_history import (
     collect_estimate_history,
     collect_holding_history,
     collect_portfolio_history,
+    collect_portfolio_snapshots,
     collect_proxy_history,
     collect_quote_history,
     collect_trade_markers,
@@ -49,6 +52,8 @@ from workbench_history import (
     stage_return,
 )
 from workbench_state import WorkbenchStateService
+from performance_metrics import calculate_portfolio_performance
+from risk_breakdown import build_risk_breakdowns
 
 
 def _coerce_task_date(value: Any) -> str:
@@ -186,6 +191,19 @@ def _source_health_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _with_memory_effective_status(records: list[dict[str, Any]], reference_date: str) -> list[dict[str, Any]]:
+    target_date = str(reference_date or "")[:10]
+    result = []
+    for record in records:
+        item = dict(record)
+        valid_until = str(item.get("valid_until") or "")[:10]
+        expired = bool(target_date and valid_until and valid_until < target_date)
+        item["isExpired"] = expired
+        item["effectiveStatus"] = "expired" if expired else str(item.get("status") or "candidate")
+        result.append(item)
+    return result
+
+
 def _rank_news_items(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     def sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
         risk_rank = {"high": 3, "medium": 2, "low": 1}.get(str(item.get("risk_level", "") or ""), 0)
@@ -317,10 +335,13 @@ class ExecutionController:
         self.home = home
 
     def execution_sync_payload(self) -> dict[str, Any]:
-        return _to_jsonable(build_execution_sync_payload(self.home))
+        payload = _to_jsonable(build_execution_sync_payload(self.home))
+        payload["simulation"] = build_simulation_payload(self.home)
+        return payload
 
     def execution_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution trade")
+        simulation = user_simulation_fields(payload)
         if not str(payload.get("fund_code", "") or "").strip():
             raise ValueError("fund_code is required")
         operation_type = str(payload.get("operation_type", "") or "").strip().lower()
@@ -328,10 +349,11 @@ class ExecutionController:
             raise ValueError("operation_type must be buy, sell, add, reduce, fee, dividend, or cancel")
         if operation_type in {"buy", "sell", "add", "reduce"} and not _positive_number(payload, "amount", "units"):
             raise ValueError("amount or units must be greater than 0")
-        return _to_jsonable(record_actual_trade(self.home, payload))
+        return _to_jsonable(record_actual_trade(self.home, {**payload, **simulation, "platform": "local_simulation"}))
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution conversion")
+        simulation = user_simulation_fields(payload)
         out_code = str(payload.get("out_fund_code", "") or "").strip()
         in_code = str(payload.get("in_fund_code", "") or "").strip()
         if not out_code or not in_code:
@@ -340,7 +362,7 @@ class ExecutionController:
             raise ValueError("conversion source and target funds must be different")
         if not _positive_number(payload, "out_amount", "out_units"):
             raise ValueError("out_amount or out_units must be greater than 0")
-        return _to_jsonable(record_conversion(self.home, payload))
+        return _to_jsonable(record_conversion(self.home, {**payload, **simulation, "platform": "local_simulation"}))
 
     def execution_screenshot_parse(self, payload: dict[str, Any]) -> dict[str, Any]:
         return _to_jsonable(parse_alipay_screenshot_upload(self.home, payload))
@@ -405,16 +427,23 @@ class PageService:
     def dates(self) -> dict[str, Any]:
         return {"dates": collect_dates(self.home), "today": today_str()}
 
-    def long_memory_payload(self) -> dict[str, Any]:
-        records = list_memory_records(self.home, limit=1000)
+    def long_memory_payload(self, reference_date: str = "") -> dict[str, Any]:
+        records = _with_memory_effective_status(list_memory_records(self.home, limit=1000), reference_date)
         grouped = {
             "fund": [item for item in records if item.get("domain") == "fund"],
             "market": [item for item in records if item.get("domain") == "market"],
             "execution": [item for item in records if item.get("domain") == "execution"],
             "portfolio": [item for item in records if item.get("domain") == "portfolio"],
         }
-        pending = [item for item in records if item.get("status") == "strategic" and can_promote_to_permanent(item)]
+        pending = [item for item in records if item.get("status") in {"strategic", "validated_strategy"} and can_promote_to_permanent(item)]
         counts = {key: len(value) for key, value in grouped.items()}
+        status_counts: dict[str, int] = {}
+        track_counts: dict[str, int] = {}
+        for item in records:
+            status = str(item.get("status") or "candidate")
+            track = str((item.get("metadata") or {}).get("sourceTrack") or "user_simulation")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            track_counts[track] = track_counts.get(track, 0) + 1
         counts.update({"pending": len(pending), "total": len(records)})
         return {
             "updatedAt": timestamp_now(),
@@ -425,15 +454,112 @@ class PageService:
             "execution": _to_jsonable(grouped["execution"]),
             "portfolio": _to_jsonable(grouped["portfolio"]),
             "counts": counts,
+            "lifecycle": {"statusCounts": status_counts, "trackCounts": track_counts},
+            "recentEvents": _to_jsonable(list_memory_events(self.home, limit=40)),
         }
 
-    def fund_long_memory_payload(self, fund_code: str) -> dict[str, Any]:
-        fund_records = list_memory_records(self.home, domain="fund", entity_key=fund_code, limit=80)
-        execution_records = list_memory_records(self.home, domain="execution", limit=80)
+    def review_quality_payload(
+        self,
+        state: dict[str, Any],
+        reference_date: str,
+        long_memory: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read-only quality metrics with explicit data sufficiency boundaries."""
+        outcome_events = self._outcome_events(reference_date)
+        scored = [event for event in outcome_events if str(event.get("scoring_status") or "") == "scored"]
+        positive = [event for event in scored if str(event.get("outcome_label") or "") in {"helped", "avoided_loss"}]
+        adverse = [event for event in scored if str(event.get("outcome_label") or "") in {"hurt", "missed_opportunity"}]
+        neutral = [event for event in scored if str(event.get("outcome_label") or "") == "neutral"]
+        directional_count = len(positive) + len(adverse)
+
+        trace = self.read_json_file(self.home / "db" / "decision_traces" / f"{reference_date}.json")
+        decisions = [item for item in trace.get("decisions", []) or [] if isinstance(item, dict)]
+        abstentions = [item for item in decisions if str(item.get("abstentionReason") or "").strip()]
+
+        portfolio = self.portfolio_payload(state)
+        performance = portfolio.get("performanceMetrics", {}) if isinstance(portfolio.get("performanceMetrics"), dict) else {}
+        execution = self.execution_controller.execution_sync_payload()
+        trades = [
+            item
+            for item in execution.get("trades", []) or []
+            if isinstance(item, dict) and item.get("is_simulation") and str(item.get("simulation_track") or "") == USER_SIMULATION_TRACK
+        ]
+        simulated_notional = sum(_safe_float(item.get("out_amount") if str(item.get("operation_type") or "") == "convert" else item.get("amount")) for item in trades)
+        simulated_fees = sum(_safe_float(item.get("fee")) for item in trades)
+        total_value = _safe_float(portfolio.get("totalValue"))
+
+        records = [item for item in long_memory.get("records", []) or [] if isinstance(item, dict)]
+        duplicate_keys: dict[tuple[str, str, str], int] = {}
+        for record in records:
+            key = (
+                str(record.get("domain") or ""),
+                str(record.get("entity_key") or ""),
+                " ".join(str(record.get("title") or "").lower().split()),
+            )
+            duplicate_keys[key] = duplicate_keys.get(key, 0) + 1
+        duplicate_count = sum(count - 1 for count in duplicate_keys.values() if count > 1)
+        contradiction_total = sum(int(record.get("contradiction_count") or 0) for record in records)
+        expired_count = sum(1 for record in records if record.get("isExpired"))
+
+        return {
+            "adviceQuality": {
+                "scoredEventCount": len(scored),
+                "directionalEventCount": directional_count,
+                "supportedCount": len(positive),
+                "adverseCount": len(adverse),
+                "neutralCount": len(neutral),
+                "directionalAccuracyPct": round(len(positive) / directional_count * 100, 2) if directional_count else None,
+                "confidenceCalibration": {
+                    "available": False,
+                    "reason": "当前复盘事件未保留与单条建议置信度的一一对应关系，暂不计算校准误差。",
+                },
+                "abstention": {
+                    "count": len(abstentions),
+                    "decisionCount": len(decisions),
+                    "ratePct": round(len(abstentions) / len(decisions) * 100, 2) if decisions else None,
+                    "reason": "仅统计带有明确弃答原因的正式建议记录。",
+                },
+            },
+            "simulationQuality": {
+                "track": USER_SIMULATION_TRACK,
+                "operationCount": len(trades),
+                "turnoverAmount": round(simulated_notional, 2),
+                "turnoverPct": round(simulated_notional / total_value * 100, 2) if total_value else None,
+                "costAmount": round(simulated_fees, 2),
+                "twr": performance.get("twr", {}),
+                "mwr": performance.get("mwr", {}),
+                "cashflowAdjustedDrawdown": performance.get("cashflowAdjustedDrawdown", {}),
+                "benchmark": portfolio.get("benchmark", {"status": "not_configured"}),
+            },
+            "memoryQuality": {
+                "recordCount": len(records),
+                "expiredCount": expired_count,
+                "duplicateCount": duplicate_count,
+                "contradictionCount": contradiction_total,
+                "sourceTrackCounts": dict((long_memory.get("lifecycle") or {}).get("trackCounts") or {}),
+                "statusCounts": dict((long_memory.get("lifecycle") or {}).get("statusCounts") or {}),
+            },
+        }
+
+    def _outcome_events(self, reference_date: str) -> list[dict[str, Any]]:
+        root = self.home / "db" / "outcome_events"
+        if not root.exists() or not reference_date:
+            return []
+        rows: list[dict[str, Any]] = []
+        for path in sorted(root.glob(f"{reference_date}__*.json")):
+            payload = self.read_json_file(path)
+            for item in payload.get("events", []) or []:
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows
+
+    def fund_long_memory_payload(self, fund_code: str, reference_date: str = "") -> dict[str, Any]:
+        fund_records = _with_memory_effective_status(list_memory_records(self.home, domain="fund", entity_key=fund_code, limit=80), reference_date)
+        execution_records = _with_memory_effective_status(list_memory_records(self.home, domain="execution", limit=80), reference_date)
         portfolio_rules = [
             item
-            for item in list_memory_records(self.home, domain="portfolio", limit=120)
-            if item.get("status") in {"strategic", "permanent"}
+            for item in _with_memory_effective_status(list_memory_records(self.home, domain="portfolio", limit=120), reference_date)
+            if item.get("status") in {"strategic", "validated_strategy", "permanent"}
         ]
         return {"fund": _to_jsonable(fund_records), "execution": _to_jsonable(execution_records[:12]), "rules": _to_jsonable(portfolio_rules[:12])}
 
@@ -442,6 +568,7 @@ class PageService:
         selected = str(state.get("selected_date", "") or today_str())
         news_payload = self.read_json_file(self.home / "raw" / "news" / f"{selected}.json")
         news_items = _with_news_ids(list(news_payload.get("items", []) or []))
+        events = list(news_payload.get("events", []) or [])
         source_health = state.get("source_health", {}) or {}
         source_health_items = list(source_health.get("items", []) or llm_context.get("source_health_summary", []) or news_payload.get("source_health", []) or [])
         news_digest = llm_context.get("news_digest", {}) or {}
@@ -492,6 +619,10 @@ class PageService:
             "related_news_by_fund": _related_news_by_fund(news_items, limit_per_fund=6),
             "source_breakdown": news_digest.get("source_breakdown") or _count_by(news_items, "provider"),
             "event_risks": event_risks,
+            "events": events,
+            "eventSummary": news_payload.get("event_summary", {}) or {},
+            "evidenceRefs": normalize_evidence_refs(important_news + event_risks),
+            "dataContext": self.data_context(state),
             "generated_at": news_payload.get("generated_at") or llm_context.get("generated_at") or "",
         }
 
@@ -511,9 +642,9 @@ class PageService:
             "portfolio": self.portfolio_payload(state),
             "research": _to_jsonable(research),
             "intelligence": self.intelligence_payload(state),
-            "realtime": _to_jsonable(realtime),
+            "realtime": self.realtime_payload(state, realtime=_to_jsonable(realtime)),
             "review": _to_jsonable(review),
-            "longMemory": self.long_memory_payload(),
+            "longMemory": self.long_memory_payload(snapshot.selected_date),
             "executionSync": self.execution_controller.execution_sync_payload(),
             "todayAnalysis": today_analysis,
             "dailyFirstOpen": _to_jsonable(today_analysis),
@@ -563,6 +694,9 @@ class PageService:
         planned_dca_markers = self._planned_dca_markers(fund_code, portfolio_item or {}, snapshot.dates, range_label)
         planned_dca_markers = [item for item in planned_dca_markers if str(item.get("date", ""))[:10] <= end_date]
         decision_markers = _decision_markers(research_item, _markers(trade_markers) + planned_dca_markers, end_date)
+        from strategy_simulation import list_fund_experiment_results
+
+        strategy_experiments = list_fund_experiment_results(self.home, fund_code)
         fund_name = (
             (portfolio_item or {}).get("fundName")
             or (realtime_item or {}).get("fund_name")
@@ -607,7 +741,10 @@ class PageService:
                 "benchmarkStatus": benchmark_status,
             },
             "tradeMarkers": sorted(_markers(trade_markers) + planned_dca_markers, key=lambda item: item.get("date", "")),
-            "longMemory": self.fund_long_memory_payload(fund_code),
+            "strategyExperiments": strategy_experiments,
+            "longMemory": self.fund_long_memory_payload(fund_code, snapshot.selected_date),
+            "dataContext": self.data_context(state),
+            "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "system": system_payload(state),
         }
 
@@ -711,6 +848,7 @@ class PageService:
         drawdown_points = drawdown_series(total_points)
         style_history = allocation_history(self.home, "style_group", "成立以来", end_date=history_end_date)
         role_history = allocation_history(self.home, "role", "成立以来", end_date=history_end_date)
+        performance_metrics = calculate_portfolio_performance(collect_portfolio_snapshots(self.home, end_date=history_end_date))
         realtime = state.get("live_realtime", {}) or state.get("realtime", {}) or {}
         realtime_map = {str(item.get("fund_code") or ""): item for item in realtime.get("items", []) or []}
         risk_scatter = []
@@ -729,6 +867,17 @@ class PageService:
                     "styleGroup": item.get("styleGroup") or "未归类",
                 }
             )
+        selected_realtime = state.get("realtime", {}) or realtime
+        context_funds = list((state.get("llm_context", {}) or {}).get("funds", []) or [])
+        execution_payload = build_execution_sync_payload(self.home)
+        risk_breakdown, risk_summary = build_risk_breakdowns(
+            self.home,
+            selected_date=str(state.get("selected_date") or history_end_date or ""),
+            portfolio_items=items,
+            realtime_items=list(selected_realtime.get("items", []) or []),
+            context_funds=context_funds,
+            pending_simulation_actions=list(execution_payload.get("pending", []) or []),
+        )
         top_style_weight = max((float(row.get("weight") or 0) for row in self.group_items(items, "styleGroup", total_value)), default=0.0)
         top_holding_weight = max(
             ((float(item.get("weight") or 0) * 100.0 if abs(float(item.get("weight") or 0)) <= 1 else float(item.get("weight") or 0)) for item in items),
@@ -737,6 +886,7 @@ class PageService:
         current_drawdown = drawdown_points[-1].value if drawdown_points else None
         max_drawdown = min((point.value for point in drawdown_points), default=None)
         cash_weight = float(cash or 0) / float(total_value or 1) * 100.0 if total_value else None
+        data_context = self.data_context(state)
         return {
             "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             "totalValue": total_value,
@@ -768,9 +918,32 @@ class PageService:
                 "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             },
             "riskScatter": risk_scatter,
+            "riskBreakdown": risk_breakdown,
+            "riskSummary": risk_summary,
             "benchmark": {"status": "not_configured", "normalized": [], "excessReturnPct": []},
+            "performanceMetrics": performance_metrics,
+            "dataContext": data_context,
+            "simulation": build_simulation_payload(self.home, portfolio=portfolio),
             "items": items,
         }
+
+    def data_context(self, state: dict[str, Any]) -> dict[str, Any]:
+        realtime = state.get("live_realtime", {}) or state.get("realtime", {}) or {}
+        realtime_date = str(state.get("live_realtime_date") or state.get("realtime_date") or "")
+        return build_data_context(
+            selected_date=str(state.get("selected_date") or today_str()),
+            portfolio=state.get("portfolio", {}) or {},
+            realtime=realtime,
+            portfolio_as_of_date=str(state.get("portfolio_date") or ""),
+            realtime_as_of_date=realtime_date,
+            decision=state.get("today_analysis_decision", {}) or state.get("validated", {}) or {},
+        )
+
+    def realtime_payload(self, state: dict[str, Any], *, realtime: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = dict(realtime or {})
+        payload["dataContext"] = self.data_context(state)
+        payload["observationOnly"] = True
+        return payload
 
     def read_json_file(self, path: Path) -> dict[str, Any]:
         if not path.exists():
@@ -842,6 +1015,13 @@ class PageService:
         memory_cycle = workspace / "memory_cycle.json"
         today_analysis_runtime = workspace / "today_analysis_runtime.json"
         long_memory_runtime = workspace / "long_memory_runtime.json"
+        news_payload = self.read_json_file(self.home / "raw" / "news" / f"{selected}.json")
+        source_health_payload = state.get("source_health", {}) or {}
+        if not list(source_health_payload.get("items", []) or []):
+            source_health_payload = {
+                "items": list(news_payload.get("source_health", []) or []),
+                "summary": _source_health_summary(list(news_payload.get("source_health", []) or [])),
+            }
         today_decision_payload = state.get("today_analysis_decision", {}) or self.read_json_file(today_decision)
         today_analysis_payload = state.get("today_analysis", {}) or self.read_json_file(today_analysis)
         today_analysis_meta_payload = state.get("today_analysis_meta", {}) or self.read_json_file(today_analysis_meta)
@@ -885,8 +1065,11 @@ class PageService:
             "runTime": self.time_label(generated_at),
             "memoryCycleSummary": memory_cycle_payload.get("summary", {}) if isinstance(memory_cycle_payload, dict) else {},
         }
+        from model_run_store import list_model_runs
+
+        decision_trace_payload = self.read_json_file(self.home / "db" / "decision_traces" / f"{selected}.json")
         return {
-            "sourceHealth": state.get("source_health", {}) or {},
+            "sourceHealth": source_health_payload,
             "preflightStatus": (state.get("summary", {}) or {}).get("preflight_status", ""),
             "settings": state.get("settings", {}) or {},
             "llmRuntime": {
@@ -908,6 +1091,9 @@ class PageService:
                 "committeeReady": aggregate.get("committee_ready", False),
                 "workflowTrace": aggregate.get("workflow_trace", {}),
             },
+            "modelRuns": list_model_runs(self.home, selected, limit=12),
+            "decisionTrace": decision_trace_payload,
+            "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
             "ragRuntime": self.rag_runtime_payload(full=include_full_rag),
@@ -942,6 +1128,7 @@ class PageService:
                 "agentDefault": settings.get("agent_default", {}) or {},
                 "profileEvidence": settings.get("profile_evidence", {}) or {},
                 "embedding": settings.get("embedding", {}) or {},
+                "hybrid": settings.get("hybrid", {}) or {},
                 "vectorStore": settings.get("vector_store", {}) or {},
                 "dbPath": str(db_path),
                 "dbExists": db_path.exists(),
@@ -974,6 +1161,7 @@ class PageService:
             "agentDefault": {},
             "profileEvidence": {},
             "embedding": {},
+            "hybrid": {},
             "vectorStore": {},
             "latestEval": {},
             "latestTraces": [],

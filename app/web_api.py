@@ -43,6 +43,8 @@ from api_contracts import (
     RagSearchRequestDto,
     RunTaskRequestDto,
     ShadowReviewPageDto,
+    StrategySimulationActionRequestDto,
+    StrategySimulationExperimentRequestDto,
     coerce_model,
     model_dump_compat,
 )
@@ -324,7 +326,7 @@ class OkraWebApi:
             research=research,
         )
         payload["portfolio"] = self.page_service.portfolio_payload(snapshot.state)
-        payload["longMemory"] = self.page_service.long_memory_payload()
+        payload["longMemory"] = self.page_service.long_memory_payload(snapshot.selected_date)
         payload["system"] = self.page_service.system_payload(snapshot.state, include_full_rag=False)
         return payload
 
@@ -362,15 +364,21 @@ class OkraWebApi:
         snapshot = self.state_service.load_snapshot(selected)
         return self.state_service.build_realtime_page_dto(
             snapshot,
-            realtime=_to_jsonable(self.state_service.build_realtime_view_model(snapshot)),
+            realtime=self.page_service.realtime_payload(
+                snapshot.state,
+                realtime=_to_jsonable(self.state_service.build_realtime_view_model(snapshot)),
+            ),
         )
 
     def review_page(self, selected: str | None = None) -> dict:
         snapshot = self.state_service.load_snapshot(selected)
+        long_memory = self.page_service.long_memory_payload(snapshot.selected_date)
+        review = _to_jsonable(self.state_service.build_review_view_model(snapshot))
+        review["quality"] = self.page_service.review_quality_payload(snapshot.state, snapshot.selected_date, long_memory)
         return self.state_service.build_review_page_dto(
             snapshot,
-            review=_to_jsonable(self.state_service.build_review_view_model(snapshot)),
-            long_memory=self.page_service.long_memory_payload(),
+            review=review,
+            long_memory=long_memory,
         )
 
     def shadow_review_page(self, selected: str | None = None) -> dict:
@@ -428,6 +436,21 @@ class OkraWebApi:
 
     def execution_confirmation_update(self, payload: dict) -> dict:
         return self.execution_controller.execution_confirmation_update(payload)
+
+    def strategy_simulation(self) -> dict:
+        from strategy_simulation import list_experiments
+
+        return {"simulationOnly": True, "formalTrack": "user_simulation", "experiments": list_experiments(self.home)}
+
+    def strategy_simulation_create(self, payload: dict) -> dict:
+        from strategy_simulation import create_experiment
+
+        return create_experiment(self.home, payload)
+
+    def strategy_simulation_action(self, payload: dict) -> dict:
+        from strategy_simulation import record_action
+
+        return record_action(self.home, payload)
 
     def open_url(self, payload: dict) -> dict:
         url = str(payload.get("url", "") or "").strip()
@@ -799,6 +822,9 @@ def _copilot_is_context_followup(text: str) -> bool:
 
 
 def _copilot_should_use_rag(payload: dict, *, question: str, messages: list[dict[str, str]], page: str, fund_code: str) -> bool:
+    explicit_intent = str(payload.get("intent", "") or "").strip()
+    if explicit_intent in {"general_chat", "page_explain", "fund_explain", "decision_explain", "risk_review", "execution_review", "memory_review"}:
+        return explicit_intent != "general_chat"
     if isinstance(payload.get("useRag"), bool):
         return bool(payload["useRag"])
     current_text = question.lower()
@@ -1140,6 +1166,8 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.fund_detail(fund_code, selected, range_label), page="fund", selected_date=selected)
             elif endpoint_path == "/api/execution-sync":
                 self._send_envelope(self.api.execution_sync_payload(), page="execution-sync")
+            elif endpoint_path == "/api/strategy-simulation":
+                self._send_envelope(self.api.strategy_simulation(), page="strategy-simulation")
             elif endpoint_path == "/api/rag/status":
                 self._send_envelope(self.api.rag_status(), page="rag")
             elif endpoint_path == "/api/rag/trace":
@@ -1228,6 +1256,16 @@ class ContractRequestHandler(RequestHandler):
                 self._send_envelope(self.api.rag_eval(payload), page="rag")
             elif endpoint_path == "/api/rag/maintenance":
                 self._send_envelope(self.api.rag_maintenance(payload), page="rag")
+            elif endpoint_path == "/api/strategy-simulation/experiment":
+                self._send_envelope(
+                    self.api.strategy_simulation_create(coerce_model(StrategySimulationExperimentRequestDto, payload)),
+                    page="strategy-simulation",
+                )
+            elif endpoint_path == "/api/strategy-simulation/action":
+                self._send_envelope(
+                    self.api.strategy_simulation_action(coerce_model(StrategySimulationActionRequestDto, payload)),
+                    page="strategy-simulation",
+                )
             else:
                 self._send_error(404, "not_found", f"Unknown POST endpoint: {parsed.path}", details={"path": parsed.path})
         except RequestBodyTooLargeError as exc:

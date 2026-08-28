@@ -2,12 +2,13 @@ import { Activity, AlertTriangle, Building2, ExternalLink, Flame, Newspaper, Rad
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { NewsIntelligencePayload, ResearchDigestBreakdown, ResearchDigestEntry, Tone } from "../../lib/types";
+import type { DataContext, NewsIntelligencePayload, ResearchDigestBreakdown, ResearchDigestEntry, Tone } from "../../lib/types";
 import { text } from "../../lib/format";
 import { narrativeText, valueLabel } from "../../lib/display";
 import { openExternalUrl } from "../../lib/api";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { TerminalPanel } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext } from "../../components/okra/ResearchContext";
 
 export function IntelligencePage({
   intelligence,
@@ -21,6 +22,8 @@ export function IntelligencePage({
   const regulatoryItems = entryArray(intelligence.regulatory_items);
   const szseItems = entryArray(intelligence.szse_items);
   const eventRisks = entryArray(intelligence.event_risks);
+  const events = entryArray(intelligence.events);
+  const eventSummary = (intelligence.eventSummary ?? {}) as Record<string, unknown>;
   const relatedByFund = intelligence.related_news_by_fund ?? {};
   const sentiment = (intelligence.sentiment_digest ?? {}) as Record<string, unknown>;
   const sourceHealth = ((intelligence.source_health ?? {}) as Record<string, unknown>) || {};
@@ -63,14 +66,15 @@ export function IntelligencePage({
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={intelligence.dataContext as DataContext | undefined} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard title="唯一新闻" value={text(metrics.unique_news_count, "0")} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
+        <MetricCard title="新闻事件" value={text(eventSummary.event_count, String(events.length))} body={`映射 ${text(metrics.mapped_news_count, "0")} 条证据`} tone="accent" />
         <MetricCard title="重要新闻" value={text(metrics.important_news_count, String(importantNews.length))} body="高热度、政策或风险事件" tone="warning" />
         <MetricCard title="监管信息" value={text(metrics.regulatory_count, String(regulatoryItems.length))} body={`深交所 ${text(metrics.szse_count, String(szseItems.length))} 条`} tone="info" />
         <MetricCard title="文本情绪" value={scoreText(metrics.text_sentiment_score)} body={`热度 ${scoreText(metrics.heat_score)} / 派生 ${scoreText(metrics.derived_sentiment_score)}`} tone={sentimentTone(metrics.text_sentiment_score)} />
         <MetricCard title="来源健康" value={text(metrics.source_count, String(healthItems.length))} body={`需关注 ${text(metrics.warning_source_count, String(warningItems.length))} 个来源`} tone={warningItems.length ? "warning" : "success"} />
       </div>
-      <IntelligenceTimeline importantNews={importantNews} eventRisks={eventRisks} sentiment={sentiment} />
+      <IntelligenceTimeline importantNews={events.length ? events : importantNews} eventRisks={eventRisks} sentiment={sentiment} />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <DigestPanel title="来源分布" icon={<Newspaper className="h-4 w-4" />} rows={breakdownRows(intelligence.source_breakdown)} empty="暂无来源统计" />
@@ -79,7 +83,7 @@ export function IntelligencePage({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <NewsList title="重要新闻" icon={<Flame className="h-4 w-4" />} items={importantNews} empty="暂无重要新闻，等待新闻抓取或上下文构建。" onOpenNews={openNews} />
+        <NewsList title="重点事件" icon={<Flame className="h-4 w-4" />} items={events.length ? events : importantNews} empty="暂无重点事件，等待新闻抓取或上下文构建。" onOpenNews={openNews} />
         <NewsList title="风险事件" icon={<AlertTriangle className="h-4 w-4" />} items={eventRisks} empty="暂无高优先级风险事件。" onOpenNews={openNews} />
       </div>
 
@@ -182,6 +186,7 @@ function HealthPanel({ items, warnings }: { items: ResearchDigestEntry[]; warnin
               <div className="min-w-0">
                 <div className="truncate font-semibold text-slate-300">{sourceLabel(providerName(item))}</div>
                 <div className="truncate text-xs text-slate-500">{narrativeText(notes(item), "暂无备注")}</div>
+                {runtimeLabel(item) ? <div className="mt-1 text-[10px] text-amber-300/80">{runtimeLabel(item)}</div> : null}
               </div>
               <Badge tone={text(item.status, "") === "ok" ? "success" : "warning"}>{valueLabel(item.status)}</Badge>
             </div>
@@ -226,6 +231,8 @@ function NewsLine({ item, compact = false, onOpen }: { item: ResearchDigestEntry
       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
         <span>{text(item.published_at, "暂无时间")}</span>
         <span>{sourceLabel(providerName(item))}</span>
+        {Array.isArray(item.fund_codes) && item.fund_codes.length > 1 ? <span>关联 {item.fund_codes.length} 只基金</span> : null}
+        {item.source_count !== undefined ? <span>{text(item.source_count, "0")} 个来源</span> : null}
         {text(item.heat_score, "") ? <span>热度 {scoreText(item.heat_score)}</span> : null}
       </div>
     </button>
@@ -304,6 +311,10 @@ function NewsDetailDrawer({
             <DetailRow label="情绪分" value={scoreText(item.sentiment_score)} />
             <DetailRow label="查询类型" value={text(item.query_type, "暂无")} />
             <DetailRow label="资讯 ID" value={newsId(item) || "暂无"} />
+            <DetailRow label="分类器" value={text(item.classifier, "未报告")} />
+            <DetailRow label="分类置信度" value={confidenceText(item.classification_confidence)} />
+            <DetailRow label="模型运行" value={text(item.classifier_model_run_id, "未报告")} />
+            <DetailRow label="提示词版本" value={text(item.classifier_prompt_version, "未报告")} />
           </div>
 
           {fundCode ? (
@@ -392,6 +403,7 @@ function breakdownRows(value: ResearchDigestBreakdown | undefined): string[] {
 }
 
 function providerName(item: ResearchDigestEntry): string {
+  if (Array.isArray(item.providers) && item.providers.length) return text(item.providers[0], "unknown");
   return text(item.provider ?? item.source_name ?? item.source_key ?? item.name ?? item.label, "unknown");
 }
 
@@ -424,6 +436,20 @@ function scoreText(value: unknown): string {
   const numeric = Number(value ?? 0);
   if (!Number.isFinite(numeric)) return "0.00";
   return numeric.toFixed(2);
+}
+
+function runtimeLabel(item: ResearchDigestEntry): string {
+  const runtime = asRecord(item.runtime);
+  const metrics = asRecord(item.metrics);
+  if (Number(metrics.request_skipped) > 0) return `本轮已跳过：${text(metrics.skip_reason, "来源冷却中")}`;
+  if (runtime.circuit_open === true) return `冷却至 ${text(runtime.circuit_open_until, "待恢复")}`;
+  const failures = Number(runtime.consecutive_failures ?? 0);
+  return failures > 0 ? `连续失败 ${failures}` : "";
+}
+
+function confidenceText(value: unknown): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${(Math.max(0, Math.min(1, numeric)) * 100).toFixed(0)}%` : "未报告";
 }
 
 function sentimentTone(value: unknown): Tone {

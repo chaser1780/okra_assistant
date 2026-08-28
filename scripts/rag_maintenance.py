@@ -20,6 +20,7 @@ TABLES = {
     "manifest_documents",
     "manifest_chunks",
     "embedding_cache",
+    "embedding_vectors",
     "query_traces",
     "ingest_runs",
 }
@@ -46,6 +47,48 @@ def _latest_rows(agent_home: Path, sql: str, limit: int = 10) -> list[dict[str, 
     with connect_store(agent_home) as conn:
         rows = conn.execute(sql, [limit]).fetchall()
     return [dict(row) for row in rows]
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        return {}
+    with suppress(TypeError, ValueError, json.JSONDecodeError):
+        payload = json.loads(value)
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value:
+        return []
+    with suppress(TypeError, ValueError, json.JSONDecodeError):
+        payload = json.loads(value)
+        if isinstance(payload, list):
+            return payload
+    return []
+
+
+def _trace_summary(row: dict[str, Any]) -> dict[str, Any]:
+    query_plan = _json_object(row.get("query_plan_json"))
+    metadata = _json_object(row.get("metadata_json"))
+    retrieval = metadata.get("retrieval", {}) if isinstance(metadata.get("retrieval"), dict) else {}
+    semantic = retrieval.get("semantic", {}) if isinstance(retrieval.get("semantic"), dict) else {}
+    missing_data_count = len(_json_list(row.get("missing_data_json")))
+    return {
+        "traceId": str(row.get("trace_id") or ""),
+        "createdAt": str(row.get("created_at") or ""),
+        "intent": str(query_plan.get("intent") or ""),
+        "profile": str(query_plan.get("retrieval_profile") or ""),
+        "queryDate": str(query_plan.get("query_date") or query_plan.get("as_of_date") or ""),
+        "mode": str(retrieval.get("mode") or "lexical_rerank"),
+        "semantic": semantic,
+        "missingDataCount": missing_data_count,
+    }
 
 
 def _latest_eval(agent_home: Path) -> dict[str, Any]:
@@ -84,10 +127,11 @@ def rag_status(agent_home: Path) -> dict[str, Any]:
         agent_home,
         "SELECT run_id, status, as_of_date, source_count, doc_count, chunk_count, started_at, ended_at FROM ingest_runs ORDER BY started_at DESC LIMIT ?",
     )
-    latest_traces = _latest_rows(
+    latest_trace_rows = _latest_rows(
         agent_home,
         "SELECT trace_id, created_at, query_plan_json, missing_data_json, metadata_json FROM query_traces ORDER BY created_at DESC LIMIT ?",
     )
+    latest_traces = [_trace_summary(row) for row in latest_trace_rows]
     active_manifests = _latest_rows(
         agent_home,
         "SELECT scope_key, manifest_id, activated_at FROM active_manifests ORDER BY scope_key LIMIT ?",
@@ -103,6 +147,7 @@ def rag_status(agent_home: Path) -> dict[str, Any]:
         "agentDefault": settings.get("agent_default", {}) or {},
         "profileEvidence": settings.get("profile_evidence", {}) or {},
         "embedding": settings.get("embedding", {}) or {},
+        "hybrid": settings.get("hybrid", {}) or {},
         "vectorStore": settings.get("vector_store", {}) or {},
         "dbPath": str(db_path),
         "dbExists": exists,

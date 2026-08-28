@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_config import load_rag_config, rag_vector_store_settings
-from rag_index_store import upsert_embedding_cache
+from rag_index_store import list_embedding_vectors, upsert_embedding_cache, upsert_embedding_vector
 from rag_embedding_client import embedding_cache_key, text_sha256
 
 
@@ -35,6 +35,7 @@ class SQLiteMockVectorStore(RagVectorStore):
             cache_key = embedding_cache_key(self.model, text_hash)
             vector_ref = f"sqlite_mock:{cache_key}"
             self._vectors[vector_ref] = list(vector)
+            upsert_embedding_vector(self.agent_home, vector_ref, vector)
             upsert_embedding_cache(
                 self.agent_home,
                 {
@@ -50,7 +51,8 @@ class SQLiteMockVectorStore(RagVectorStore):
 
     def search(self, query_vector: list[float], *, filters: dict[str, Any] | None = None, top_k: int = 10) -> list[dict[str, Any]]:
         results = []
-        for vector_ref, vector in self._vectors.items():
+        vectors = self._vectors or list_embedding_vectors(self.agent_home)
+        for vector_ref, vector in vectors.items():
             score = _cosine_similarity(query_vector, vector)
             results.append({"vector_ref": vector_ref, "score": score})
         results.sort(key=lambda item: item["score"], reverse=True)

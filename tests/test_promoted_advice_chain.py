@@ -175,6 +175,11 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertEqual(0.0, elapsed)
         run_step_mock.assert_not_called()
         self.assertTrue((self.agent.root / "db" / "decisions" / "2026-06-01.json").exists())
+        self.assertTrue((self.agent.root / "db" / "decision_traces" / "2026-06-01.json").exists())
+        trace = json.loads((self.agent.root / "db" / "decision_traces" / "2026-06-01.json").read_text(encoding="utf-8"))
+        self.assertEqual("user_simulation", trace["formalTrack"])
+        self.assertTrue(trace["simulationOnly"])
+        self.assertTrue(trace["sourceArtifacts"]["validatedAdvice"]["exists"])
         capture = status["replay_snapshot_capture"]
         self.assertEqual("captured", capture["status"])
         self.assertFalse(capture["learning_eligible"])

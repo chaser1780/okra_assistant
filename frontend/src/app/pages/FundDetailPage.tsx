@@ -13,13 +13,14 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import type { FundAnalysisAgentCard, LongMemoryRecord } from "../../lib/types";
+import type { FundAnalysisAgentCard, FundDetailPayload, LongMemoryRecord } from "../../lib/types";
 import { useFundDetailQuery } from "../../lib/workbenchQuery";
 import { asNumber, compactMoney, lines, signedMoney, signedPct, text } from "../../lib/format";
 import { actionLabel, evidencePathLabel, memoryText, memoryTitle, narrativeText, roleLabel, statusLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, SectionTitle } from "../../components/ui";
 import { DrawdownChart, TrendChart } from "../../components/okra/ChartPrimitives";
 import { ChartFrame, TerminalPanel } from "../../components/okra/TerminalChrome";
+import { ResearchDataContext, SimulationTrackRail } from "../../components/okra/ResearchContext";
 
 const ranges = ["近1月", "近3月", "近6月", "近1年", "成立以来"];
 
@@ -88,6 +89,8 @@ export function FundDetailPage({
 
   return (
     <div className="space-y-4">
+      <ResearchDataContext context={detail.dataContext} />
+      <SimulationTrackRail simulation={detail.simulation} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <Button variant="ghost" className="mb-3 gap-2 px-0" onClick={onBack}>
@@ -129,7 +132,7 @@ export function FundDetailPage({
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-8 p-4">
-          <SectionTitle title="长期画像" meta="建议成败基于系统每日复盘，不基于真实交易" />
+          <SectionTitle title="长期画像" meta="建议成败基于系统每日复盘，不作为实际成交归因" />
           <MemoryList records={detail.longMemory.fund} empty="这只基金还没有形成长期画像，运行今日分析后会逐步积累。" />
         </Card>
         <Card className="col-span-4 p-4">
@@ -143,7 +146,7 @@ export function FundDetailPage({
         <ChartFrame title="超额收益 / EXCESS" meta={detail.performance.benchmarkStatus === "available" ? detail.performance.benchmarkName : "基准未配置"} height="h-56" className="col-span-12 xl:col-span-5"><TrendChart data={detail.history.excessReturnPct ?? []} yFormatter={(value) => `${value.toFixed(2)}%`} showArea={false} /></ChartFrame>
       </section>
 
-      <TerminalPanel title="交易与建议标记" meta="READ-ONLY TIMELINE" className="p-4">
+      <TerminalPanel title="模拟操作与建议标记" meta="READ-ONLY TIMELINE" className="p-4">
         <div className="flex flex-wrap gap-3">
           {timelineMarkers.slice(-12).map((marker) => (
             <div key={`${marker.date}-${marker.type}-${marker.source}`} className="flex items-center gap-2 border-b border-slate-800/80 pb-2 text-xs">
@@ -228,7 +231,7 @@ export function FundDetailPage({
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-5 p-4">
-          <SectionTitle title="交易记录" meta="买入/卖出/定投标记" />
+          <SectionTitle title="用户模拟操作记录" meta="买入/卖出/定投标记" />
           {detail.tradeMarkers.length ? (
             <div className="space-y-2">
               {detail.tradeMarkers.slice(-8).reverse().map((item) => (
@@ -237,7 +240,7 @@ export function FundDetailPage({
                     <div className="font-semibold text-slate-200">{item.date}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
                       <Badge tone={item.source === "planned_dca" ? "success" : "info"}>{actionLabel(item.action)}</Badge>
-                      <span>{item.source === "planned_dca" ? "按定投日生成" : "真实交易"}</span>
+                      <span>{simulationMarkerSource(item.source)}</span>
                     </div>
                   </div>
                   <div className="metric-number text-slate-100">{item.amountText}</div>
@@ -245,7 +248,7 @@ export function FundDetailPage({
               ))}
             </div>
           ) : (
-            <EmptyState title="暂无交易标记" body="该基金在当前区间没有可展示的交易记录。" />
+            <EmptyState title="暂无模拟操作标记" body="该基金在当前区间没有可展示的用户模拟操作记录。" />
           )}
         </Card>
 
@@ -266,6 +269,8 @@ export function FundDetailPage({
           </div>
         </Card>
       </section>
+
+      <StrategyExperimentResults experiments={detail.strategyExperiments ?? []} />
 
       <section className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 p-4">
@@ -315,6 +320,31 @@ function EvidenceList({ title, items }: { title: string; items: string[] }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+function simulationMarkerSource(value: unknown) {
+  const source = String(value ?? "").toLowerCase();
+  if (source === "planned_dca") return "按定投日生成";
+  if (source.includes("user_simulation") || source.includes("configured_dca") || source.includes("local_simulation")) return "用户模拟操作";
+  return "模拟历史标记";
+}
+
+function StrategyExperimentResults({ experiments }: { experiments: NonNullable<FundDetailPayload["strategyExperiments"]> }) {
+  return (
+    <TerminalPanel title="策略实验结果" meta="只读 · 仅展示关联本基金的假设操作，不影响用户模拟组合" className="p-4">
+      {experiments.length ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {experiments.map((experiment) => (
+            <div key={experiment.experimentId} className="border border-amber-500/20 bg-amber-950/10 p-3">
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-semibold text-slate-100">{experiment.label}</div><div className="mt-1 text-xs text-slate-500">{experiment.asOfDate || "暂无日期"}</div></div><Badge tone="warning">仅实验</Badge></div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><div className="text-xs text-slate-500">假设操作</div><div className="metric-number mt-1 text-slate-200">{experiment.actionCount} 笔</div></div><div><div className="text-xs text-slate-500">实验内持仓盈亏</div><div className="metric-number mt-1 text-slate-200">{signedMoney(experiment.fundHoldingPnl)}</div></div></div>
+              <div className="mt-3 border-t border-amber-500/10 pt-2 text-xs text-slate-500">{experiment.actions.map((item) => `${actionLabel(item.action)} ${item.amount == null ? "" : compactMoney(item.amount)}`).join(" / ")}</div>
+            </div>
+          ))}
+        </div>
+      ) : <EmptyState title="暂无关联策略实验" body="策略实验中的假设操作只会在这里以只读方式显示，不会混入用户模拟组合或正式建议。" />}
+    </TerminalPanel>
   );
 }
 

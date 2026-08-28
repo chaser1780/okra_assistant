@@ -464,6 +464,8 @@ class WebApiRagCopilotTests(unittest.TestCase):
         self.assertTrue(result["traceId"].startswith("ragq_"))
         self.assertIn("[C1]", result["answer"])
         self.assertEqual(1, result["retrieval"]["hitCount"])
+        for heading in ("结论：", "依据：", "风险：", "证据缺口：", "下一步："):
+            self.assertIn(heading, result["answer"])
 
     def test_normal_copilot_query_excludes_execution_even_when_source_enabled(self):
         self.agent.write_text("config/rag.toml", RAG_ENABLED_WITH_EXECUTION_TOML)

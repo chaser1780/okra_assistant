@@ -96,6 +96,38 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertTrue(snapshot["system"]["todayAnalysis"]["memory_eligible"])
         self.assertEqual(snapshot["system"]["todayAnalysis"]["task"], "today_analysis")
 
+    def test_page_payloads_expose_simulation_and_data_context(self):
+        report_date = "2026-05-06"
+        self.agent.write_json(
+            f"db/realtime_monitor/{report_date}.json",
+            {
+                "report_date": report_date,
+                "generated_at": "2026-05-06T21:00:00+08:00",
+                "realtime_policy": {"provider": "fund_estimate_proxy"},
+                "items": [
+                    {
+                        "fund_code": "F1",
+                        "mode": "proxy_fallback",
+                        "effective_change_pct": 1.2,
+                        "estimate_change_pct": 1.0,
+                        "proxy_change_pct": 1.2,
+                        "stale": True,
+                        "freshness_age_business_days": 0,
+                    }
+                ],
+            },
+        )
+        api = OkraWebApi(self.agent.root)
+        portfolio = api.portfolio_page(report_date)["portfolio"]
+        realtime = api.realtime_page(report_date)["realtime"]
+        execution = api.execution_page(report_date)["executionSync"]
+
+        self.assertEqual(report_date, portfolio["dataContext"]["selectedDate"])
+        self.assertTrue(portfolio["simulation"]["simulationOnly"])
+        self.assertEqual("user_simulation", execution["simulation"]["formalTrack"])
+        self.assertTrue(realtime["observationOnly"])
+        self.assertIn(realtime["dataContext"]["freshnessStatus"], {"official_nav_pending", "delayed_1d", "proxy_observation"})
+
     def test_snapshot_exposes_today_analysis_runtime_fields(self):
         report_date = "2026-05-06"
         self.agent.write_json(
@@ -280,6 +312,42 @@ class WebApiLongMemoryTests(unittest.TestCase):
         )
         result = api.long_memory_action({"memoryId": trusted_id, "action": "approve"})
         self.assertEqual("permanent", result["record"]["status"])
+
+    def test_strategy_experiment_memory_is_marked_as_non_formal(self):
+        record = upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "experiment_rule",
+                "title": "实验规则",
+                "text": "Only validated in a strategy experiment.",
+                "status": "candidate",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "exp-1"},
+            },
+        )
+        self.assertEqual("strategy_simulation", record["metadata"]["sourceTrack"])
+        self.assertEqual("exp-1", record["metadata"]["experimentId"])
+        self.assertFalse(record["metadata"]["formalInfluence"])
+
+    def test_strategy_experiment_memory_is_marked_as_non_formal(self):
+        record = upsert_memory_record(
+            self.agent.root,
+            {
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "experiment_rule",
+                "title": "实验规则",
+                "text": "Only validated in a strategy experiment.",
+                "status": "candidate",
+                "source": "replay_experiment",
+                "metadata": {"experiment_id": "exp-1"},
+            },
+        )
+        self.assertEqual("strategy_simulation", record["metadata"]["sourceTrack"])
+        self.assertEqual("exp-1", record["metadata"]["experimentId"])
+        self.assertFalse(record["metadata"]["formalInfluence"])
 
     def test_contract_handler_wraps_page_payload_in_envelope(self):
         payload = self._request_json("/api/today")
@@ -605,6 +673,21 @@ class WebApiLongMemoryTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         record.assert_called_once()
+        normalized = record.call_args.args[1]
+        self.assertTrue(normalized["is_simulation"])
+        self.assertEqual("user_simulation", normalized["simulation_track"])
+        self.assertEqual("planned", normalized["simulation_status"])
+        self.assertEqual("local_simulation", normalized["platform"])
+
+    def test_execution_api_never_forwards_real_settlement_status(self):
+        controller = ExecutionController(self.agent.root)
+        with patch("app.web_api_services.record_actual_trade", return_value={"ok": True}) as record:
+            controller.execution_trade({"fund_code": "F1", "operation_type": "buy", "amount": 100, "status": "settled"})
+
+        normalized = record.call_args.args[1]
+        self.assertTrue(normalized["is_simulation"])
+        self.assertEqual("confirmed", normalized["simulation_status"])
+        self.assertEqual("local_simulation", normalized["platform"])
 
     def test_contract_trade_request_rejects_shadow_extra_fields(self):
         with self.assertRaises(HTTPError) as ctx:

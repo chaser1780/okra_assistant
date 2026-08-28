@@ -90,6 +90,40 @@ class SentimentNewsProviderTests(unittest.TestCase):
         self.assertTrue(summary["circuit_open"])
         self.assertIn("model_not_found", summary["error"])
 
+    def test_news_classifier_preserves_reported_confidence_and_model_run_reference(self):
+        from unittest.mock import patch
+
+        items = [{"title": "政策支持 AI", "summary": "主题获得支持"}]
+        settings = {"providers": {"news_classification": {"enabled": True, "batch_size": 20}}}
+        response = {
+            "response_json": {
+                "items": [
+                    {
+                        "index": 0,
+                        "sentiment_label": "positive",
+                        "sentiment_score": 0.4,
+                        "risk_level": "low",
+                        "risk_tags": [],
+                        "topic_tags": ["ai"],
+                        "is_policy_signal": True,
+                        "is_hype_signal": False,
+                        "reason_short": "政策支持",
+                        "classification_confidence": 0.82,
+                    }
+                ]
+            },
+            "model_run": {"modelRunId": "model-news-1", "promptVersion": "news_batch_classifier.v1"},
+        }
+
+        with patch("fetch_fund_news.call_json_agent", return_value=response):
+            classified, summary = classify_news_with_llm(Path.cwd(), settings, items, report_date="2026-05-20")
+
+        self.assertEqual(0.82, classified[0]["classification_confidence"])
+        self.assertEqual("model-news-1", classified[0]["classifier_model_run_id"])
+        self.assertEqual("news_batch_classifier.v1", classified[0]["classifier_prompt_version"])
+        self.assertEqual(1, summary["reported_confidence_count"])
+        self.assertEqual(0.82, summary["mean_reported_confidence"])
+
     def test_news_time_classification_enforces_closed_report_window(self):
         report_date = "2026-07-10"
 

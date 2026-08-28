@@ -13,12 +13,12 @@ type NavItem = { key: PageKey; label: string; icon: LucideIcon };
 type NavGroup = { label: string; items: NavItem[] };
 
 const navGroups: NavGroup[] = [
-  { label: "总览", items: [{ key: "today", label: "今日决策", icon: Gauge }] },
+  { label: "总览", items: [{ key: "today", label: "组合研究终端", icon: Gauge }] },
   {
     label: "资产",
     items: [
       { key: "portfolio", label: "组合与持仓", icon: WalletCards },
-      { key: "execution", label: "交易执行台", icon: ReceiptText }
+      { key: "execution", label: "模拟执行台", icon: ReceiptText }
     ]
   },
   {
@@ -33,7 +33,7 @@ const navGroups: NavGroup[] = [
     label: "审计",
     items: [
       { key: "review", label: "策略记忆", icon: BrainCircuit },
-      { key: "shadowReview", label: "影子审查", icon: SearchCheck },
+      { key: "shadowReview", label: "实验审查", icon: SearchCheck },
       { key: "system", label: "运行中心", icon: Settings }
     ]
   }
@@ -114,7 +114,7 @@ export function WorkbenchLayout({
             <span className="h-2.5 w-2.5 rounded-sm bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.7)]" />
             <div className="text-2xl font-black tracking-wide text-slate-50">OKRA</div>
           </div>
-          <div className="mt-2 text-[11px] font-semibold tracking-wide text-slate-500">长期记忆投资工作台</div>
+          <div className="mt-2 text-[11px] font-semibold tracking-wide text-slate-500">组合研究与策略实验终端</div>
         </div>
         <nav className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:block">
           {navGroups.map((group) => (
@@ -161,7 +161,7 @@ export function WorkbenchLayout({
         </div>
       </aside>
       <main className="w-full min-w-0 flex-1 overflow-auto overflow-x-hidden p-3 xl:p-5">
-        <TerminalRail selectedDate={selectedDate} status={systemRunning ? "RUNNING" : "LIVE"} freshness={isHistoricalView ? "SNAPSHOT" : "LIVE"} />
+        <TerminalRail selectedDate={selectedDate} status={systemRunning ? "RUNNING" : "LOCAL"} freshness={isHistoricalView ? "SNAPSHOT" : "RESEARCH"} />
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/90 pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
             <span className="font-bold uppercase tracking-[0.16em] text-slate-500">数据日期</span>

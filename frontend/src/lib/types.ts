@@ -55,6 +55,68 @@ export type ChartPoint = {
   value: number | null;
 };
 
+export type DataContext = {
+  snapshotId: string;
+  selectedDate: string;
+  portfolioAsOfDate: string;
+  realtimeAsOfDate: string;
+  latestRetrievedAt: string;
+  decisionCutoff: string;
+  sessionStatus: string;
+  freshnessStatus: "latest" | "market_closed" | "official_nav_pending" | "proxy_observation" | "delayed_1d" | "delayed_multi_day" | "unavailable" | "conflict" | string;
+  freshnessReason: string;
+  sourceKey: string;
+  sourceAuthority: string;
+  sourceConfidence: number | null;
+  payloadHash: string;
+  itemCount?: number;
+  staleItemCount?: number;
+  conflictItemCount?: number;
+  modeCounts?: Record<string, number>;
+};
+
+export type SimulationTrack = {
+  trackId: "user_simulation" | "strategy_simulation";
+  label: string;
+  description?: string;
+  formalTrack: boolean;
+  affectsFormalPortfolio: boolean;
+  executionMode?: string;
+  asOfDate?: string;
+  positionCount?: number;
+  operationCounts?: Record<string, number>;
+  experimentCount?: number;
+  activeExperimentCount?: number;
+  experiments?: Array<Record<string, unknown>>;
+};
+
+export type SimulationPayload = {
+  activeTrack: "user_simulation";
+  formalTrack: "user_simulation";
+  simulationOnly: true;
+  updatedAt: string;
+  tracks: SimulationTrack[];
+  userSimulation: SimulationTrack;
+  strategySimulation: SimulationTrack;
+};
+
+export type StrategySimulationOverview = {
+  simulationOnly: true;
+  formalTrack: "user_simulation";
+  experiments: Array<Record<string, unknown> & {
+    experimentId: string;
+    label: string;
+    status: string;
+    actionCount: number;
+    asOfDate?: string;
+    totalValue?: number | null;
+    initialTotalValue?: number | null;
+    valueDelta?: number | null;
+    actionCounts?: Record<string, number>;
+    holdingPnl?: number | null;
+  }>;
+};
+
 export type AllocationRow = {
   name: string;
   value: number | null;
@@ -86,12 +148,53 @@ export type PortfolioRiskPoint = {
   styleGroup: string;
 };
 
+export type PortfolioRiskBreakdown = {
+  fundCode: string;
+  fundName: string;
+  weightPct: number | null;
+  freshnessRisk: number | null;
+  dataConflictRisk: number | null;
+  volatilityRisk: number | null;
+  crowdingRisk: number | null;
+  newsRisk: number | null;
+  executionFrictionRisk: number | null;
+  totalAnomalyScore: number | null;
+  observedAnomalyScore: number | null;
+  historicalPercentile: number | null;
+  historicalSampleCount: number;
+  dataCoverage: { availableComponentCount: number; componentCount: number; isPartial: boolean };
+  reasons: Record<string, string>;
+  methodology: string;
+};
+
+export type PortfolioRiskSummary = {
+  selectedDate: string;
+  methodology: string;
+  scoredFundCount: number;
+  fundCount: number;
+  weightedTotalAnomalyScore: number | null;
+  partialCoverageFundCount: number;
+  historicalPercentileAvailableCount: number;
+};
+
 export type PortfolioBenchmark = {
   status: "available" | "not_configured" | "missing_data" | string;
   name?: string;
   key?: string;
   normalized: ChartPoint[];
   excessReturnPct: ChartPoint[];
+};
+
+export type PortfolioPerformanceMetrics = {
+  status: string;
+  methodology: string;
+  periodStart: string;
+  periodEnd: string;
+  cashflowCount: number;
+  twr: { available: boolean; returnPct: number | null };
+  mwr: { available: boolean; returnPct: number | null };
+  cashflowAdjustedDrawdown?: { available: boolean; currentPct: number | null; maxPct: number | null; series: ChartPoint[] };
+  reason: string;
 };
 
 export type PortfolioPayload = {
@@ -118,7 +221,12 @@ export type PortfolioPayload = {
   };
   riskSnapshot?: PortfolioRiskSnapshot;
   riskScatter?: PortfolioRiskPoint[];
+  riskBreakdown?: PortfolioRiskBreakdown[];
+  riskSummary?: PortfolioRiskSummary;
   benchmark?: PortfolioBenchmark;
+  performanceMetrics?: PortfolioPerformanceMetrics;
+  dataContext?: DataContext;
+  simulation?: SimulationPayload;
   items: PortfolioItem[];
 };
 
@@ -138,6 +246,11 @@ export type ResearchDigestEntry = Record<string, unknown> & {
   key?: string;
   status?: string;
   count?: number | string;
+  classification_confidence?: number | string | null;
+  classifier?: string;
+  classification_status?: string;
+  classifier_model_run_id?: string;
+  classifier_prompt_version?: string;
   item_count?: number | string;
   mapped_item_count?: number | string;
   unique_item_count?: number | string;
@@ -288,6 +401,8 @@ export type ResearchPayload = {
   news_digest?: ResearchNewsDigest;
   sentiment_digest?: ResearchSentimentDigest;
   event_risks?: ResearchDigestEntry[];
+  events?: ResearchDigestEntry[];
+  eventSummary?: Record<string, unknown>;
 };
 
 export type NewsIntelligencePayload = Record<string, unknown> & {
@@ -331,6 +446,8 @@ export type RealtimePayload = {
   metrics: Metric[];
   items: Record<string, unknown>[];
   summary_text: string;
+  dataContext?: DataContext;
+  observationOnly?: boolean;
 };
 
 export type ReviewPayload = {
@@ -357,6 +474,49 @@ export type ReviewPayload = {
     latestReplayAuditPath?: string;
     latestLearningAuditSummary?: Record<string, unknown>;
     latestLearningAuditPath?: string;
+  };
+  decisionTrace?: Record<string, unknown> & {
+    available: boolean;
+    reportDate: string;
+    source?: string;
+    track?: string;
+    executionEligible?: boolean;
+    decisionCount: number;
+    evidenceCount: number;
+    modelRunCount: number;
+    availableArtifactCount: number;
+    decisions: Array<Record<string, unknown>>;
+  };
+  quality?: {
+    adviceQuality?: {
+      scoredEventCount?: number;
+      directionalEventCount?: number;
+      supportedCount?: number;
+      adverseCount?: number;
+      neutralCount?: number;
+      directionalAccuracyPct?: number | null;
+      confidenceCalibration?: { available?: boolean; reason?: string };
+      abstention?: { count?: number; decisionCount?: number; ratePct?: number | null; reason?: string };
+    };
+    simulationQuality?: {
+      track?: string;
+      operationCount?: number;
+      turnoverAmount?: number;
+      turnoverPct?: number | null;
+      costAmount?: number;
+      twr?: Record<string, unknown>;
+      mwr?: Record<string, unknown>;
+      cashflowAdjustedDrawdown?: Record<string, unknown>;
+      benchmark?: Record<string, unknown>;
+    };
+    memoryQuality?: {
+      recordCount?: number;
+      expiredCount?: number;
+      duplicateCount?: number;
+      contradictionCount?: number;
+      sourceTrackCounts?: Record<string, number>;
+      statusCounts?: Record<string, number>;
+    };
   };
 };
 
@@ -434,9 +594,20 @@ export type ShadowReviewPagePayload = Record<string, unknown> & {
     affectsLongMemoryPromotion: false;
     allowExecutionEvidence: false;
   };
+  strategyExperiments?: Array<Record<string, unknown> & {
+    experimentId: string;
+    label: string;
+    status: string;
+    actionCount: number;
+    asOfDate?: string;
+    totalValue?: number | null;
+    initialTotalValue?: number | null;
+    valueDelta?: number | null;
+    actionCounts?: Record<string, number>;
+  }>;
 };
 
-export type MemoryStatus = "candidate" | "strategic" | "permanent" | "archived" | "rejected";
+export type MemoryStatus = "candidate" | "experimental_active" | "validated_strategy" | "strategic" | "permanent" | "archived" | "rejected";
 export type MemoryDomain = "fund" | "market" | "execution" | "portfolio";
 export type MemoryAction = "approve" | "reject" | "archive" | "demote";
 
@@ -457,6 +628,9 @@ export type LongMemoryRecord = {
   approved_by?: string;
   approved_at?: string;
   can_promote_permanent?: boolean;
+  valid_until?: string;
+  isExpired?: boolean;
+  effectiveStatus?: MemoryStatus | string;
   source?: string;
   metadata?: Record<string, unknown>;
   evidence_refs?: Array<Record<string, unknown>>;
@@ -480,6 +654,22 @@ export type LongMemoryPayload = {
     pending?: number;
     total?: number;
   };
+  lifecycle?: {
+    statusCounts?: Record<string, number>;
+    trackCounts?: Record<string, number>;
+  };
+  recentEvents?: Array<Record<string, unknown> & {
+    eventId: string;
+    memoryId: string;
+    eventType: string;
+    fromStatus: string;
+    toStatus: string;
+    actor: string;
+    note: string;
+    sourceTrack: string;
+    experimentId: string;
+    createdAt: string;
+  }>;
 };
 
 export type DailyFirstOpenPayload = {
@@ -550,6 +740,7 @@ export type RagRuntimePayload = Record<string, unknown> & {
   agentDefault: Record<string, unknown>;
   profileEvidence: Record<string, unknown>;
   embedding: Record<string, unknown>;
+  hybrid: Record<string, unknown>;
   vectorStore: Record<string, unknown>;
   latestEval: Record<string, unknown>;
   latestTraces: Array<Record<string, unknown>>;
@@ -566,6 +757,7 @@ export type SystemPayload = {
   todayAnalysisRuntime?: TodayAnalysisRuntimePayload;
   longMemoryRuntime?: Record<string, unknown>;
   agentRuntime?: Record<string, unknown>;
+  simulation?: SimulationPayload;
   ragRuntime?: RagRuntimePayload;
   rag?: RagRuntimePayload;
   todayAnalysis?: TodayAnalysisSystemPayload;
@@ -584,6 +776,7 @@ export type ExecutionSyncPayload = {
     deviations?: number;
     reports?: number;
   };
+  simulation?: SimulationPayload;
 };
 
 export type ScreenshotPreviewRow = Record<string, unknown> & {
@@ -707,6 +900,8 @@ export type CopilotRequest = {
   page: string;
   selectedDate?: string;
   fundCode?: string;
+  intent?: "general_chat" | "page_explain" | "fund_explain" | "decision_explain" | "risk_review" | "execution_review" | "memory_review";
+  useRag?: boolean;
   messages?: CopilotMessage[];
 };
 
@@ -823,5 +1018,23 @@ export type FundDetailPayload = {
     benchmarkStatus?: string;
   };
   tradeMarkers: TradeMarker[];
+  strategyExperiments?: Array<{
+    experimentId: string;
+    label: string;
+    status: string;
+    asOfDate: string;
+    actionCount: number;
+    totalValue: number | null;
+    initialTotalValue: number | null;
+    valueDelta: number | null;
+    fundCode: string;
+    fundValue: number | null;
+    fundHoldingPnl: number | null;
+    fundHoldingUnits: number | null;
+    affectsFormalPortfolio: false;
+    actions: Array<{ action: string; amount: number | null; asOfDate: string; simulationStatus: string }>;
+  }>;
   longMemory: FundLongMemoryPayload;
+  dataContext?: DataContext;
+  simulation?: SimulationPayload;
 };
