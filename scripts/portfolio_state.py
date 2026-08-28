@@ -56,12 +56,25 @@ TRUSTED_DAILY_PNL_UNIT_SOURCES = {
     "manual_position_snapshot",
     "actual_position_sync",
     "actual_trade_units",
+    "position_value_derived_from_official_nav",
 }
 
 UNTRUSTED_DAILY_PNL_UNIT_SOURCES = {
     "derived_from_official_nav",
     *VALUE_ONLY_POSITION_UNIT_SOURCES,
 }
+
+OFFICIAL_DAILY_PNL_FIELDS = (
+    "official_daily_pnl",
+    "official_daily_pnl_date",
+    "official_daily_pnl_source",
+    "official_daily_pnl_status",
+    "official_daily_pnl_reason",
+    "official_daily_pnl_units",
+    "official_daily_pnl_nav",
+    "official_daily_pnl_previous_nav",
+    "official_daily_pnl_previous_nav_date",
+)
 
 
 def actual_position_snapshot_date(fund: dict) -> str:
@@ -98,6 +111,47 @@ def daily_pnl_units_are_trusted(fund: dict) -> tuple[bool, str]:
     if units_source in UNTRUSTED_DAILY_PNL_UNIT_SOURCES:
         return False, f"untrusted_units_source:{units_source}"
     return False, f"unclassified_units_source:{units_source or 'missing'}"
+
+
+def clear_official_daily_pnl(fund: dict) -> None:
+    for key in OFFICIAL_DAILY_PNL_FIELDS:
+        fund.pop(key, None)
+
+
+def set_position_units_from_value(
+    fund: dict,
+    current_value: float,
+    *,
+    fallback_source: str,
+    basis_nav: float | None = None,
+    basis_nav_date: str = "",
+) -> bool:
+    candidates = [(basis_nav, basis_nav_date)] if basis_nav is not None else []
+    candidates.extend(
+        (fund.get(nav_key), str(fund.get(date_key) or ""))
+        for nav_key, date_key in (
+            ("last_valuation_nav", "last_valuation_date"),
+            ("last_official_nav", "last_official_nav_date"),
+        )
+    )
+    for nav_value, nav_date in candidates:
+        try:
+            nav = float(nav_value)
+        except (TypeError, ValueError):
+            continue
+        if nav <= 0 or current_value <= 0:
+            continue
+        fund["holding_units"] = round(current_value / nav, 6)
+        fund["units_source"] = "position_value_derived_from_official_nav"
+        fund["holding_units_basis_nav"] = round(nav, 6)
+        fund["holding_units_basis_nav_date"] = nav_date
+        return True
+
+    fund["holding_units"] = 0.0 if current_value <= 0 else None
+    fund["units_source"] = fallback_source
+    fund.pop("holding_units_basis_nav", None)
+    fund.pop("holding_units_basis_nav_date", None)
+    return False
 
 
 def _safe_event_token(value: str) -> str:

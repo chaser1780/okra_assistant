@@ -274,7 +274,7 @@ class PipelineLogicTests(unittest.TestCase):
             target = intraday_report_target(root, strategy, "2026-03-10")
             self.assertEqual(target.name, "2026-03-10_portfolio.md")
 
-    def test_should_sync_units_only_when_official_nav_state_changes(self):
+    def test_should_sync_units_only_when_units_are_missing(self):
         agent = TempAgentHome()
         try:
             agent.write_json(
@@ -301,6 +301,12 @@ class PipelineLogicTests(unittest.TestCase):
             self.assertFalse(should_sync_units(agent.root, "2026-03-11"))
 
             agent.write_json("db/estimated_nav/2026-03-11.json", {"items": [{"fund_code": "EQ1", "official_nav": 2.1, "official_nav_date": "2026-03-11"}]})
+            self.assertFalse(should_sync_units(agent.root, "2026-03-11"))
+
+            current_path = agent.root / "db/portfolio_state/current.json"
+            portfolio = json.loads(current_path.read_text(encoding="utf-8"))
+            portfolio["funds"][0]["holding_units"] = None
+            agent.write_json("db/portfolio_state/current.json", portfolio)
             self.assertTrue(should_sync_units(agent.root, "2026-03-11"))
         finally:
             agent.cleanup()
@@ -360,6 +366,17 @@ class PipelineLogicTests(unittest.TestCase):
             self.assertEqual(target, "2026-04-20")
             dates = pending_nightly_catchup_dates(agent.root, "2026-04-16", now=now)
             self.assertEqual(dates, ["2026-04-17", "2026-04-20"])
+        finally:
+            agent.cleanup()
+
+    def test_nightly_catchup_respects_configured_market_holiday(self):
+        agent = TempAgentHome()
+        try:
+            agent.write_json("config/trading_calendar.json", {"holidays": ["2026-04-20"], "makeup_trading_days": []})
+            now = __import__("datetime").datetime(2026, 4, 21, 10, 0, 0)
+
+            self.assertEqual(latest_nightly_target_date(agent.root, now=now), "2026-04-17")
+            self.assertEqual(pending_nightly_catchup_dates(agent.root, "2026-04-16", now=now), ["2026-04-17"])
         finally:
             agent.cleanup()
 

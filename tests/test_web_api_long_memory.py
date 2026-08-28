@@ -192,6 +192,18 @@ class WebApiLongMemoryTests(unittest.TestCase):
         self.assertEqual(first["pid"], second["pid"])
         popen.assert_called_once()
 
+    def test_automatic_realtime_run_skips_non_trading_day(self):
+        controller = TaskController(self.agent.root)
+        with patch("app.web_api_services.is_trading_day", return_value=False), patch(
+            "app.web_api_services.subprocess.Popen"
+        ) as popen:
+            result = controller.run_task("realtime", automatic=True)
+
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "non_trading_day")
+        self.assertEqual(result["pid"], 0)
+        popen.assert_not_called()
+
     def test_fund_detail_exposes_fund_memory(self):
         upsert_memory_record(
             self.agent.root,

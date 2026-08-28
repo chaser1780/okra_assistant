@@ -28,7 +28,7 @@ from common import (
     timestamp_now,
 )
 from multiagent_utils import describe_api_failure, extract_response_output_text, resolve_api_key, responses_endpoint, responses_headers
-from portfolio_state import RUNTIME_FIELDS, ensure_portfolio_definition, save_portfolio_state
+from portfolio_state import RUNTIME_FIELDS, clear_official_daily_pnl, ensure_portfolio_definition, save_portfolio_state, set_position_units_from_value
 
 
 SCREENSHOT_SCHEMA = {
@@ -646,8 +646,23 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
             fund["holding_return_pct"] = round(holding_return_pct, 2)
         if cost_basis is not None:
             fund["cost_basis_value"] = round(max(0.0, cost_basis), 2)
-        fund["last_valuation_date"] = sync_date
-        fund["units_source"] = "screenshot_sync_value_only"
+        position_nav = safe_float(item.get("position_nav"))
+        if position_nav is not None and position_nav > 0:
+            position_nav_date = str(item.get("position_nav_date") or sync_date)
+            fund["last_valuation_nav"] = round(position_nav, 6)
+            fund["last_valuation_date"] = position_nav_date
+            fund["last_official_nav"] = round(position_nav, 6)
+            fund["last_official_nav_date"] = position_nav_date
+        else:
+            fund["last_valuation_date"] = sync_date
+        set_position_units_from_value(
+            fund,
+            round(current_value, 2),
+            fallback_source="screenshot_sync_value_only",
+            basis_nav=safe_float(item.get("position_nav")),
+            basis_nav_date=str(item.get("position_nav_date") or ""),
+        )
+        clear_official_daily_pnl(fund)
         if daily_pnl is not None:
             fund["actual_daily_pnl"] = daily_pnl
             fund["actual_daily_pnl_date"] = sync_date
@@ -670,17 +685,22 @@ def apply_sync_preview(agent_home: Path, preview: dict, *, sync_date: str, drop_
             fund["holding_units"] = 0.0
             fund["last_valuation_date"] = sync_date
             fund["units_source"] = "screenshot_sync_missing_zero"
+            fund.pop("holding_units_basis_nav", None)
+            fund.pop("holding_units_basis_nav_date", None)
             fund["actual_daily_pnl"] = 0.0
             fund["actual_daily_pnl_date"] = sync_date
             fund["actual_daily_pnl_source"] = "portfolio_screenshot_sync"
             fund["last_real_position_date"] = sync_date
             fund["real_position_source"] = "portfolio_screenshot_sync"
             fund["actual_position_synced_at"] = synced_at
+            clear_official_daily_pnl(fund)
             dropped_codes.append(fund.get("fund_code", ""))
 
     portfolio["as_of_date"] = sync_date
     portfolio["last_valuation_run_date"] = sync_date
     portfolio["last_valuation_generated_at"] = timestamp_now()
+    for key in ("official_daily_pnl", "official_daily_pnl_confirmed_count", "official_daily_pnl_blocked_count", "official_daily_pnl_inactive_count"):
+        portfolio.pop(key, None)
     recalc_portfolio_totals(portfolio)
     definition["updated_at"] = timestamp_now()
     dump_json(portfolio_definition_path(agent_home), definition)

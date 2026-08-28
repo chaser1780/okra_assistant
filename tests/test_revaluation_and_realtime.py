@@ -4,6 +4,8 @@ import json
 import unittest
 
 from helpers import TempAgentHome
+from portfolio_state import daily_pnl_units_are_trusted
+from revalue_portfolio_official_nav import build_official_daily_pnl
 
 
 class RevaluationAndRealtimeTests(unittest.TestCase):
@@ -12,6 +14,29 @@ class RevaluationAndRealtimeTests(unittest.TestCase):
 
     def tearDown(self):
         self.agent.cleanup()
+
+    def test_confirmed_position_value_derived_units_are_trusted_for_daily_pnl(self):
+        trusted, reason = daily_pnl_units_are_trusted({"units_source": "position_value_derived_from_official_nav"})
+
+        self.assertTrue(trusted)
+        self.assertEqual(reason, "")
+
+    def test_zero_position_is_inactive_instead_of_blocked(self):
+        result = build_official_daily_pnl(
+            self.agent.root,
+            {"fund_code": "ZERO", "current_value": 0.0, "holding_units": 0.0, "units_source": "actual_position_missing_zero"},
+            {
+                "official_nav": 1.01,
+                "nav_date": "2026-03-11",
+                "previous_nav": 1.0,
+                "previous_nav_date": "2026-03-10",
+                "stale": False,
+            },
+            "2026-03-11",
+        )
+
+        self.assertEqual(result["official_daily_pnl"], 0.0)
+        self.assertEqual(result["official_daily_pnl_status"], "not_held")
 
     def build_portfolio(self):
         portfolio = {

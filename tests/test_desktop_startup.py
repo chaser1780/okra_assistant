@@ -43,6 +43,7 @@ class DesktopStartupTests(unittest.TestCase):
         self.assertIn("window.setInterval(refreshWhenVisible, 60_000)", source)
         self.assertIn('document.visibilityState === "visible"', source)
         self.assertIn("realtimeRequestInFlight.current", source)
+        self.assertIn('automatic });', source)
 
 
 if __name__ == "__main__":

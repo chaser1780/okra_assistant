@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from common import estimated_nav_path, load_json, load_portfolio, quote_path, resolve_agent_home, resolve_date
-from portfolio_state import actual_position_is_authoritative
 from preflight_check import perform_preflight
 from run_manifest_utils import begin_step, finalize_manifest, finish_step, new_run_manifest, write_manifest
 
@@ -84,26 +83,16 @@ def should_sync_units(agent_home: Path, report_date: str) -> bool:
     estimate_by_code = {item.get("fund_code"): item for item in estimates.get("items", [])}
 
     for fund in portfolio.get("funds", []):
-        if actual_position_is_authoritative(fund):
-            continue
         current_value = safe_float(fund.get("current_value")) or 0.0
         if current_value <= 0:
             continue
         estimate = estimate_by_code.get(fund.get("fund_code"), {})
         quote = quote_by_code.get(fund.get("fund_code"), {})
         official_nav = safe_float(estimate.get("official_nav")) or safe_float(quote.get("nav"))
-        official_nav_date = str(estimate.get("official_nav_date") or quote.get("as_of_date") or "").strip()
         stored_units = safe_float(fund.get("holding_units"))
-        last_valuation_date = str(fund.get("last_valuation_date") or "").strip()
-        units_source = str(fund.get("units_source") or "").strip()
-
         if official_nav is None or official_nav <= 0:
             continue
         if stored_units is None or stored_units <= 0:
-            return True
-        if official_nav_date and official_nav_date != last_valuation_date:
-            return True
-        if units_source != "derived_from_official_nav":
             return True
     return False
 

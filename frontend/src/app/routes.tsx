@@ -112,7 +112,7 @@ function WorkbenchShell() {
     if (!automatic) setRealtimeError("");
     setRealtimeRunning(true);
     try {
-      await runTask("realtime", { date: today });
+      await runTask("realtime", { date: today, automatic });
       await new Promise((resolve) => window.setTimeout(resolve, 4_000));
       await refreshAll();
       setRealtimeError("");

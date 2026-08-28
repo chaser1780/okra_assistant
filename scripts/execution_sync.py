@@ -25,7 +25,15 @@ from common import (
     timestamp_now,
     validated_advice_path,
 )
-from portfolio_state import _save_portfolio_state_unlocked, ensure_portfolio_definition, portfolio_state_event_path, portfolio_state_hash, upsert_execution_status
+from portfolio_state import (
+    _save_portfolio_state_unlocked,
+    clear_official_daily_pnl,
+    ensure_portfolio_definition,
+    portfolio_state_event_path,
+    portfolio_state_hash,
+    set_position_units_from_value,
+    upsert_execution_status,
+)
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
 from update_portfolio_from_trade import apply_trade
 
@@ -594,6 +602,8 @@ def preview_reconciliation(agent_home: Path, actual_positions: list[dict[str, An
             "fund_name": str(item.get("fund_name") or current.get("fund_name") or ""),
             "current_value": _money(item.get("current_value")),
             "holding_units": _units(item.get("holding_units")),
+            "position_nav": _units(item.get("position_nav")),
+            "position_nav_date": str(item.get("position_nav_date") or ""),
             "cost_basis_value": _money(item.get("cost_basis_value")),
             "holding_pnl": _money(item.get("holding_pnl")),
             "holding_return_pct": float(item.get("holding_return_pct", 0.0) or 0.0),
@@ -710,6 +720,8 @@ def _position_row_from_preview(row: dict[str, Any]) -> dict[str, Any]:
         "fund_name": name,
         "current_value": current_value,
         "holding_units": _units(row.get("holding_units")),
+        "position_nav": _units(row.get("position_nav")),
+        "position_nav_date": str(row.get("position_nav_date") or ""),
         "cost_basis_value": _money(cost_basis),
         "holding_pnl": _money(holding_pnl),
         "holding_return_pct": float(row.get("holding_return_pct", 0.0) or 0.0),
@@ -762,8 +774,16 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
         if row.get("holding_units") not in (None, ""):
             fund["holding_units"] = _units(row.get("holding_units")) or 0.0
             fund["units_source"] = "actual_position_sync"
+            fund.pop("holding_units_basis_nav", None)
+            fund.pop("holding_units_basis_nav_date", None)
         else:
-            fund["units_source"] = "actual_position_value_only"
+            set_position_units_from_value(
+                fund,
+                _money(row.get("current_value")),
+                fallback_source="actual_position_value_only",
+                basis_nav=_units(row.get("position_nav")),
+                basis_nav_date=str(row.get("position_nav_date") or ""),
+            )
         if row.get("cost_basis_value") not in (None, ""):
             fund["cost_basis_value"] = _money(row.get("cost_basis_value"))
         if row.get("holding_pnl") not in (None, ""):
@@ -771,7 +791,16 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
         else:
             fund["holding_pnl"] = round(_money(fund.get("current_value")) - _money(fund.get("cost_basis_value")), 2)
         fund["holding_return_pct"] = float(row.get("holding_return_pct", fund.get("holding_return_pct", 0.0)) or 0.0)
-        fund["last_valuation_date"] = snapshot_date
+        position_nav = _units(row.get("position_nav"))
+        if position_nav is not None and position_nav > 0:
+            position_nav_date = str(row.get("position_nav_date") or snapshot_date)
+            fund["last_valuation_nav"] = position_nav
+            fund["last_valuation_date"] = position_nav_date
+            fund["last_official_nav"] = position_nav
+            fund["last_official_nav_date"] = position_nav_date
+        else:
+            fund["last_valuation_date"] = snapshot_date
+        clear_official_daily_pnl(fund)
         if row.get("actual_daily_pnl") is not None:
             fund["actual_daily_pnl"] = row["actual_daily_pnl"]
             fund["actual_daily_pnl_date"] = snapshot_date
@@ -792,14 +821,21 @@ def _apply_reconciliation_unlocked(agent_home: Path, preview: dict[str, Any], *,
                 fund["holding_pnl"] = 0.0
                 fund["holding_return_pct"] = 0.0
                 fund["units_source"] = "actual_position_missing_zero"
+                fund.pop("holding_units_basis_nav", None)
+                fund.pop("holding_units_basis_nav_date", None)
                 fund["actual_daily_pnl"] = 0.0
                 fund["actual_daily_pnl_date"] = snapshot_date
                 fund["actual_daily_pnl_source"] = source
                 fund["last_real_position_date"] = snapshot_date
                 fund["real_position_source"] = source
                 fund["actual_position_synced_at"] = synced_at
+                clear_official_daily_pnl(fund)
                 dropped_codes.append(str(row.get("fund_code", "")))
     portfolio["as_of_date"] = snapshot_date
+    portfolio["last_valuation_run_date"] = snapshot_date
+    portfolio["last_valuation_generated_at"] = synced_at
+    for key in ("official_daily_pnl", "official_daily_pnl_confirmed_count", "official_daily_pnl_blocked_count", "official_daily_pnl_inactive_count"):
+        portfolio.pop(key, None)
     portfolio["total_value"] = round(sum(_money(item.get("current_value")) for item in portfolio.get("funds", []) or []), 2)
     portfolio["holding_pnl"] = round(sum(_money(item.get("holding_pnl")) for item in portfolio.get("funds", []) or []), 2)
     current_path, snapshot_path = _save_portfolio_state_unlocked(

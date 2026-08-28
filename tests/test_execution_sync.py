@@ -188,6 +188,41 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertEqual(fund["last_real_position_date"], "2026-05-05")
         self.assertFalse(lock_path(self.agent.root, "portfolio_state").exists())
 
+    def test_value_only_reconciliation_replaces_stale_units_from_last_nav(self):
+        current_path = self.agent.root / "db/portfolio_state/current.json"
+        portfolio = json.loads(current_path.read_text(encoding="utf-8"))
+        portfolio["official_daily_pnl"] = 999.0
+        fund = next(item for item in portfolio["funds"] if item["fund_code"] == "025857")
+        fund["official_daily_pnl"] = 999.0
+        fund["official_daily_pnl_date"] = "2026-05-05"
+        fund["official_daily_pnl_source"] = "official_nav_delta"
+        self.agent.write_json("db/portfolio_state/current.json", portfolio)
+        preview = preview_reconciliation(
+            self.agent.root,
+            [
+                {
+                    "fund_code": "025857",
+                    "fund_name": "电网设备C",
+                    "current_value": 1200.0,
+                    "position_nav": 2.0,
+                    "position_nav_date": "2026-05-04",
+                }
+            ],
+            snapshot_date="2026-05-05",
+            source="alipay_screenshot",
+        )
+        self.assertEqual(preview["matched_items"][0]["position_nav"], 2.0)
+        apply_reconciliation(self.agent.root, preview, drop_missing=False)
+
+        updated = json.loads(current_path.read_text(encoding="utf-8"))
+        fund = next(item for item in updated["funds"] if item["fund_code"] == "025857")
+        self.assertEqual(fund["holding_units"], 600.0)
+        self.assertEqual(fund["units_source"], "position_value_derived_from_official_nav")
+        self.assertEqual(fund["holding_units_basis_nav"], 2.0)
+        self.assertEqual(fund["holding_units_basis_nav_date"], "2026-05-04")
+        self.assertNotIn("official_daily_pnl", fund)
+        self.assertNotIn("official_daily_pnl", updated)
+
     def test_saved_reconciliation_rejects_tamper_stale_state_and_is_idempotent(self):
         preview = preview_reconciliation(
             self.agent.root,

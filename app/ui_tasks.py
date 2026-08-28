@@ -4,8 +4,10 @@ import json
 import os
 import sys
 import tomllib
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
+
+from common import is_trading_day, previous_trading_day, trading_days_between
 
 
 def _read_json(path: Path, default):
@@ -210,27 +212,6 @@ def _parse_schedule_time(value: str | None, default: str) -> tuple[int, int]:
         return int(hour), int(minute)
 
 
-def _is_business_day(day: date) -> bool:
-    return day.weekday() < 5
-
-
-def _previous_business_day(day: date) -> date:
-    current = day - timedelta(days=1)
-    while not _is_business_day(current):
-        current -= timedelta(days=1)
-    return current
-
-
-def _business_dates_between(start_exclusive: date, end_inclusive: date) -> list[str]:
-    results: list[str] = []
-    current = start_exclusive + timedelta(days=1)
-    while current <= end_inclusive:
-        if _is_business_day(current):
-            results.append(current.isoformat())
-        current += timedelta(days=1)
-    return results
-
-
 def latest_nightly_target_date(home: Path, now: datetime | None = None) -> str:
     strategy = _read_toml(home / "config" / "strategy.toml")
     schedule = strategy.get("schedule", {}) or {}
@@ -238,9 +219,9 @@ def latest_nightly_target_date(home: Path, now: datetime | None = None) -> str:
     today = current.date()
     nightly_hour, nightly_minute = _parse_schedule_time(schedule.get("nightly_start"), "21:00")
     nightly_reached = (current.hour, current.minute) >= (nightly_hour, nightly_minute)
-    if _is_business_day(today) and nightly_reached:
+    if is_trading_day(home, today) and nightly_reached:
         return today.isoformat()
-    return _previous_business_day(today).isoformat()
+    return previous_trading_day(home, today)
 
 
 def pending_nightly_catchup_dates(home: Path, portfolio_as_of_date: str, now: datetime | None = None) -> list[str]:
@@ -256,7 +237,7 @@ def pending_nightly_catchup_dates(home: Path, portfolio_as_of_date: str, now: da
     target_date = datetime.strptime(target_text, "%Y-%m-%d").date()
     if start_date >= target_date:
         return []
-    return _business_dates_between(start_date, target_date)
+    return trading_days_between(home, start_date, target_date)
 
 
 def portfolio_alignment_target_date(home: Path, now: datetime | None = None) -> str:
@@ -305,7 +286,7 @@ def should_autorun_intraday_on_boot(home: Path, report_date: str, now: datetime 
         report_day = datetime.strptime(report_date, "%Y-%m-%d").date()
     except Exception:
         return False
-    if not _is_business_day(report_day):
+    if not is_trading_day(home, report_day):
         return False
     current = now or datetime.now()
     intraday_hour, intraday_minute = _parse_schedule_time(schedule.get("intraday_start"), "14:00")
@@ -324,7 +305,7 @@ def should_refresh_realtime_on_boot(home: Path, report_date: str, now: datetime 
         report_day = datetime.strptime(report_date, "%Y-%m-%d").date()
     except Exception:
         return False
-    if not _is_business_day(report_day):
+    if not is_trading_day(home, report_day):
         return False
     current = now or datetime.now()
     intraday_hour, intraday_minute = _parse_schedule_time(schedule.get("intraday_start"), "14:00")

@@ -396,8 +396,8 @@ class OkraWebApi:
         )
         return coerce_model(FundDetailDto, payload)
 
-    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None) -> dict:
-        return self.task_controller.run_task(kind, force=force, run_date=run_date)
+    def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None, automatic: bool = False) -> dict:
+        return self.task_controller.run_task(kind, force=force, run_date=run_date, automatic=automatic)
 
     def long_memory_action(self, payload: dict) -> dict:
         return self.page_service.long_memory_action(payload)
@@ -991,7 +991,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/run/daily":
                 self._send_json(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif parsed.path == "/api/run/realtime":
-                self._send_json(self.api.run_task("realtime", run_date=str(payload.get("date") or payload.get("runDate") or "")))
+                self._send_json(
+                    self.api.run_task(
+                        "realtime",
+                        run_date=str(payload.get("date") or payload.get("runDate") or ""),
+                        automatic=bool(payload.get("automatic")),
+                    )
+                )
             elif parsed.path == "/api/copilot/explain":
                 self._send_json(self.api.explain(payload))
             elif parsed.path == "/api/long-memory/action":
@@ -1185,7 +1191,13 @@ class ContractRequestHandler(RequestHandler):
             if endpoint_path == "/api/run/daily":
                 self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
             elif endpoint_path == "/api/run/realtime":
-                self._send_envelope(self.api.run_task("realtime", run_date=str(payload.get("date") or payload.get("runDate") or "")))
+                self._send_envelope(
+                    self.api.run_task(
+                        "realtime",
+                        run_date=str(payload.get("date") or payload.get("runDate") or ""),
+                        automatic=bool(payload.get("automatic")),
+                    )
+                )
             elif endpoint_path == "/api/copilot/explain":
                 self._send_envelope(self.api.explain(payload))
             elif endpoint_path == "/api/long-memory/action":

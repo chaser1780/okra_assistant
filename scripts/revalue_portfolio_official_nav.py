@@ -136,6 +136,12 @@ def build_official_daily_pnl(agent_home, fund: dict, nav_info: dict, report_date
     if previous_nav is None or previous_nav <= 0 or not previous_nav_date:
         base["official_daily_pnl_reason"] = "missing_previous_official_nav"
         return base
+    units = safe_float(fund.get("holding_units"))
+    if float(fund.get("current_value", 0.0) or 0.0) <= 0 and (units is None or units <= 0):
+        base["official_daily_pnl"] = 0.0
+        base["official_daily_pnl_status"] = "not_held"
+        base["official_daily_pnl_reason"] = ""
+        return base
     if str(fund.get("official_daily_pnl_date") or "") == nav_date and str(fund.get("official_daily_pnl_source") or "") == "official_nav_delta":
         base["official_daily_pnl"] = safe_float(fund.get("official_daily_pnl"))
         base["official_daily_pnl_status"] = "already_written"
@@ -145,7 +151,6 @@ def build_official_daily_pnl(agent_home, fund: dict, nav_info: dict, report_date
     if not trusted:
         base["official_daily_pnl_reason"] = reason
         return base
-    units = safe_float(fund.get("holding_units"))
     if units is None or units <= 0:
         base["official_daily_pnl_reason"] = "missing_holding_units"
         return base
@@ -332,7 +337,8 @@ def main() -> None:
     stale_funds = [item["fund_code"] for item in items if item["status"] == "updated" and item.get("date_match_type") == "delayed"]
     daily_pnl_items = [official_daily_pnl_row(item) for item in items]
     confirmed_daily_pnl_items = [item for item in daily_pnl_items if item.get("official_daily_pnl_status") in {"ok", "already_written"}]
-    blocked_daily_pnl_items = [item for item in daily_pnl_items if item.get("official_daily_pnl_status") not in {"ok", "already_written"}]
+    inactive_daily_pnl_items = [item for item in daily_pnl_items if item.get("official_daily_pnl_status") == "not_held"]
+    blocked_daily_pnl_items = [item for item in daily_pnl_items if item.get("official_daily_pnl_status") not in {"ok", "already_written", "not_held"}]
     official_daily_pnl_total = round(sum(float(item.get("official_daily_pnl") or 0.0) for item in confirmed_daily_pnl_items), 2)
 
     portfolio["total_value"] = round(sum(float(fund.get("current_value", 0.0)) for fund in portfolio.get("funds", [])), 2)
@@ -343,6 +349,7 @@ def main() -> None:
     portfolio["official_daily_pnl"] = official_daily_pnl_total
     portfolio["official_daily_pnl_confirmed_count"] = len(confirmed_daily_pnl_items)
     portfolio["official_daily_pnl_blocked_count"] = len(blocked_daily_pnl_items)
+    portfolio["official_daily_pnl_inactive_count"] = len(inactive_daily_pnl_items)
 
     valuation_payload = {
         "report_date": report_date,
@@ -356,6 +363,7 @@ def main() -> None:
         "official_daily_pnl": official_daily_pnl_total,
         "official_daily_pnl_confirmed_count": len(confirmed_daily_pnl_items),
         "official_daily_pnl_blocked_count": len(blocked_daily_pnl_items),
+        "official_daily_pnl_inactive_count": len(inactive_daily_pnl_items),
         "items": items,
     }
 
@@ -366,6 +374,7 @@ def main() -> None:
         "total_official_daily_pnl": official_daily_pnl_total,
         "confirmed_count": len(confirmed_daily_pnl_items),
         "blocked_count": len(blocked_daily_pnl_items),
+        "inactive_count": len(inactive_daily_pnl_items),
         "items": daily_pnl_items,
     }
 

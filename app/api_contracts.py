@@ -256,6 +256,7 @@ class RunTaskRequestDto(MutationRequestModel):
     date: str | None = None
     runDate: str | None = None
     force: bool = False
+    automatic: bool = False
 
 
 class LongMemoryActionRequestDto(MutationRequestModel):
