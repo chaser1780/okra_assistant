@@ -509,7 +509,7 @@ def memory_items(ticket: dict[str, Any], memory_export: dict[str, Any], report_d
     return adaptive, similar, anti
 
 
-def rag_noncanonical_evidence(agent_home: Path, ticket: dict[str, Any], report_date: str, *, enabled: bool) -> tuple[list[LayeredContextItem], list[RagTraceRef], list[MissingDataItem]]:
+def rag_noncanonical_evidence(agent_home: Path, ticket: dict[str, Any], report_date: str, *, enabled: bool, decision_cutoff: str = "") -> tuple[list[LayeredContextItem], list[RagTraceRef], list[MissingDataItem]]:
     if not enabled:
         return [], [RagTraceRef("rag-disabled", "", "portfolio_trader", fallback_used=True, fallback_reason="RAG disabled for deterministic Phase 2 build")], []
     try:
@@ -519,10 +519,14 @@ def rag_noncanonical_evidence(agent_home: Path, ticket: dict[str, Any], report_d
         return [], [RagTraceRef("rag-import-failed", "", "portfolio_trader", fallback_used=True, fallback_reason=str(exc))], [
             MissingDataItem("rag_evidence", "missing", f"RAG import failed: {exc}", "Non-canonical evidence is empty; structured facts still drive the pack.")
         ]
+    # 仅当 decision_cutoff 是精确快照时刻（非 T23:59:59 日终 fallback）才作为 decision_at 传入；
+    # 日终 fallback 保持 end_of_day_legacy，不重造 now()
+    plan_decision_at = decision_cutoff.strip() if decision_cutoff and not decision_cutoff.strip().endswith("T23:59:59+08:00") else None
     try:
         plan = build_rag_query_plan(
             f"{ticket.get('fund_name', '')} {ticket.get('action_verb', '')} {ticket.get('thesis', '')}",
             query_date=report_date,
+            decision_at=plan_decision_at,
             retrieval_profile="portfolio_trader",
             intent="action_ticket_context",
             fund_codes=[str(ticket.get("fund_code", ""))],
@@ -627,7 +631,7 @@ def build_pack_for_ticket(
         canonical.insert(0, p_fact)
     canonical.extend(market_facts_from_context(ticket, context, report_date))
     adaptive, similar, anti = memory_items(ticket, memory_export, report_date, decision_cutoff)
-    rag_items, rag_refs, rag_missing = rag_noncanonical_evidence(agent_home, ticket, report_date, enabled=use_rag)
+    rag_items, rag_refs, rag_missing = rag_noncanonical_evidence(agent_home, ticket, report_date, enabled=use_rag, decision_cutoff=decision_cutoff)
     long_text = long_text_evidence_from_context(ticket, context, report_date)
     if rag_items:
         long_text.extend(item for item in rag_items if item.layer == "long_text_evidence")

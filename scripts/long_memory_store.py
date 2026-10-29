@@ -43,8 +43,13 @@ class ClosingConnection(sqlite3.Connection):
 
 def _connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, factory=ClosingConnection)
+    conn = sqlite3.connect(path, timeout=30.0, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
+    # Long-memory writes can overlap with API reads and analysis workers.
+    # WAL keeps readers available while a short writer transaction commits.
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -1091,8 +1096,25 @@ def migrate_legacy_review_memory(agent_home: Path) -> dict[str, Any]:
         ledger = load_json(ledger_path)
         for rule in (ledger.get("rules", []) if isinstance(ledger, dict) else []):
             stage = str(rule.get("stage", "candidate") or "candidate")
-            status = "strategic" if stage in {"strategic", "permanent", "core_permanent"} else ("archived" if stage == "archived" else "candidate")
-            priority = "core" if stage == "core_permanent" else ""
+            experiment_id = str(rule.get("experiment_id", "") or rule.get("experimentId", "") or "")
+            source_track = str(rule.get("source_track", "") or rule.get("sourceTrack", "") or "")
+            trust_status = str(rule.get("learning_trust_status", "") or "")
+            evidence_kinds = {
+                str(item.get("kind", "") or "")
+                for item in (rule.get("evidence_refs", []) or [])
+                if isinstance(item, dict)
+            }
+            learning_kinds = {"replay_summary", "replay_experiment", "outcome_event", "adaptive_policy", "strategy_skill"}
+            derived = bool(experiment_id) or source_track == "strategy_simulation" or bool(evidence_kinds & learning_kinds)
+            # 来源未知（旧 ledger 缺 experiment_id/track，且非明确 user_simulation）也不抬权
+            unknown_origin = not derived and source_track not in {"user_simulation"}
+            # derived 未显式 trusted、或来源未知：保留 candidate，不沿用 legacy strategic 抬权（防自评自证）
+            if (derived or unknown_origin) and trust_status != "trusted":
+                status = "candidate"
+                priority = ""
+            else:
+                status = "strategic" if stage in {"strategic", "permanent", "core_permanent"} else ("archived" if stage == "archived" else "candidate")
+                priority = "core" if stage == "core_permanent" else ""
             title = str(rule.get("title", "") or rule.get("rule_key", "Legacy Rule"))
             item = {
                 "memory_id": str(rule.get("rule_id", "") or stable_memory_id("portfolio", str(rule.get("rule_key", "")), title, "portfolio_policy_memory")),
@@ -1109,7 +1131,16 @@ def migrate_legacy_review_memory(agent_home: Path) -> dict[str, Any]:
                 "last_supported_at": str(rule.get("last_supported_at", "") or ""),
                 "last_contradicted_at": str(rule.get("last_contradicted_at", "") or ""),
                 "source": "legacy_review_memory",
-                "metadata": {"legacy_stage": stage, "category": rule.get("category", ""), "tags": rule.get("applies_to", []) or []},
+                "metadata": {
+                    "legacy_stage": stage,
+                    "category": rule.get("category", ""),
+                    "tags": rule.get("applies_to", []) or [],
+                    "experiment_id": experiment_id,
+                    "sourceTrack": source_track or "unknown_legacy",
+                    "learning_trust_status": trust_status,
+                    "formalInfluence": False,
+                    "promotionLevel": status,
+                },
                 "evidence_refs": [{"kind": "legacy_review_memory", "path": str(ledger_path)}],
             }
             upsert_memory_record(agent_home, item)

@@ -9,6 +9,13 @@ def horizon_label(horizon: int) -> str:
     return "T0" if horizon == 0 else f"T+{horizon}"
 
 
+def _fmt_excess(item: dict) -> str:
+    val = item.get("excess_return_vs_benchmark_pct")
+    if val is None:
+        return "信号缺口（同区间基准不可得，不冒充基准收益）"
+    return f"{val}%"
+
+
 def collect_reviews(agent_home, review_date: str) -> list[dict]:
     items: list[dict] = []
     for review_dir in (agent_home / "db" / "review_results", agent_home / "db" / "execution_reviews"):
@@ -95,7 +102,7 @@ def main() -> None:
                 f"评估收益 {item.get('evaluation_return_pct')}%，诊断标签 {item.get('diagnostic_label', 'unknown')}，"
                 f"复盘日真实涨跌 {item.get('review_day_change_pct')}%，复盘周涨跌 {item.get('review_week_change_pct')}%，"
                 f"持有期收益 {item.get('review_period_return_pct')}%，参考估值信号 {item.get('signal_estimate_change_pct')}%，"
-                f"参考代理信号 {item.get('signal_proxy_change_pct')}%，相对参考基准 {item.get('excess_return_vs_benchmark_pct')}%，"
+                f"参考代理信号 {item.get('signal_proxy_change_pct')}%，相对参考基准 {_fmt_excess(item)}，"
                 f"相对不操作：{item.get('no_trade_baseline')}，估算边际收益 {item.get('estimated_edge_vs_no_trade_amount')} 元，"
                 f"估算交易成本 {item.get('estimated_transaction_cost_amount')} 元，成本后边际收益 {item.get('net_edge_after_cost_amount')} 元，"
                 f"诊断原因：{item.get('diagnostic_reason', '暂无')}。"

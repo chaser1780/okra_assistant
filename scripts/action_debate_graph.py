@@ -12,6 +12,7 @@ from build_action_ticket_shadow import action_ticket_path
 from build_layered_retrieval_pack import retrieval_pack_path
 from common import dump_json, load_json, timestamp_now
 from multiagent_utils import call_json_agent
+from simulation_policy import normalize_direction, normalize_evidence_quality, normalize_size_tier, strictest_state
 
 
 SCHEMA_VERSION = "action_debate.v1"
@@ -47,6 +48,52 @@ LLM_NODE_SCHEMA = {
                     "target_status",
                     "confidence_delta",
                     "reason",
+                    "non_executable",
+                ],
+            },
+        }
+    },
+    "required": ["items"],
+}
+ACTION_FORMER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "ticket_id": {"type": "string"},
+                    "stance": {"type": "string"},
+                    "strength": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "verdict": {"type": "string"},
+                    "uncertainty": {"type": "string"},
+                    "target_status": {"type": "string"},
+                    "confidence_delta": {"type": "number"},
+                    "reason": {"type": "string"},
+                    "action": {"type": "string", "enum": ["add", "reduce", "switch_out", "hold", "watch"]},
+                    "size_tier": {"type": "string", "enum": ["small", "medium", "large", "none"]},
+                    "horizon": {"type": "string"},
+                    "evidence_quality": {"type": "string", "enum": ["high", "medium", "low", "unavailable"]},
+                    "non_executable": {"type": "boolean"},
+                },
+                "required": [
+                    "ticket_id",
+                    "stance",
+                    "strength",
+                    "summary",
+                    "verdict",
+                    "uncertainty",
+                    "target_status",
+                    "confidence_delta",
+                    "reason",
+                    "action",
+                    "size_tier",
+                    "horizon",
+                    "evidence_quality",
                     "non_executable",
                 ],
             },
@@ -302,6 +349,12 @@ def compact_llm_items(items: list[dict[str, Any]], limit: int = 8) -> list[dict[
                 "missing_data": list(item.get("missing_data", []) or [])[:6],
                 "source_refs": list(item.get("source_refs", []) or [])[:6],
                 "rag_trace_refs": list(item.get("rag_trace_refs", []) or [])[:3],
+                # 辩论链连线（契约）：referee 见 bull/bear；former 见 referee。bull/bear 节点为空串。
+                "bull_case_summary": truncate_text(item.get("bull_case_summary", ""), 240),
+                "bear_case_summary": truncate_text(item.get("bear_case_summary", ""), 240),
+                "bear_risk_strength": str(item.get("bear_risk_strength", "") or ""),
+                "referee_verdict": str(item.get("referee_verdict", "") or ""),
+                "referee_summary": truncate_text(item.get("referee_summary", ""), 240),
             }
         )
     return compacted
@@ -348,7 +401,7 @@ def call_debate_llm_node(
             context["agent_home"],
             system_prompt,
             json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
-            schema=LLM_NODE_SCHEMA,
+            schema=ACTION_FORMER_SCHEMA if node_name == "action_former" else LLM_NODE_SCHEMA,
             max_attempts=1,
             reasoning_effort=context.get("llm_reasoning_effort") or None,
             request_name=f"action_debate_{node_name}" + ("_retry_missing" if request_index else ""),
@@ -468,6 +521,7 @@ def build_evidence_view(pack: dict[str, Any], ticket: dict[str, Any]) -> dict[st
             "fund_name": str(target.get("fund_name", ticket.get("fund_name", "")) or ""),
             "ticket_id": str(target.get("ticket_id", ticket.get("ticket_id", "")) or ""),
             "action_verb": str(target.get("action_verb", ticket.get("action_verb", "")) or ""),
+            "role": str(ticket.get("role", "") or ""),
         },
         "ticket_status": str(ticket.get("ticket_status", "") or ""),
         "execution_mode": str(ticket.get("execution_mode", "") or ""),
@@ -576,9 +630,14 @@ def node_bear_case(state: ActionDebateState, context: dict[str, Any]) -> DebateN
         missing_blockers = [item for item in view["missing_data"] if item.get("blocks_debate")]
         risk_strength = "high" if view["ticket_status"] == "blocked" or missing_blockers else "medium" if view["counts"]["anti_pattern_count"] else "low"
         llm_case = llm_cases.get(ticket_id, {})
+        # 状态源封闭：LLM bear 强度只能加严、不能放松 deterministic 门控（blocked/blockers=high 不可被 LLM low 放松）。
+        _order = {"low": 0, "medium": 1, "high": 2}
+        llm_strength = str(llm_case.get("strength", "") or "").strip().lower()
+        if llm_strength in _order and _order[llm_strength] < _order[risk_strength]:
+            llm_strength = risk_strength
         bear_cases[ticket_id] = {
             "stance": "challenge_or_limit_shadow_action",
-            "risk_strength": truncate_text(llm_case.get("strength") or risk_strength, 80),
+            "risk_strength": truncate_text(llm_strength or risk_strength, 80),
             "summary": truncate_text(llm_case.get("summary") or view["primary_risk"], 240),
             "missing_data_count": view["counts"]["missing_data_count"],
             "blocking_missing_fields": [item["field"] for item in missing_blockers],
@@ -607,14 +666,31 @@ def node_debate_referee(state: ActionDebateState, context: dict[str, Any]) -> De
     verdicts: dict[str, dict[str, Any]] = {}
     bull_cases = context["bull_cases"]
     bear_cases = context["bear_cases"]
-    llm_verdicts = call_debate_llm_node(state, context, "debate_referee", context["evidence_views"])
+    # 契约：referee 必须看到真实 bull/bear 结论（此前只喂 evidence，沦为自说自话）。
+    referee_items = [
+        {
+            **view,
+            "bull_case_summary": bull_cases[ticket_id]["summary"],
+            "bear_case_summary": bear_cases[ticket_id]["summary"],
+            "bear_risk_strength": bear_cases[ticket_id]["risk_strength"],
+        }
+        for ticket_id, view in ((v["target"]["ticket_id"], v) for v in context["evidence_views"])
+    ]
+    llm_verdicts = call_debate_llm_node(state, context, "debate_referee", referee_items)
     for view in context["evidence_views"]:
         ticket_id = view["target"]["ticket_id"]
         bear = bear_cases[ticket_id]
-        verdict = referee_status(view["ticket_status"], bear)
+        det_verdict = referee_status(view["ticket_status"], bear)
         llm_verdict = llm_verdicts.get(ticket_id, {})
+        # 状态源封闭：LLM verdict 只能加严不能放松 deterministic degrade/blocked。
+        _vsev = {"support_shadow_ticket": 0, "degrade_to_watch": 1, "keep_blocked": 2}
+        llm_v = str(llm_verdict.get("verdict", "") or "").strip()
+        if llm_v in _vsev and _vsev[llm_v] < _vsev.get(det_verdict, 0):
+            verdict_text = det_verdict
+        else:
+            verdict_text = llm_v or det_verdict
         verdicts[ticket_id] = {
-            "verdict": truncate_text(llm_verdict.get("verdict") or verdict, 80),
+            "verdict": truncate_text(verdict_text, 80),
             "uncertainty": truncate_text(
                 llm_verdict.get("uncertainty") or ("high" if view["counts"]["missing_data_count"] > 2 else "medium" if bear["risk_strength"] != "low" else "low"),
                 80,
@@ -646,7 +722,16 @@ def action_status_from_verdict(ticket: dict[str, Any], verdict: dict[str, Any]) 
 def node_action_former(state: ActionDebateState, context: dict[str, Any]) -> DebateNodeResult:
     tickets = ticket_by_id(context["ticket_artifact"])
     drafts: dict[str, dict[str, Any]] = {}
-    llm_drafts = call_debate_llm_node(state, context, "action_former", context["evidence_views"])
+    # 契约：former 决策时必须看到 referee 裁决与论证（此前只喂 evidence）。
+    former_items = [
+        {
+            **view,
+            "referee_verdict": context["referee_verdicts"][ticket_id].get("verdict"),
+            "referee_summary": context["referee_verdicts"][ticket_id].get("summary"),
+        }
+        for ticket_id, view in ((v["target"]["ticket_id"], v) for v in context["evidence_views"])
+    ]
+    llm_drafts = call_debate_llm_node(state, context, "action_former", former_items)
     for view in context["evidence_views"]:
         ticket_id = view["target"]["ticket_id"]
         ticket = tickets.get(ticket_id, {})
@@ -654,17 +739,34 @@ def node_action_former(state: ActionDebateState, context: dict[str, Any]) -> Deb
         next_status = action_status_from_verdict(ticket, verdict)
         confidence_delta = -0.05 if verdict["uncertainty"] == "high" else 0.02 if verdict["verdict"] == "support_shadow_ticket" else 0.0
         llm_draft = llm_drafts.get(ticket_id, {})
+        # 契约：LLM 只决定方向 + size_tier，不决定绝对金额（金额由 guardrails 按冻结 basis 换算）。
+        proposed_action = normalize_direction(llm_draft.get("action"))
+        if proposed_action not in {"add", "reduce", "switch_out", "hold", "watch"} or str(ticket.get("role", "") or "") != "tactical":
+            proposed_action = str(ticket.get("action_verb", view["target"]["action_verb"]) or "hold")
+        size_tier = normalize_size_tier(llm_draft.get("size_tier"))
+        horizon = str(llm_draft.get("horizon", "") or "").strip() or "unspecified"
+        evidence_quality = normalize_evidence_quality(llm_draft.get("evidence_quality"))
+        if proposed_action == "hold":
+            size_tier = "none"
+        proposed_amount = 0.0
+        # 状态源封闭：former LLM 只能拉严不能放松。referee 已 degraded 时，
+        # former 报 shadow_only 不得恢复为 shadow_only（P1 反例）；invalid/None 忽略。
         llm_status = str(llm_draft.get("target_status", "") or "").strip()
-        if llm_status in {"shadow_only", "blocked", "degraded"} and next_status != "blocked":
-            next_status = llm_status
+        if llm_status:
+            next_status = strictest_state(next_status, llm_status)
         if llm_draft and next_status != "blocked":
             confidence_delta = float(llm_draft.get("confidence_delta", confidence_delta) or 0.0)
         drafts[ticket_id] = {
             "ticket_id": ticket_id,
             "target_status": next_status,
-            "action_verb": str(ticket.get("action_verb", view["target"]["action_verb"]) or ""),
+            "action_verb": proposed_action,
             "execution_mode": str(ticket.get("execution_mode", view["execution_mode"]) or ""),
-            "validated_amount": ticket.get("validated_amount", view["validated_amount"]),
+            "validated_amount": proposed_amount,
+            "action": proposed_action,
+            "size_tier": size_tier,
+            "horizon": horizon,
+            "evidence_quality": evidence_quality,
+            "amount": round(proposed_amount, 2),
             "confidence_delta": confidence_delta,
             "reason": truncate_text(llm_draft.get("reason") or verdict["summary"], 240),
             "reasoning_mode": "llm" if llm_draft else "deterministic",

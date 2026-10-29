@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from helpers import TempAgentHome  # noqa: E402
+from common import load_llm_config  # noqa: E402
 from run_daily_pipeline import maybe_run_step, step_output_exists  # noqa: E402
 from run_promoted_advice_chain import MOCK_MODE, run_chain  # noqa: E402
 
@@ -143,7 +144,7 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertTrue(status["is_mock"])
         self.assertFalse(status["production_eligible"])
         self.assertEqual("deterministic", status["debate_mode"])
-        self.assertEqual("gpt-5.5", status["llm_model"])
+        self.assertEqual(load_llm_config(self.agent.root)["model"], status["llm_model"])
         self.assertGreater(status["summary"]["validated_action_count"], 0)
         self.assertTrue((self.agent.root / "db" / "action_seed" / "2026-06-01.json").exists())
         raw = json.loads((self.agent.root / "db" / "llm_raw" / "2026-06-01.json").read_text(encoding="utf-8"))
@@ -186,6 +187,17 @@ class PromotedAdviceChainTests(unittest.TestCase):
         self.assertTrue((self.agent.root / capture["manifest_candidate_path"]).exists())
         candidate = json.loads((self.agent.root / capture["manifest_candidate_path"]).read_text(encoding="utf-8"))
         self.assertEqual("blocked", candidate["dates"]["2026-06-01"]["mode"])
+
+    def test_run_chain_freezes_decision_basis_upfront_with_metadata(self) -> None:
+        self.write_inputs()
+        status_path, status = run_chain(self.agent.root, "2026-06-01", generated_at="2026-06-01T14:30:00+08:00", debate_mode="deterministic")
+        self.assertTrue(status_path.exists())
+        basis_path = self.agent.root / "db" / "decision_basis" / "2026-06-01.json"
+        self.assertTrue(basis_path.exists(), "run_chain must freeze basis before debate")
+        basis = json.loads(basis_path.read_text(encoding="utf-8"))
+        self.assertEqual("2026-06-01T14:30:00+08:00", basis["decision_at"])
+        self.assertEqual(200.0, basis["funds"]["TADD"])
+        self.assertTrue(basis["snapshot_sha256"])
 
     def test_snapshot_capture_failure_is_recorded_without_blocking_official_outputs(self) -> None:
         self.write_inputs()

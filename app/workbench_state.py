@@ -21,6 +21,7 @@ try:
     )
     from decision_support import summarize_fund_agent_signals
     from portfolio_exposure import analyze_portfolio_exposure
+    from web_api_format import adapt_simulation_advice_row
     from ui_support import (
         build_action_change_lines,
         build_dashboard_alerts,
@@ -50,6 +51,7 @@ except ModuleNotFoundError:
     )
     from decision_support import summarize_fund_agent_signals
     from portfolio_exposure import analyze_portfolio_exposure
+    from web_api_format import adapt_simulation_advice_row
     from ui_support import (
         build_action_change_lines,
         build_dashboard_alerts,
@@ -318,6 +320,7 @@ class WorkbenchStateService:
         for section in ("tactical_actions", "dca_actions", "hold_actions"):
             for item in state.get("validated", {}).get(section, []) or []:
                 enriched = dict(item)
+                enriched.update(adapt_simulation_advice_row(item))
                 enriched["_section"] = section
                 signal_summary = summarize_fund_agent_signals(aggregate, item.get("fund_code", ""))
                 support_count = len(signal_summary.get("supporting_agents", []) or [])
@@ -878,7 +881,7 @@ def _build_single_fund_research_card(fund_code: str, row: dict[str, Any], fund: 
         "action": action,
         "actionLabel": _action_label(action),
         "amount": amount,
-        "amountText": _format_money(amount) if amount else "0.00",
+        "amountText": _format_money(amount),
         "priority": _safe_number(row.get("priority"), default=0.0),
         "confidence": confidence,
         "confidenceText": f"{confidence:.2f}" if confidence else "暂无",
@@ -894,11 +897,11 @@ def _build_single_fund_research_card(fund_code: str, row: dict[str, Any], fund: 
         "hasConflict": bool(row.get("_has_conflict", False)),
         "isActionable": bool(row.get("_is_actionable", action not in {"hold", "not_applicable"})),
         "portfolio": {
-            "currentValue": _safe_number(fund.get("current_value"), default=0.0),
+            "currentValue": _safe_number(fund.get("current_value"), default=None),
             "currentValueText": _format_money(fund.get("current_value")),
-            "holdingPnl": _safe_number(fund.get("holding_pnl"), default=0.0),
+            "holdingPnl": _safe_number(fund.get("holding_pnl"), default=None),
             "holdingPnlText": _format_money(fund.get("holding_pnl")),
-            "holdingReturnPct": _safe_number(fund.get("holding_return_pct"), default=0.0),
+            "holdingReturnPct": _safe_number(fund.get("holding_return_pct"), default=None),
             "holdingReturnPctText": _format_percent(fund.get("holding_return_pct")),
             "role": str(fund.get("role") or ""),
             "styleGroup": str(fund.get("style_group") or ""),
@@ -908,6 +911,9 @@ def _build_single_fund_research_card(fund_code: str, row: dict[str, Any], fund: 
         "market": {
             "dayChangePct": day_change,
             "dayChangePctText": _format_percent(day_change),
+            "dayChangePctAvailable": day_change is not None,
+            "weekChangePctAvailable": quote.get("week_change_pct_available") is True,
+            "monthChangePctAvailable": quote.get("month_change_pct_available") is True,
             "estimateChangePct": estimate_change,
             "estimateChangePctText": _format_percent(estimate_change),
             "proxyChangePct": proxy_change,
@@ -956,7 +962,9 @@ def _safe_number(value: Any, default: float | None = 0.0) -> float | None:
 
 
 def _format_money(value: Any) -> str:
-    numeric = _safe_number(value, 0.0) or 0.0
+    numeric = _safe_number(value, None)
+    if numeric is None:
+        return "不可用"
     return f"{numeric:,.2f}"
 
 
@@ -975,7 +983,7 @@ def _default_evidence_lines(
 ) -> list[str]:
     lines: list[str] = []
     if quote:
-        lines.append(f"官方净值涨跌 {quote.get('day_change_pct', '暂无')}%，日期 {quote.get('as_of_date', '暂无')}。")
+        lines.append(f"官方净值涨跌 {_format_percent(quote.get('day_change_pct'))}，日期 {quote.get('as_of_date', '暂无')}。")
     if estimated_nav:
         lines.append(f"估算净值涨跌 {estimated_nav.get('estimate_change_pct', '暂无')}%，置信度 {estimated_nav.get('confidence', '暂无')}。")
     if intraday_proxy:

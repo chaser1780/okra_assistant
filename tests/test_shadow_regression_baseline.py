@@ -19,10 +19,7 @@ sys.path.insert(0, str(TESTS_DIR))
 from audit_phase8_readiness import build_phase8_audit  # noqa: E402
 from build_shadow_regression_baseline import baseline_path, markdown_path, run_builder  # noqa: E402
 from helpers import TempAgentHome  # noqa: E402
-
-
-def _load_repo_json(relative: str) -> dict:
-    return json.loads((PROJECT_ROOT / relative).read_text(encoding="utf-8"))
+from layered_fixture_helpers import write_synthetic_inputs  # noqa: E402
 
 
 class ShadowRegressionBaselineTests(unittest.TestCase):
@@ -32,28 +29,11 @@ class ShadowRegressionBaselineTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.agent.cleanup()
 
-    def copy_real_inputs(self) -> None:
-        for relative in (
-            f"db/validated_advice/{REPORT_DATE}.json",
-            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
-            f"db/llm_context/{REPORT_DATE}.json",
-            f"db/evidence_index/{REPORT_DATE}.json",
-            "db/long_memory/exports/all_memory.json",
-        ):
-            self.agent.write_json(relative, _load_repo_json(relative))
-
-    def copy_real_inputs_for_date(self, report_date: str) -> None:
-        for relative in (
-            f"db/validated_advice/{report_date}.json",
-            f"db/portfolio_state/snapshots/{report_date}.json",
-            f"db/llm_context/{report_date}.json",
-            f"db/evidence_index/{report_date}.json",
-            "db/long_memory/exports/all_memory.json",
-        ):
-            self.agent.write_json(relative, _load_repo_json(relative))
+    def seed(self, report_date: str = REPORT_DATE) -> None:
+        write_synthetic_inputs(self.agent, report_date)
 
     def test_builds_named_shadow_regression_baseline_and_phase8_audit_uses_it(self) -> None:
-        self.copy_real_inputs()
+        self.seed()
 
         json_path, md_path, payload = run_builder(
             self.agent.root,
@@ -78,7 +58,7 @@ class ShadowRegressionBaselineTests(unittest.TestCase):
         self.assertIn("promoted_official_run", audit["blocking_gates"])
 
     def test_regression_baseline_fails_when_preview_is_not_validator_compatible(self) -> None:
-        self.copy_real_inputs_for_date("2026-04-20")
+        self.seed("2026-04-20")
         preview_file = self.agent.root / "db/refactor_shadow_runs/2026-04-20__official_advice_compat_preview/official_advice_compat_preview.json"
 
         def write_failed_preview(*args, **kwargs):

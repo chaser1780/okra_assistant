@@ -61,7 +61,11 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
         <MetricCard title="总资产" value={portfolio.totalValueText} body={`快照日期 ${portfolio.asOfDate || "暂无"}`} tone="accent" />
         <MetricCard title="持有盈亏" value={portfolio.holdingPnlText} body="基于当前持仓快照汇总" tone={pnlTone(portfolio.holdingPnl)} />
         <MetricCard title="持仓数量" value={String(portfolio.items.length)} body="当前组合覆盖的基金数量" tone="info" />
-        <MetricCard title="现金" value={portfolio.cashText} body="用于下一次再平衡或补仓" tone="success" />
+        {portfolio.simulationV2?.fundingMode === "virtual_external_flows" ? (
+          <MetricCard title="虚拟本金净流入" value={portfolio.simulationV2.netExternalFlow == null ? "暂无" : signedMoney(portfolio.simulationV2.netExternalFlow)} body="买入自动入金、卖出自动出金、分红与费用内部结算，现金池余额无需手动维护" tone="success" />
+        ) : (
+          <MetricCard title="现金(旧版参考)" value={portfolio.cashText} body="旧版余额参考，不参与新规则下的再平衡" tone="success" />
+        )}
       </div>
 
       <TerminalPanel title="组合摘要" meta={`SNAPSHOT / ${portfolio.asOfDate || "暂无日期"}`}>
@@ -114,10 +118,10 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={portfolio.roleAllocation} layout="vertical" margin={{ left: 18, right: 8, top: 8, bottom: 0 }}>
-                <CartesianGrid stroke="#1e293b" horizontal={false} />
-                <XAxis type="number" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={compactMoney} />
-                <YAxis dataKey="name" type="category" width={98} tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={roleLabel} />
-                <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8 }} formatter={(value) => [compactMoney(value), "市值"]} />
+                <CartesianGrid stroke="var(--chart-grid)" horizontal={false} />
+                <XAxis type="number" tick={{ fill: "#718096", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={compactMoney} />
+                <YAxis dataKey="name" type="category" width={98} tick={{ fill: "#718096", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={roleLabel} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip)", border: "1px solid var(--chart-tooltip-border)", borderRadius: 8 }} formatter={(value) => [compactMoney(value), "市值"]} />
                 <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                   {portfolio.roleAllocation.map((entry, index) => (
                     <Cell key={entry.name} fill={palette[index % palette.length]} />
@@ -133,11 +137,11 @@ export function PortfolioPage({ portfolio, onOpenFundDetail }: { portfolio: Port
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={returnBars} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-                <CartesianGrid stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="code" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => `${value}%`} />
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="code" tick={{ fill: "#718096", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#718096", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => `${value}%`} />
                 <Tooltip
-                  contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8 }}
+                  contentStyle={{ background: "var(--chart-tooltip)", border: "1px solid var(--chart-tooltip-border)", borderRadius: 8 }}
                   formatter={(value, name) => [name === "pnl" ? signedMoney(value) : signedPct(value), name === "pnl" ? "持有盈亏" : "持有收益率"]}
                   labelFormatter={(label) => returnBars.find((item) => item.code === label)?.name ?? label}
                 />
@@ -247,6 +251,7 @@ function RiskBreakdownPanel({ rows, summary }: { rows: PortfolioRiskBreakdown[];
         <div className="flex flex-wrap gap-2">
           <Badge tone="info">组合观察 {weighted == null ? "不可用" : weighted.toFixed(1)}</Badge>
           <Badge tone={summary?.partialCoverageFundCount ? "warning" : "success"}>部分覆盖 {summary?.partialCoverageFundCount ?? 0}</Badge>
+          <Badge tone="neutral">组合覆盖 {summary?.weightedComponentCoverage == null ? "不可用" : `${(summary.weightedComponentCoverage * 100).toFixed(0)}%`}</Badge>
           <Badge tone="neutral">历史百分位 {summary?.historicalPercentileAvailableCount ?? 0} 只</Badge>
         </div>
       </div>
@@ -279,7 +284,7 @@ function RiskBreakdownPanel({ rows, summary }: { rows: PortfolioRiskBreakdown[];
                   <td className="px-3 py-3 text-right"><RiskValue value={row.newsRisk} /></td>
                   <td className="px-3 py-3 text-right"><RiskValue value={row.executionFrictionRisk} /></td>
                   <td className="metric-number px-3 py-3 text-right text-slate-300">{row.historicalPercentile == null ? "样本不足" : `${row.historicalPercentile.toFixed(0)}%`}</td>
-                  <td className="px-3 py-3"><details><summary className="cursor-pointer text-xs text-cyan-300">{row.dataCoverage.availableComponentCount}/{row.dataCoverage.componentCount} 项</summary><div className="mt-2 max-w-72 space-y-1 text-xs leading-5 text-slate-500">{Object.entries(row.reasons).map(([key, reason]) => <div key={key}><span className="text-slate-300">{riskLabel(key)}：</span>{reason}</div>)}</div></details></td>
+                  <td className="px-3 py-3"><details><summary className="cursor-pointer text-xs text-cyan-300">{row.dataCoverage.availableComponentCount == null || row.dataCoverage.componentCount == null ? "覆盖不可用" : `${row.dataCoverage.availableComponentCount}/${row.dataCoverage.componentCount} 项`} · {row.dataCoverage.coverageRatio == null ? "不可用" : `${(row.dataCoverage.coverageRatio * 100).toFixed(0)}%`}</summary><div className="mt-2 max-w-72 space-y-1 text-xs leading-5 text-slate-500">{Object.entries(row.reasons).map(([key, reason]) => <div key={key}><span className="text-slate-300">{riskLabel(key)}：</span>{reason}</div>)}</div></details></td>
                 </tr>
               ))}
             </tbody>
@@ -321,15 +326,15 @@ function PortfolioDetail({ item, onOpenFundDetail }: { item: PortfolioItem; onOp
     ["官方日盈亏", `${officialDailyPnlLabel(item)}${item.officialDailyPnlDate ? ` (${item.officialDailyPnlDate})` : ""}`],
     ["持有收益率", item.holdingReturnPctText],
     ["组合占比", item.weightText],
-    ["持有份额", text(item.holdingUnits, "不可用")],
-    ["最近净值", text(item.lastNav, "不可用")],
+    ["持有份额", text(item.holdingUnits, "待确认")],
+    ["最近净值", text(item.lastNav, "待确认")],
     ["净值日期", item.lastNavDate || "暂无"],
     ["角色", roleLabel(item.role || "未标注")],
     ["风格分组", styleLabel(item.styleGroup || "未分组")],
     ["交易状态", item.allowTrade ? "允许交易" : "固定持有/不可交易"],
     ["官方日盈亏状态", item.officialDailyPnlStatus || "暂无"],
     ["官方日盈亏说明", item.officialDailyPnlReason || "暂无"],
-    ["定投金额", item.fixedDailyBuyAmount === null ? "不可用" : item.fixedDailyBuyAmount > 0 ? `${item.fixedDailyBuyAmount} 元/日` : "未开启"]
+    ["固定模拟定投配置", item.fixedDailyBuyAmount === null ? "未配置" : item.fixedDailyBuyAmount > 0 ? `${item.fixedDailyBuyAmount} 元/日` : "未开启"]
   ];
   return (
     <div className="space-y-4">

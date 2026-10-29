@@ -36,9 +36,9 @@ def safe_float(value: Any) -> float | None:
         return None
 
 
-def compute_return(latest_nav: float | None, baseline_nav: float | None) -> float:
+def compute_return(latest_nav: float | None, baseline_nav: float | None) -> float | None:
     if latest_nav in (None, 0) or baseline_nav in (None, 0):
-        return 0.0
+        return None
     return round((latest_nav / baseline_nav - 1) * 100, 2)
 
 
@@ -90,6 +90,9 @@ def build_demo_quotes(watchlist: dict, report_date: str) -> list[dict]:
             "day_change_pct": day_change_pct,
             "week_change_pct": round(day_change_pct * 2.1, 2),
             "month_change_pct": round(day_change_pct * 4.3, 2),
+            "day_change_pct_available": True,
+            "week_change_pct_available": True,
+            "month_change_pct_available": True,
             "as_of_date": report_date,
             "freshness_status": "fresh",
             "source_url": f"https://fundf10.eastmoney.com/jjjz_{fund['code']}.html",
@@ -137,7 +140,7 @@ def fetch_nav_history(session: requests.Session, fund_code: str, page_size: int,
     return rows
 
 
-def build_real_quote(session: requests.Session, fund: dict, settings: dict, report_date: str) -> dict:
+def build_real_quote(session: requests.Session, fund: dict, settings: dict, report_date: str, agent_home: Path | None = None) -> dict:
     timeout_seconds = int(settings["providers"]["quotes"].get("timeout_seconds", 15))
     page_size = int(settings["providers"]["quotes"].get("history_page_size", 120))
     rows = fetch_nav_history(session, fund["code"], page_size=page_size, timeout_seconds=timeout_seconds)
@@ -152,21 +155,26 @@ def build_real_quote(session: requests.Session, fund: dict, settings: dict, repo
     week_nav = safe_float(week_baseline.get("DWJZ")) if week_baseline else None
     month_nav = safe_float(month_baseline.get("DWJZ")) if month_baseline else None
     day_change_pct = safe_float(latest.get("JZZZL"))
-    freshness = classify_official_nav_freshness(report_date, latest.get("FSRQ", ""))
+    freshness = classify_official_nav_freshness(report_date, latest.get("FSRQ", ""), agent_home=agent_home)
     if day_change_pct is None:
         day_change_pct = compute_return(latest_nav, previous_nav)
+    week_change_pct = compute_return(latest_nav, week_nav)
+    month_change_pct = compute_return(latest_nav, month_nav)
     return {
         "code": fund["code"],
         "name": fund["name"],
         "category": fund.get("category", "unknown"),
         "benchmark": fund.get("benchmark", ""),
-        "nav": round(latest_nav or 0.0, 4),
-        "cumulative_nav": round(cumulative_nav or 0.0, 4),
+        "nav": round(latest_nav, 4) if latest_nav is not None else None,
+        "cumulative_nav": round(cumulative_nav, 4) if cumulative_nav is not None else None,
         "previous_nav": round(previous_nav, 4) if previous_nav is not None else None,
         "previous_nav_date": previous.get("FSRQ", "") if previous else "",
-        "day_change_pct": round(day_change_pct, 2),
-        "week_change_pct": compute_return(latest_nav, week_nav),
-        "month_change_pct": compute_return(latest_nav, month_nav),
+        "day_change_pct": round(day_change_pct, 2) if day_change_pct is not None else None,
+        "week_change_pct": week_change_pct,
+        "month_change_pct": month_change_pct,
+        "day_change_pct_available": day_change_pct is not None,
+        "week_change_pct_available": week_change_pct is not None,
+        "month_change_pct_available": month_change_pct is not None,
         "as_of_date": latest.get("FSRQ", ""),
         "requested_date": report_date,
         "date_match_type": freshness["status"],
@@ -202,16 +210,16 @@ def get_thread_session() -> requests.Session:
     return session
 
 
-def fetch_one_quote(fund: dict, settings: dict, report_date: str) -> dict:
-    return build_real_quote(get_thread_session(), fund, settings, report_date)
+def fetch_one_quote(fund: dict, settings: dict, report_date: str, agent_home: Path | None = None) -> dict:
+    return build_real_quote(get_thread_session(), fund, settings, report_date, agent_home)
 
 
-def build_realtime_payload(watchlist: dict, settings: dict, report_date: str, provider_name: str) -> dict:
+def build_realtime_payload(watchlist: dict, settings: dict, report_date: str, provider_name: str, agent_home: Path | None = None) -> dict:
     workers = min(6, max(1, len(watchlist["funds"])))
     items_by_index: dict[int, dict] = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(fetch_one_quote, fund, settings, report_date): index
+            executor.submit(fetch_one_quote, fund, settings, report_date, agent_home): index
             for index, fund in enumerate(watchlist["funds"])
         }
         for future in as_completed(futures):
@@ -251,7 +259,7 @@ def main() -> None:
 
         if provider in {"eastmoney_nav_api", "eastmoney"}:
             try:
-                payload = build_realtime_payload(watchlist, settings, report_date, provider)
+                payload = build_realtime_payload(watchlist, settings, report_date, provider, agent_home)
                 item_count = len(payload.get("funds", []))
                 provider_attempts.append(build_provider_attempt(provider, "ok", item_count=item_count, ok_count=item_count, selected=True))
                 break
@@ -261,7 +269,7 @@ def main() -> None:
                 continue
 
         if provider == "stale_snapshot":
-            payload = stale_fallback_from_recent_snapshot(target_path, report_date, provider, "funds", last_error or "fallback_requested")
+            payload = stale_fallback_from_recent_snapshot(target_path, report_date, provider, "funds", last_error or "fallback_requested", agent_home=agent_home)
             if payload is not None:
                 item_count = len(payload.get("funds", []))
                 provider_attempts.append(
@@ -282,7 +290,7 @@ def main() -> None:
         provider_attempts.append(build_provider_attempt(provider, "unsupported", detail=f"Unsupported quotes provider: {provider}"))
 
     if payload is None and provider_config.allow_stale_fallback:
-        payload = stale_fallback_from_recent_snapshot(target_path, report_date, "stale_snapshot_auto", "funds", last_error or "all_providers_failed")
+        payload = stale_fallback_from_recent_snapshot(target_path, report_date, "stale_snapshot_auto", "funds", last_error or "all_providers_failed", agent_home=agent_home)
         if payload is not None:
             item_count = len(payload.get("funds", []))
             provider_attempts.append(

@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from artifact_boundary import assert_refactor_write_allowed, relative_posix
-from common import dump_json, load_json, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
+from common import dump_json, load_json, load_strategy, resolve_agent_home, resolve_date, timestamp_now, validated_advice_path
 from build_action_ticket_shadow import load_portfolio_state_for_report
 from promoted_advice_guardrails import build_validated_payload
+from simulation_policy import strictest_state, state_allows_trade
 
 
 SCHEMA_VERSION = "official_advice_compat_preview.v1"
@@ -22,6 +23,8 @@ REQUIRED_COMMITTEE_DECISION_FIELDS = {
     "proposed_action",
     "size_bucket",
     "suggest_amount",
+    "requested_amount",
+    "validated_amount",
     "confidence",
     "thesis",
     "supporting_signal_ids",
@@ -36,6 +39,7 @@ REQUIRED_FINAL_DECISION_FIELDS = {
     "fund_code",
     "action",
     "suggest_amount",
+    "requested_amount",
     "priority",
     "confidence",
     "thesis",
@@ -52,6 +56,7 @@ REQUIRED_VALIDATED_ACTION_FIELDS = {
     "fund_name",
     "validated_action",
     "validated_amount",
+    "requested_amount",
     "model_action",
     "confidence",
     "thesis",
@@ -319,8 +324,20 @@ def debate_summary(debate: dict[str, Any]) -> str:
     return str(former.get("reason", "") or "").strip()
 
 
+def effective_debate_state(ticket: dict[str, Any], debate: dict[str, Any]) -> str:
+    """原 ticket / debate 自身 / former.target_status 三方取最严（契约 §5，fail-closed）。
+
+    修复 P1 端到端闭合：此前投影只读原 ticket_status + hard_gate，
+    referee/former 产出的 degraded/blocked 被丢弃，导致软降级照样下单。
+    """
+    outputs = debate_outputs(debate)
+    former = outputs.get("action_former", {}) if isinstance(outputs.get("action_former"), dict) else {}
+    former_state = former.get("target_status") if isinstance(former, dict) else None
+    return strictest_state(ticket.get("ticket_status"), debate.get("ticket_status"), former_state)
+
+
 def risk_veto_for(ticket: dict[str, Any], debate: dict[str, Any]) -> bool:
-    if ticket.get("ticket_status") in {"blocked", "degraded"}:
+    if not state_allows_trade(effective_debate_state(ticket, debate)):
         return True
     outputs = debate_outputs(debate)
     guardrail = outputs.get("hard_guardrail_check", {}) if isinstance(outputs.get("hard_guardrail_check"), dict) else {}
@@ -337,11 +354,49 @@ def compact_decision_trace(ticket: dict[str, Any], pack: dict[str, Any], debate:
     }
 
 
-def build_committee_decision(ticket: dict[str, Any], pack: dict[str, Any], debate: dict[str, Any], priority: int) -> dict[str, Any]:
+def tactical_amount_cap(strategy: dict[str, Any] | None, action: str) -> float | None:
+    if not isinstance(strategy, dict) or action not in {"add", "reduce", "switch_out"}:
+        return None
+    tactical = strategy.get("tactical", {}) if isinstance(strategy.get("tactical"), dict) else {}
+    key = "max_add_amount" if action == "add" else "max_reduce_amount"
+    value = tactical.get(key)
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def build_committee_decision(
+    ticket: dict[str, Any],
+    pack: dict[str, Any],
+    debate: dict[str, Any],
+    priority: int,
+    *,
+    strategy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     amount = safe_float(ticket.get("validated_amount"))
+    requested_amount = amount
     veto = risk_veto_for(ticket, debate)
     action = str(ticket.get("action_verb", "hold") or "hold")
+    former = (debate_outputs(debate).get("action_former", {}) or {}) if isinstance(debate_outputs(debate).get("action_former", {}), dict) else {}
+    if str(ticket.get("role", "") or "") == "tactical":
+        proposed_action = str(former.get("action", former.get("action_verb", "")) or "").strip().lower()
+        if proposed_action in {"add", "reduce", "switch_out", "hold", "watch"}:
+            action = proposed_action
+            if action == "hold":
+                amount = 0.0
+            elif former.get("size_tier"):
+                # simulation_v2：LLM 只给方向+tier，金额由 guardrails 按冻结 basis 换算（此处不截固定额）。
+                amount = 0.0
+            elif "amount" in former:
+                requested_amount = max(0.0, safe_float(former.get("amount")))
+                amount = requested_amount
+                cap = tactical_amount_cap(strategy, action)
+                if cap is not None and amount > cap:
+                    amount = cap
     notes = guardrail_notes(ticket)
+    if action != "hold" and round(requested_amount, 2) != round(amount, 2):
+        notes.append(f"tactical_amount_cap: requested={requested_amount:.2f}, validated={amount:.2f}")
     debate_note = debate_summary(debate)
     if debate_note:
         notes.append(f"debate_referee: {debate_note}")
@@ -350,6 +405,12 @@ def build_committee_decision(ticket: dict[str, Any], pack: dict[str, Any], debat
         "fund_name": str(ticket.get("fund_name", "") or ""),
         "role": str(ticket.get("role", "") or ""),
         "proposed_action": action,
+        "proposed_amount_source": "action_former" if str(ticket.get("role", "") or "") == "tactical" and former.get("action") else "ticket",
+        "requested_amount": requested_amount,
+        "validated_amount": amount if action != "hold" else 0.0,
+        "size_tier": str(former.get("size_tier", "none") or "none") if str(ticket.get("role", "") or "") == "tactical" else "none",
+        "horizon": str(former.get("horizon", "unspecified") or "unspecified"),
+        "evidence_quality": str(former.get("evidence_quality", "unavailable") or "unavailable"),
         "size_bucket": size_bucket_for(amount, ticket.get("size_bucket")),
         "suggest_amount": amount if action != "hold" else 0.0,
         "confidence": preview_confidence(ticket, debate),
@@ -380,6 +441,8 @@ def build_final_decision(committee_decision: dict[str, Any], ticket: dict[str, A
         "fund_code": committee_decision["fund_code"],
         "action": action,
         "suggest_amount": safe_float(committee_decision.get("suggest_amount")) if action != "hold" else 0.0,
+        "requested_amount": safe_float(committee_decision.get("requested_amount")),
+        "validated_amount": safe_float(committee_decision.get("validated_amount")) if action != "hold" else 0.0,
         "priority": int(committee_decision.get("priority", 999) or 999),
         "confidence": committee_decision["confidence"],
         "thesis": committee_decision["thesis"],
@@ -404,6 +467,7 @@ def build_validated_action_preview(ticket: dict[str, Any], final_decision: dict[
         "strategy_bucket": bucket,
         "validated_action": action,
         "validated_amount": amount,
+        "requested_amount": safe_float(final_decision.get("requested_amount")),
         "model_action": str(legacy.get("model_action", "") or ticket.get("action_verb", "") or action),
         "priority": int(final_decision.get("priority", 999) or 999),
         "confidence": safe_float(final_decision.get("confidence")),
@@ -692,6 +756,7 @@ def build_preview_payload(
     retrieval_artifact = load_json_dict(retrieval_file, "retrieval_pack")
     debate_artifact = load_json_dict(debate_file, "action_debate")
     validated = load_optional_json_dict(validated_file)
+    strategy = load_strategy(agent_home)
     validate_chain_contracts(
         agent_home=agent_home,
         report_date=report_date,
@@ -721,7 +786,7 @@ def build_preview_payload(
         ticket_id = str(ticket.get("ticket_id", "") or "")
         pack = pack_map.get(ticket_id, {})
         debate = debate_map.get(ticket_id, {})
-        committee_decision = build_committee_decision(ticket, pack, debate, priority)
+        committee_decision = build_committee_decision(ticket, pack, debate, priority, strategy=strategy)
         if is_mock:
             committee_decision["execution_eligible"] = False
             committee_decision["constraint_notes"] = stable_list(
@@ -733,8 +798,11 @@ def build_preview_payload(
         final_decisions.append(final_decision)
         validated_action_previews.append(build_validated_action_preview(ticket, final_decision))
 
+    # simulation_v2：promoted 运行即新建议 schema（不按当天是否有交易 tier 判定）；
+    # 仅 shadow preview / 旧真 artifact 保持 legacy schema。
+    _v2 = bool(promoted_run)
     committee_bundle_preview = {
-        "schema_version": 1,
+        "schema_version": ("simulation_v2" if _v2 else 1),
         "report_date": report_date,
         "generated_at": generated_at,
         "decision_mode": root_decision_mode,
@@ -788,6 +856,7 @@ def build_preview_payload(
         ],
     }
     final_advice_preview = {
+        "schema_version": ("simulation_v2" if _v2 else 1),
         "market_view": committee_bundle_preview["market_view"],
         "fund_decisions": final_decisions,
         "cross_fund_observations": committee_bundle_preview["cross_fund_observations"],

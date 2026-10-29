@@ -51,9 +51,9 @@ def daily_return_series(points: list[SeriesPoint]) -> list[SeriesPoint]:
     result: list[SeriesPoint] = []
     previous: float | None = None
     for point in points:
-        if previous in (None, 0):
-            result.append(SeriesPoint(point.date, 0.0))
-        else:
+        # The first observation has no comparable baseline. Omitting it keeps
+        # the chart from presenting an invented 0.00% return.
+        if previous not in (None, 0):
             result.append(SeriesPoint(point.date, round((point.value / previous - 1.0) * 100.0, 4)))
         previous = point.value
     return result
@@ -77,14 +77,17 @@ def allocation_history(home: Path, key: str, range_label: str = "成立以来", 
     paths = sorted((home / "db" / "portfolio_state" / "snapshots").glob("*.json"))
     for path in paths:
         payload = read_json(path, {})
-        total = float(payload.get("total_value", 0) or 0)
+        total = _optional_float(payload.get("total_value"))
         funds = payload.get("funds", []) or []
         grouped: dict[str, float] = {}
         for fund in funds:
+            amount = _optional_float(fund.get("current_value"))
+            if amount is None:
+                continue
             label = str(fund.get(key) or "未归类")
-            grouped[label] = grouped.get(label, 0.0) + float(fund.get("current_value", 0) or 0)
+            grouped[label] = grouped.get(label, 0.0) + amount
         values = [
-            {"name": label, "weight": round(value / total * 100.0, 4) if total else 0.0}
+            {"name": label, "weight": round(value / total * 100.0, 4) if total not in (None, 0) else None}
             for label, value in sorted(grouped.items(), key=lambda item: item[1], reverse=True)
         ]
         rows.append({"date": path.stem[:10], "values": values})
@@ -150,10 +153,10 @@ def collect_quote_history(home: Path, fund_code: str, range_label: str = "成立
         week = []
         month = []
         for idx, point in enumerate(nav):
-            if idx >= 5:
-                week.append(SeriesPoint(point.date, round((point.value / nav[idx - 5].value - 1) * 100, 2) if nav[idx - 5].value else 0.0))
-            if idx >= 21:
-                month.append(SeriesPoint(point.date, round((point.value / nav[idx - 21].value - 1) * 100, 2) if nav[idx - 21].value else 0.0))
+            if idx >= 5 and point.value and nav[idx - 5].value:
+                week.append(SeriesPoint(point.date, round((point.value / nav[idx - 5].value - 1) * 100, 2)))
+            if idx >= 21 and point.value and nav[idx - 21].value:
+                month.append(SeriesPoint(point.date, round((point.value / nav[idx - 21].value - 1) * 100, 2)))
         return {
             "nav": nav,
             "nav_normalized": _normalize(nav),
@@ -219,7 +222,9 @@ def collect_proxy_history(home: Path, fund_code: str, range_label: str = "成立
         for item in payload.get("proxies", []) or []:
             if item.get("proxy_fund_code") != fund_code:
                 continue
-            daily.append(SeriesPoint(path.stem[:10], float(item.get("change_pct", 0) or 0)))
+            change = _optional_float(item.get("change_pct"))
+            if change is not None:
+                daily.append(SeriesPoint(path.stem[:10], change))
             break
     daily = _filter_points(daily, range_label)
     normalized: list[SeriesPoint] = []
@@ -269,13 +274,16 @@ def collect_portfolio_history(home: Path, range_label: str = "成立以来", end
     return_pct: list[SeriesPoint] = []
     for path in sorted((home / "db" / "portfolio_state" / "snapshots").glob("*.json")):
         payload = read_json(path, {})
-        current_total = float(payload.get("total_value", 0) or 0)
-        current_pnl = float(payload.get("holding_pnl", 0) or 0)
-        cost_basis = current_total - current_pnl
-        current_return = round((current_pnl / cost_basis) * 100, 4) if cost_basis > 0 else 0.0
-        total_value.append(SeriesPoint(path.stem[:10], current_total))
-        pnl.append(SeriesPoint(path.stem[:10], current_pnl))
-        return_pct.append(SeriesPoint(path.stem[:10], current_return))
+        current_total = _optional_float(payload.get("total_value"))
+        current_pnl = _optional_float(payload.get("holding_pnl"))
+        if current_total is not None:
+            total_value.append(SeriesPoint(path.stem[:10], current_total))
+        if current_pnl is not None:
+            pnl.append(SeriesPoint(path.stem[:10], current_pnl))
+        if current_total is not None and current_pnl is not None:
+            cost_basis = current_total - current_pnl
+            if cost_basis > 0:
+                return_pct.append(SeriesPoint(path.stem[:10], round((current_pnl / cost_basis) * 100, 4)))
     total_value = _filter_points(total_value, range_label)
     total_value = cap_points(total_value, end_date)
     pnl = cap_points(_filter_points(pnl, range_label), end_date)
@@ -311,10 +319,19 @@ def collect_holding_history(home: Path, fund_code: str, range_label: str = "成�
         for fund in payload.get("funds", []) or []:
             if fund.get("fund_code") != fund_code:
                 continue
-            value_points.append(SeriesPoint(path.stem[:10], float(fund.get("current_value", 0) or 0)))
-            pnl_points.append(SeriesPoint(path.stem[:10], float(fund.get("holding_pnl", 0) or 0)))
-            return_points.append(SeriesPoint(path.stem[:10], float(fund.get("holding_return_pct", 0) or 0)))
-            units_points.append(SeriesPoint(path.stem[:10], float(fund.get("holding_units", 0) or 0)))
+            date_text = path.stem[:10]
+            current_value = _optional_float(fund.get("current_value"))
+            holding_pnl = _optional_float(fund.get("holding_pnl"))
+            holding_return = _optional_float(fund.get("holding_return_pct"))
+            holding_units = _optional_float(fund.get("holding_units"))
+            if current_value is not None:
+                value_points.append(SeriesPoint(date_text, current_value))
+            if holding_pnl is not None:
+                pnl_points.append(SeriesPoint(date_text, holding_pnl))
+            if holding_return is not None:
+                return_points.append(SeriesPoint(date_text, holding_return))
+            if holding_units is not None:
+                units_points.append(SeriesPoint(date_text, holding_units))
             break
     return {
         "current_value": _filter_points(value_points, range_label),
@@ -322,6 +339,15 @@ def collect_holding_history(home: Path, fund_code: str, range_label: str = "成�
         "holding_return_pct": _filter_points(return_points, range_label),
         "holding_units": _filter_points(units_points, range_label),
     }
+
+
+def _optional_float(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def collect_trade_markers(home: Path, fund_code: str | None = None, range_label: str = "成立以来") -> list[TradeMarker]:

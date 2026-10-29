@@ -387,7 +387,8 @@ class ValidationAndTradeTests(unittest.TestCase):
         updated = apply_trade(portfolio, "T1", "buy", 100.0, trade_nav=2.5)
         cash = next(item for item in updated["funds"] if item["fund_code"] == "CASH")
         target = next(item for item in updated["funds"] if item["fund_code"] == "T1")
-        self.assertEqual(cash["current_value"], 400.0)
+        self.assertEqual(cash["current_value"], 500.0)  # v2: cash hub untouched
+        self.assertEqual(updated["external_cashflow"], 100.0)
         self.assertEqual(target["current_value"], 300.0)
         self.assertAlmostEqual(target["holding_units"], 140.0, places=6)
         self.assertEqual(target["last_valuation_nav"], 2.5)
@@ -418,7 +419,8 @@ class ValidationAndTradeTests(unittest.TestCase):
         updated = apply_trade(portfolio, "T1", "sell", 100.0, trade_nav=2.0)
         cash = next(item for item in updated["funds"] if item["fund_code"] == "CASH")
         target = next(item for item in updated["funds"] if item["fund_code"] == "T1")
-        self.assertEqual(cash["current_value"], 400.0)
+        self.assertEqual(cash["current_value"], 300.0)  # v2: no cash pool credit
+        self.assertEqual(updated["external_cashflow"], -100.0)
         self.assertEqual(target["current_value"], 300.0)
         self.assertAlmostEqual(target["holding_units"], 150.0, places=6)
         self.assertAlmostEqual(target["cost_basis_value"], 270.0, places=2)

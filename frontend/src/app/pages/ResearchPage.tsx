@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { FundResearchCard, ResearchDigestBreakdown, ResearchDigestEntry, ResearchPayload, ResearchSentimentBlock, Tone } from "../../lib/types";
 import { asNullableNumber, asNumber, text } from "../../lib/format";
-import { actionLabel, narrativeText, roleLabel, styleLabel, valueLabel } from "../../lib/display";
+import { actionLabel, evidenceQualityLabel, horizonLabel, narrativeText, roleLabel, sizeRatioText, sizeTierLabel, styleLabel, valueLabel } from "../../lib/display";
 import { Activity, ArrowRight, FileText, Newspaper, RadioTower, Search, ShieldAlert } from "lucide-react";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
@@ -42,7 +42,7 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
           <MetricCard key={metric.title} {...metric} value={narrativeText(metric.value, "0")} body={narrativeText(metric.body, "暂无说明")} />
         ))}
       </div>
-      <ResearchAnalytics cards={cards} />
+      <ResearchAnalytics cards={cards} dropped={research.dropped_cards ?? 0} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <SourceHealthPanel sourceHealth={research.source_health} />
         <NewsDigestPanel digest={research.news_digest} eventRisks={research.event_risks} />
@@ -112,14 +112,14 @@ export function ResearchPage({ research, onOpenFundDetail }: { research: Researc
   );
 }
 
-function ResearchAnalytics({ cards }: { cards: FundResearchCard[] }) {
+function ResearchAnalytics({ cards, dropped = 0 }: { cards: FundResearchCard[]; dropped?: number }) {
   const counts = cards.reduce<Record<string, number>>((acc, card) => { const label = actionLabel(card.action); acc[label] = (acc[label] ?? 0) + 1; return acc; }, {});
   const averageConfidence = cards.length ? cards.reduce((sum, card) => sum + Number(card.confidence || 0), 0) / cards.length : 0;
   const evidenceCount = cards.reduce((sum, card) => sum + card.evidence.length, 0);
   return (
-    <TerminalPanel title="研究信号" meta={`${cards.length} 张建议卡`} className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.2fr_1fr_1fr]">
+    <TerminalPanel title="研究信号" meta={`${cards.length} 张建议卡${dropped ? ` · ${dropped} 张无效卡已忽略` : ""}`} className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.2fr_1fr_1fr]">
       <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">动作分布</div><div className="space-y-2">{Object.entries(counts).map(([label, count]) => <div key={label}><div className="mb-1 flex justify-between text-xs"><span className="text-slate-300">{label}</span><span className="tabular-nums text-slate-500">{count}</span></div><div className="h-1.5 bg-slate-900"><div className="h-full bg-cyan-300" style={{ width: `${cards.length ? count / cards.length * 100 : 0}%` }} /></div></div>)}{!cards.length ? <span className="text-xs text-slate-600">暂无动作数据</span> : null}</div></div>
-      <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">置信度</div><div className="metric-number text-3xl font-semibold text-cyan-200">{(averageConfidence * 100).toFixed(0)}%</div><div className="mt-3 h-2 bg-slate-900"><div className="h-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, averageConfidence * 100))}%` }} /></div><div className="mt-2 text-xs text-slate-600">建议卡平均置信度</div></div>
+      <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">置信度</div><div className="metric-number text-3xl font-semibold text-cyan-200">{cards.length ? `${(averageConfidence * 100).toFixed(0)}%` : "暂无"}</div><div className="mt-3 h-2 bg-slate-900"><div className="h-full bg-cyan-300" style={{ width: `${cards.length ? Math.max(0, Math.min(100, averageConfidence * 100)) : 0}%` }} /></div><div className="mt-2 text-xs text-slate-600">建议卡平均置信度</div></div>
       <div><div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">证据密度</div><div className="metric-number text-3xl font-semibold text-slate-100">{evidenceCount}</div><div className="mt-2 text-xs text-slate-500">结构化证据</div><div className="mt-3"><TerminalState label={cards.some((card) => card.hasConflict) ? "存在分歧" : "无明显分歧"} tone={cards.some((card) => card.hasConflict) ? "warning" : "success"} /></div></div>
     </TerminalPanel>
   );
@@ -147,7 +147,11 @@ function TicketButton({ card, selected, onClick }: { card: FundResearchCard; sel
         <Badge tone={actionTone(card.action)}>{actionLabel(card.action)}</Badge>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-        <TicketStat label="金额" value={card.amountText || "0.00"} />
+        {isV2Tier(card.sizeTier) ? (
+          <TicketStat label="仓位档位" value={tierValue(card)} />
+        ) : (
+          <TicketStat label="金额" value={card.amountText || "不可用"} />
+        )}
         <TicketStat label="收益" value={text(card.portfolio.holdingPnlText, "0.00")} tone={pnlTone} />
         <TicketStat label="信号" value={text(card.market.estimateChangePctText, text(card.market.dayChangePctText, "暂无"))} tone={changeTone} />
       </div>
@@ -205,7 +209,11 @@ function FundTicketWorkspace({ card, onOpenFundDetail }: { card: FundResearchCar
       </div>
 
       <div className="grid grid-cols-1 gap-3 border-b border-slate-800 px-5 py-4 md:grid-cols-2 xl:grid-cols-4">
-        <SignalTile label="建议金额" value={card.amountText || "0.00"} helper={`优先级 ${card.priority || 0}`} />
+        {isV2Tier(card.sizeTier) ? (
+          <SignalTile label="仓位档位" value={tierValue(card)} helper={`优先级 ${card.priority || 0} · 不展示每日精确金额`} tone="accent" />
+        ) : (
+          <SignalTile label="建议金额" value={card.amountText || "不可用"} helper={`优先级 ${card.priority || 0} · 旧版金额建议`} />
+        )}
         <SignalTile
           label="持仓盈亏"
           value={text(card.portfolio.holdingPnlText, "0.00")}
@@ -235,6 +243,13 @@ function FundTicketWorkspace({ card, onOpenFundDetail }: { card: FundResearchCar
               <KeyValue label="置信度" value={card.confidenceText || "暂无"} />
               <KeyValue label="组合市值" value={text(card.portfolio.currentValueText, "0.00")} />
               <KeyValue label="官方净值" value={`${text(card.market.officialNav, "暂无")} ${card.market.officialNavDate ? `(${card.market.officialNavDate})` : ""}`} />
+              {isV2Tier(card.sizeTier) ? (
+                <>
+                  <KeyValue label="仓位档位" value={tierValue(card)} />
+                  <KeyValue label="证据质量" value={evidenceQualityLabel(card.evidenceQuality)} />
+                  <KeyValue label="建议期限" value={horizonLabel(card.horizon)} />
+                </>
+              ) : null}
             </div>
           </Panel>
 
@@ -356,14 +371,15 @@ function SourceHealthPanel({ sourceHealth }: { sourceHealth?: ResearchPayload["s
   const summary = sourceHealth?.summary ?? {};
   const warningCount = Number(summary.warning_count ?? warningItems.length ?? 0);
   const errorCount = Number(summary.error_count ?? 0);
-  const tone: Tone = errorCount > 0 ? "danger" : warningCount > 0 ? "warning" : "success";
+  const hasMeta = items.length > 0 || summary.source_count != null;
+  const tone: Tone = !hasMeta ? "info" : errorCount > 0 ? "danger" : warningCount > 0 ? "warning" : "success";
   return (
     <InfoPanel
       icon={<Activity className="h-4 w-4" />}
       title="数据源健康"
-      badge={<Badge tone={tone}>{errorCount > 0 ? "错误" : warningCount > 0 ? "注意" : "正常"}</Badge>}
+      badge={<Badge tone={tone}>{!hasMeta ? "未知" : errorCount > 0 ? "错误" : warningCount > 0 ? "注意" : "正常"}</Badge>}
       rows={[
-        `来源 ${text(summary.source_count, String(items.length))} 个`,
+        `来源 ${hasMeta ? text(summary.source_count, String(items.length)) : "未知"} 个`,
         `预警 ${warningCount} / 错误 ${errorCount}`,
         ...warningItems.map((item) => `${sourceLabel(item.source_key)}：${valueLabel(item.status)}${sourceRuntimeText(item)}`)
       ]}
@@ -471,6 +487,10 @@ function rowToFundCard(row: Record<string, unknown>): FundResearchCard {
   const code = text(row.fund_code ?? row.fundCode, "");
   const action = text(row.validated_action ?? row.action, "hold");
   const amount = asNullableNumber(row.validated_amount);
+  const sizeTierRaw = row.size_tier ?? row.sizeTier;
+  const sizeTier = sizeTierRaw === "small" || sizeTierRaw === "medium" || sizeTierRaw === "large" || sizeTierRaw === "none" || sizeTierRaw === "legacy" ? sizeTierRaw : null;
+  const evidenceQualityRaw = row.evidence_quality ?? row.evidenceQuality;
+  const evidenceQuality = evidenceQualityRaw === "high" || evidenceQualityRaw === "medium" || evidenceQualityRaw === "low" ? evidenceQualityRaw : null;
   return {
     ticketId: text(row.suggestion_id, code || "ticket"),
     fundCode: code,
@@ -480,6 +500,15 @@ function rowToFundCard(row: Record<string, unknown>): FundResearchCard {
     strategyBucket: text(row.strategy_bucket, ""),
     action,
     actionLabel: actionLabel(action),
+    schemaVersion: text(row.schema_version ?? row.schemaVersion, ""),
+    sizeTier,
+    sizeRatio: asNullableNumber(row.size_ratio ?? row.sizeRatio),
+    sizingBasis: text(row.sizing_basis ?? row.sizingBasis, ""),
+    basisPositionValue: asNullableNumber(row.basis_position_value ?? row.basisPositionValue),
+    basisSnapshotSha256: text(row.basis_snapshot_sha256 ?? row.basisSnapshotSha256, ""),
+    horizon: text(row.horizon, ""),
+    evidenceQuality,
+    decisionAt: text(row.decision_at ?? row.decisionAt, ""),
     amount,
     amountText: amount === null ? "不可用" : amount.toFixed(2),
     priority: asNumber(row.priority),
@@ -508,6 +537,14 @@ function normalizeStringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
   if (typeof value === "string") return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
   return [];
+}
+
+function isV2Tier(tier: FundResearchCard["sizeTier"]): boolean {
+  return tier === "small" || tier === "medium" || tier === "large" || tier === "none";
+}
+
+function tierValue(card: FundResearchCard): string {
+  return [sizeTierLabel(card.sizeTier), sizeRatioText(card.sizeRatio)].filter(Boolean).join(" ");
 }
 
 function actionTone(action: string): Tone {

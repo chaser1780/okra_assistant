@@ -500,7 +500,11 @@ function BuySellForm({
   kind: "buy" | "sell";
 }) {
   return (
-    <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+    <div className="space-y-3">
+      <p className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs leading-5 text-slate-500">
+        买入自动虚拟入金、卖出自动虚拟出金，无需手动维护现金池；费用与分红在内部结算。金额为净持仓投入（买入）或卖出毛额（卖出），费用另计。未取得净值或份额时留空并标记待确认，不做强行换算；零仓基金仅观察，待人工建仓。
+      </p>
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
       <Field label="交易日期">
         <input className={inputClass} type="date" value={trade.trade_date} onChange={(e) => setTrade({ ...trade, trade_date: e.target.value })} />
       </Field>
@@ -534,6 +538,7 @@ function BuySellForm({
       <Field label="备注">
         <input className={inputClass} value={trade.user_note} onChange={(e) => setTrade({ ...trade, user_note: e.target.value })} />
       </Field>
+      </div>
     </div>
   );
 }

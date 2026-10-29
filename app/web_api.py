@@ -9,6 +9,7 @@ import re
 import sys
 import threading
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -54,6 +55,7 @@ from web_api_services import ExecutionController, PageService, TaskController
 from web_api_format import to_jsonable as _to_jsonable
 from shadow_review_service import ShadowReviewService
 from workbench_state import WorkbenchStateService
+from update_trading_calendar import maybe_update_calendar
 
 
 DEFAULT_HOME = ROOT_DIR
@@ -293,6 +295,12 @@ class OkraWebApi:
 
     def start_bootstrap_alignment(self) -> None:
         try:
+            calendar = maybe_update_calendar(self.home)
+            if calendar.get("status") == "failed":
+                print(f"startup trading calendar update failed: {calendar.get('error', '')}", file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"startup trading calendar update failed: {exc}", file=sys.stderr, flush=True)
+        try:
             self.task_controller.run_portfolio_alignment_if_needed(force=False)
         except Exception as exc:
             print(f"startup portfolio alignment failed: {exc}", file=sys.stderr, flush=True)
@@ -406,6 +414,9 @@ class OkraWebApi:
 
     def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None, automatic: bool = False) -> dict:
         return self.task_controller.run_task(kind, force=force, run_date=run_date, automatic=automatic)
+
+    def task_status(self, kind: str, *, run_date: str | None = None) -> dict:
+        return self.task_controller.task_status(kind, run_date=run_date)
 
     def long_memory_action(self, payload: dict) -> dict:
         return self.page_service.long_memory_action(payload)
@@ -963,120 +974,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True})
 
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
-        try:
-            selected = (query.get("date") or [""])[0] or None
-            if parsed.path == "/api/dates":
-                self._send_json(self.api.dates())
-            elif parsed.path == "/api/snapshot":
-                self._send_json(self.api.snapshot(selected))
-            elif parsed.path == "/api/workbench/shell":
-                self._send_json(self.api.shell_page(selected))
-            elif parsed.path == "/api/workbench/today":
-                self._send_json(self.api.today_page(selected))
-            elif parsed.path == "/api/workbench/portfolio":
-                self._send_json(self.api.portfolio_page(selected))
-            elif parsed.path == "/api/workbench/execution":
-                self._send_json(self.api.execution_page(selected))
-            elif parsed.path == "/api/workbench/research":
-                self._send_json(self.api.research_page(selected))
-            elif parsed.path == "/api/workbench/intelligence":
-                self._send_json(self.api.intelligence_page(selected))
-            elif parsed.path == "/api/workbench/realtime":
-                self._send_json(self.api.realtime_page(selected))
-            elif parsed.path == "/api/workbench/review":
-                self._send_json(self.api.review_page(selected))
-            elif parsed.path == "/api/shadow-review" or parsed.path == "/api/workbench/shadow-review":
-                self._send_json(self.api.shadow_review_page(selected))
-            elif parsed.path == "/api/workbench/system":
-                self._send_json(self.api.system_page(selected))
-            elif parsed.path.startswith("/api/fund/"):
-                fund_code = parsed.path.rsplit("/", 1)[-1].strip()
-                range_label = (query.get("range") or ["\u6210\u7acb\u4ee5\u6765"])[0] or "\u6210\u7acb\u4ee5\u6765"
-                self._send_json(self.api.fund_detail(fund_code, selected, range_label))
-            elif parsed.path == "/api/execution-sync":
-                self._send_json(self.api.execution_sync_payload())
-            elif parsed.path == "/api/rag/status":
-                self._send_json(self.api.rag_status())
-            elif parsed.path == "/api/rag/trace":
-                self._send_json(self.api.rag_trace((query.get("id") or query.get("traceId") or [""])[0]))
-            else:
-                self._send_error(404, "not_found", f"Unsupported GET path: {parsed.path}")
-        except Exception as exc:
-            self._send_error(500, "internal_error", str(exc), details={"path": parsed.path})
-
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        if not self._origin_allowed():
-            self._send_error(403, "forbidden_origin", "Origin is not allowed for OKRA local API")
-            return
-        try:
-            payload = self._read_json_payload()
-            if parsed.path == "/api/run/daily":
-                self._send_json(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
-            elif parsed.path == "/api/run/realtime":
-                self._send_json(
-                    self.api.run_task(
-                        "realtime",
-                        run_date=str(payload.get("date") or payload.get("runDate") or ""),
-                        automatic=bool(payload.get("automatic")),
-                    )
-                )
-            elif parsed.path == "/api/copilot/explain":
-                self._send_json(self.api.explain(payload))
-            elif parsed.path == "/api/long-memory/action":
-                self._send_json(self.api.long_memory_action(payload))
-            elif parsed.path == "/api/execution-sync/trade":
-                self._send_json(self.api.execution_trade(payload))
-            elif parsed.path == "/api/execution-sync/conversion":
-                self._send_json(self.api.execution_conversion(payload))
-            elif parsed.path == "/api/execution-sync/alipay-screenshot/parse":
-                self._send_json(self.api.execution_screenshot_parse(payload))
-            elif parsed.path == "/api/execution-sync/fund/lookup":
-                self._send_json(self.api.execution_fund_lookup(payload))
-            elif parsed.path == "/api/execution-sync/reconcile/register-fund":
-                self._send_json(self.api.execution_fund_register(payload))
-            elif parsed.path == "/api/execution-sync/reconcile/preview":
-                self._send_json(self.api.execution_reconcile_preview(payload))
-            elif parsed.path == "/api/execution-sync/reconcile/apply":
-                self._send_json(self.api.execution_reconcile_apply(payload))
-            elif parsed.path == "/api/execution-sync/confirmation/update":
-                self._send_json(self.api.execution_confirmation_update(payload))
-            elif parsed.path == "/api/open-url":
-                self._send_json(self.api.open_url(payload))
-            elif parsed.path == "/api/rag/search":
-                self._send_json(self.api.rag_search(payload))
-            elif parsed.path == "/api/rag/reindex":
-                self._send_json(self.api.rag_reindex(payload))
-            elif parsed.path == "/api/rag/eval":
-                self._send_json(self.api.rag_eval(payload))
-            elif parsed.path == "/api/rag/maintenance":
-                self._send_json(self.api.rag_maintenance(payload))
-            else:
-                self._send_error(404, "not_found", f"Unsupported POST path: {parsed.path}")
-        except RequestBodyTooLargeError as exc:
-            self._send_error(413, "payload_too_large", str(exc))
-        except json.JSONDecodeError as exc:
-            self._send_error(400, "invalid_json", str(exc))
-        except AlreadyRunningError as exc:
-            runtime = exc.runtime
-            self._send_error(
-                409,
-                "already_running",
-                "today_analysis task is already running",
-                retryable=False,
-                details={
-                    "runId": str(runtime.get("runId", "") or ""),
-                    "reportDate": str(runtime.get("reportDate", "") or ""),
-                    "startedAt": str(runtime.get("startedAt", "") or ""),
-                    "currentStep": str(runtime.get("currentStep", "") or ""),
-                    "currentAgent": str(runtime.get("currentAgent", "") or ""),
-                },
-            )
-        except Exception as exc:
-            self._send_error(500, "internal_error", str(exc), retryable=isinstance(exc, RuntimeError), details={"path": parsed.path})
+    # GET and POST routing live in ContractRequestHandler. Keeping this base
+    # class limited to shared transport behavior prevents a second API surface
+    # from drifting away from the contract envelope.
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -1084,7 +984,17 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 class ContractRequestHandler(RequestHandler):
     def _selected_date_from_query(self, query: dict[str, list[str]]) -> str | None:
-        return (query.get("date") or query.get("selectedDate") or [""])[0] or None
+        raw = (query.get("date") or query.get("selectedDate") or [""])[0] or None
+        if raw is None:
+            return None
+        # Strict real-calendar ISO date: rejects "..", "2026-02-30", free text.
+        # GET invalid input must surface as 400 instead of silently defaulting.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            raise ValueError(f"date must be YYYY-MM-DD, got {raw!r}")
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            raise ValueError(f"date must be a real YYYY-MM-DD date, got {raw!r}")
 
     def _send_envelope(self, data, *, page: str | None = None, selected_date: str | None = None, status: int = 200) -> None:
         payload = model_dump_compat(
@@ -1156,11 +1066,17 @@ class ContractRequestHandler(RequestHandler):
             elif endpoint_path == "/api/system":
                 selected = self._selected_date_from_query(query)
                 self._send_envelope(self.api.system_page(selected), page="system", selected_date=selected)
+            elif endpoint_path == "/api/run/status":
+                kind = str((query.get("kind") or [""])[0] or "").strip().lower()
+                run_date = str((query.get("date") or [""])[0] or "").strip()
+                self._send_envelope(self.api.task_status(kind, run_date=run_date), page="run-status")
             elif endpoint_path == "/api/snapshot":
                 selected = self._selected_date_from_query(query)
                 self._send_json(self.api.snapshot(selected))
             elif endpoint_path.startswith("/api/fund/"):
                 fund_code = endpoint_path.rsplit("/", 1)[-1].strip()
+                if not re.fullmatch(r"\d{6}", fund_code):
+                    raise ValueError(f"fund code must be 6 digits, got {fund_code!r}")
                 selected = self._selected_date_from_query(query)
                 range_label = (query.get("range") or ["\u6210\u7acb\u4ee5\u6765"])[0] or "\u6210\u7acb\u4ee5\u6765"
                 self._send_envelope(self.api.fund_detail(fund_code, selected, range_label), page="fund", selected_date=selected)
@@ -1217,7 +1133,14 @@ class ContractRequestHandler(RequestHandler):
                 payload = coerce_model(RagMaintenanceRequestDto, payload)
 
             if endpoint_path == "/api/run/daily":
-                self._send_envelope(self.api.run_task("daily", force=bool(payload.get("force")), run_date=str(payload.get("date") or payload.get("runDate") or "")))
+                self._send_envelope(
+                    self.api.run_task(
+                        "daily",
+                        force=bool(payload.get("force")),
+                        run_date=str(payload.get("date") or payload.get("runDate") or ""),
+                        automatic=bool(payload.get("automatic")),
+                    )
+                )
             elif endpoint_path == "/api/run/realtime":
                 self._send_envelope(
                     self.api.run_task(

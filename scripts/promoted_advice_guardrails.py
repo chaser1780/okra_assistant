@@ -31,6 +31,7 @@ def default_hold(fund: PortfolioFund, reason: str) -> ValidatedAction:
         "strategy_bucket": infer_strategy_bucket(fund),
         "validated_action": "hold",
         "validated_amount": 0.0,
+        "requested_amount": 0.0,
         "model_action": "hold",
         "priority": 999,
         "confidence": 0.0,
@@ -125,6 +126,7 @@ def dca_record(
         "strategy_bucket": infer_strategy_bucket(fund),
         "validated_action": "scheduled_dca",
         "validated_amount": amount,
+        "requested_amount": amount,
         "suggestion_id": suggestion_id(report_date, fund["fund_code"], "scheduled_dca"),
         "model_action": model_decision.get("action", "scheduled_dca"),
         "priority": model_decision.get("priority", 0),
@@ -159,6 +161,8 @@ def build_candidate(
     *,
     strategy: dict,
     constraint: dict,
+    basis_value: float | None = None,
+    size_ratios: dict | None = None,
 ) -> dict | None:
     action = str(model.get("action", "hold") or "hold")
     if action not in {"add", "reduce", "switch_out"}:
@@ -168,21 +172,57 @@ def build_candidate(
     cap_value = float(fund.get("cap_value", strategy["tactical"]["default_cap_value"]) or strategy["tactical"]["default_cap_value"])
     available_to_sell = float(constraint.get("available_to_sell", current_value) or current_value)
     allow_full_exit = bool(strategy["portfolio"].get("allow_full_exit", True))
-    requested_amount = float(model.get("suggest_amount", 0.0) or 0.0)
-    policy_rule_hits: list[str] = []
+
+    # simulation_v2：LLM 只给方向+size_tier，金额 = 冻结 basis × tier（不套固定 max_add/reduce、不套100粒度）。
+    v2_tier = str(model.get("size_tier", "none") or "none")
+    if v2_tier != "none" and basis_value is not None:
+        from simulation_policy import sized_amount, normalize_size_tier
+        v2_tier = normalize_size_tier(v2_tier)
+        requested_amount = sized_amount(basis_value, v2_tier, size_ratios=size_ratios)
+        strategy_amount_cap = None
+        is_v2 = v2_tier != "none"
+        # 金融复核：evidence_quality=unavailable（真实无证据/invalid raw enum 归此）不可执行，强制 hold/watch；
+        # low 仅带风险解释，不自动禁。
+        if str(model.get("evidence_quality", "unavailable") or "unavailable") == "unavailable":
+            return None
+    else:
+        is_v2 = False
+        requested_amount = float(model.get("requested_amount", model.get("suggest_amount", 0.0)) or 0.0)
+        strategy_amount_cap = None
+        if action == "add":
+            strategy_amount_cap = strategy["tactical"].get("max_add_amount")
+        elif action in {"reduce", "switch_out"}:
+            strategy_amount_cap = strategy["tactical"].get("max_reduce_amount")
+        if strategy_amount_cap is not None:
+            try:
+                strategy_amount_cap = max(0.0, float(strategy_amount_cap))
+            except (TypeError, ValueError):
+                strategy_amount_cap = None
+    validated_request = requested_amount
+    if strategy_amount_cap is not None and validated_request > strategy_amount_cap:
+        validated_request = strategy_amount_cap
+        policy_rule_hits = ["strategy_amount_cap"]
+        validation_notes = [
+            f"LLM requested {requested_amount:.2f}; strategy cap validated {validated_request:.2f}."
+        ]
+    else:
+        policy_rule_hits = []
+        validation_notes = []
+    policy_rule_hits: list[str] = list(policy_rule_hits)
     constraint_hits: list[str] = []
-    validation_notes: list[str] = []
+    validation_notes: list[str] = list(validation_notes)
 
     if action == "add":
         policy_rule_hits.append("budget_gate")
         room = max(0.0, cap_value - current_value)
-        normalized_amount = normalize_amount(requested_amount, room)
+        # v2：不按静态 cap_value 裁金额（只保留语义风险/超卖）；legacy 仍按 room+100粒度。
+        normalized_amount = round(max(0.0, validated_request), 2) if is_v2 else normalize_amount(validated_request, room)
         if normalized_amount <= 0:
             constraint_hits.append("fund_capacity_or_granularity")
-            validation_notes.append("Candidate removed before optimizer because no add room remained after fund-local cap and 100-CNY trade granularity.")
+            validation_notes.append("Candidate removed before optimizer because amount <= 0.")
     else:
         policy_rule_hits.append("sell_gate")
-        normalized_amount = normalize_amount(requested_amount, available_to_sell, allow_full_exit=allow_full_exit)
+        normalized_amount = round(min(validated_request, available_to_sell), 2) if is_v2 else normalize_amount(validated_request, available_to_sell, allow_full_exit=allow_full_exit)
         if float(constraint.get("locked_amount", 0.0) or 0.0) > 0:
             constraint_hits.append("locked_amount")
             validation_notes.extend(list(constraint.get("notes", []) or []))
@@ -204,6 +244,7 @@ def build_candidate(
         "action": action,
         "amount": normalized_amount,
         "requested_amount": requested_amount,
+        "strategy_amount_cap": strategy_amount_cap,
         "strategy_bucket": infer_strategy_bucket(fund),
         "theme_family": infer_theme_family(fund),
         "management_company": str((fund.get("fund_profile", {}) or {}).get("management_company") or fund.get("management_company") or "unknown"),
@@ -241,6 +282,7 @@ def build_record(
     strategy_bucket = infer_strategy_bucket(fund)
     model_action = str(model.get("action", "hold") or "hold")
     final_action_for_id = validated_action if validated_action != "hold" else model_action
+    requested_amount = float(model.get("requested_amount", model.get("suggest_amount", 0.0)) or 0.0)
     return {
         "suggestion_id": suggestion_id(report_date, fund["fund_code"], final_action_for_id),
         "fund_code": fund["fund_code"],
@@ -248,6 +290,7 @@ def build_record(
         "strategy_bucket": strategy_bucket,
         "validated_action": validated_action,
         "validated_amount": validated_amount,
+        "requested_amount": requested_amount,
         "model_action": model_action,
         "priority": int(model.get("priority", 999) or 999),
         "confidence": clamp(float(model.get("confidence", 0.0) or 0.0), 0.0, 1.0),
@@ -279,6 +322,7 @@ def build_validated_payload(
     llm_raw: dict | None = None,
     committee_bundle: dict | None = None,
     previous_actions: dict[str, dict] | None = None,
+    basis: dict | None = None,
 ) -> ValidatedAdvice:
     agent_home = resolve_agent_home(agent_home)
     portfolio = portfolio or load_portfolio(agent_home)
@@ -288,6 +332,13 @@ def build_validated_payload(
     committee_bundle = committee_bundle if committee_bundle is not None else (load_json(committee_decision_bundle_path(agent_home, report_date)) if committee_decision_bundle_path(agent_home, report_date).exists() else {})
     constraint_map = build_trade_constraints(agent_home, portfolio, report_date)
     previous_actions = previous_actions if previous_actions is not None else previous_validated_by_code(agent_home, report_date)
+    # simulation_v2：basis 应在 run_chain 起点（决策前）冻结并贯穿；未传入才在此兜底冻结。
+    from simulation_policy import basis_value_for, get_or_freeze_basis, load_simulation_config
+    sim_cfg = load_simulation_config(agent_home)
+    v2 = str(committee_bundle.get("schema_version", "") or "") == "simulation_v2" or \
+        str(advice.get("schema_version", "") or "") == "simulation_v2"
+    if basis is None:
+        basis = get_or_freeze_basis(agent_home, report_date, portfolio, write=True)
     decision_mode = str(committee_bundle.get("decision_mode", "") or "canonical")
     degradation_mode = str(committee_bundle.get("degradation_mode", "") or "none")
     promoted_chain = llm_raw.get("promoted_chain", {}) if isinstance(llm_raw.get("promoted_chain"), dict) else {}
@@ -426,7 +477,11 @@ def build_validated_payload(
             )
             continue
 
-        candidate = build_candidate(fund, model, strategy=strategy, constraint=constraint)
+        candidate = build_candidate(
+            fund, model, strategy=strategy, constraint=constraint,
+            basis_value=basis_value_for(basis, fund["fund_code"]),
+            size_ratios=sim_cfg["size_ratios"],
+        )
         if candidate is None:
             notes = ["Model action resolves to hold after fund-local validation."]
             if str(model.get("action", "hold") or "hold") in {"add", "reduce", "switch_out"}:
@@ -453,8 +508,17 @@ def build_validated_payload(
             continue
         candidate_pairs.append((fund, model, candidate))
 
-    remaining_gross_trade_budget = max(0.0, gross_trade_limit - fixed_dca_total)
-    remaining_net_buy_budget = max(0.0, net_buy_limit - fixed_dca_total)
+    # simulation_v2 (virtual_external_flows)：funding_mode 显式跳过 cash/gross/net 固定预算；
+    # math.inf 仅内部参与 optimizer 比较，不写入产物。仍保留可卖额、非负、产品限制与集中度/目标仓位风险解释。
+    import math
+    if v2:
+        remaining_gross_trade_budget = math.inf
+        remaining_net_buy_budget = math.inf
+        available_funding_optimizer = math.inf
+    else:
+        remaining_gross_trade_budget = max(0.0, gross_trade_limit - fixed_dca_total)
+        remaining_net_buy_budget = max(0.0, net_buy_limit - fixed_dca_total)
+        available_funding_optimizer = available_cash_hub
     max_actions = int(strategy["tactical"]["max_actions_per_day"])
 
     optimization = optimize_portfolio_actions(
@@ -471,7 +535,7 @@ def build_validated_payload(
         top3_fund_limit_pct=45.0,
         max_single_management_company_pct=25.0,
         total_value=total_value,
-        available_funding=available_cash_hub,
+        available_funding=available_funding_optimizer,
         delayed_sell_proceeds=delayed_sell_proceeds_total,
         gross_trade_budget=remaining_gross_trade_budget,
         net_buy_budget=remaining_net_buy_budget,
@@ -480,6 +544,20 @@ def build_validated_payload(
     selected_by_id = {item["candidate_id"]: item for item in optimization.get("selected_candidates", [])}
 
     tactical_actions: list[ValidatedAction] = []
+
+    def _stamp_v2(rec: dict, fund: dict, model: dict) -> None:
+        tier = str(model.get("size_tier", "none") or "none")
+        rec.update({
+            "schema_version": "simulation_v2",
+            "size_tier": tier,
+            "size_ratio": float(sim_cfg["size_ratios"].get(tier, 0.0) or 0.0),
+            "basis_position_value": basis_value_for(basis, fund["fund_code"]),
+            "basis_snapshot_sha256": str(basis.get("snapshot_sha256", "") or basis.get("source_snapshot_sha256", "") or ""),
+            "decision_at": str(basis.get("decision_at", "") or ""),
+            "horizon": str(model.get("horizon", "unspecified") or "unspecified"),
+            "evidence_quality": str(model.get("evidence_quality", "unavailable") or "unavailable"),
+        })
+
     for fund, model, candidate in sorted(candidate_pairs, key=lambda item: (int(item[1].get("priority", 999) or 999), -float(item[1].get("confidence", 0.0) or 0.0), item[0]["fund_code"])):
         candidate_id = candidate["candidate_id"]
         selected = selected_by_id.get(candidate_id)
@@ -487,44 +565,66 @@ def build_validated_payload(
             validation_notes = list(candidate.get("validation_notes", []) or [])
             validation_notes.append("Selected by portfolio-level optimizer.")
             validation_notes.append(f"Optimizer base objective = {selected.get('base_objective', 0.0):.4f}.")
-            tactical_actions.append(
-                build_record(
-                    report_date,
-                    fund,
-                    model,
-                    validated_action=selected["action"],
-                    validated_amount=float(selected.get("amount", 0.0) or 0.0),
-                    previous=previous_actions.get(fund["fund_code"]),
-                    allocation_plan=allocation_plan,
-                    execution_friction=list(candidate.get("execution_friction", []) or []),
-                    policy_rule_hits=list(candidate.get("policy_rule_hits", []) or []),
-                    constraint_hits=list(candidate.get("constraint_hits", []) or []),
-                    validation_notes=validation_notes,
-                    cash_note=f"optimizer_remaining_funding={optimization.get('remaining_available_funding', 0.0):.2f}",
-                )
-            )
-            continue
-
-        rejection_reasons = optimization.get("rejection_reasons", {}).get(candidate_id, ["dominated_by_higher_portfolio_objective"])
-        validation_notes = list(candidate.get("validation_notes", []) or [])
-        validation_notes.append("Candidate not selected by portfolio-level optimizer.")
-        validation_notes.extend(rejection_reasons)
-        hold_actions.append(
-            build_record(
+            rec = build_record(
                 report_date,
                 fund,
                 model,
-                validated_action="hold",
-                validated_amount=0.0,
+                validated_action=selected["action"],
+                validated_amount=float(selected.get("amount", 0.0) or 0.0),
                 previous=previous_actions.get(fund["fund_code"]),
                 allocation_plan=allocation_plan,
                 execution_friction=list(candidate.get("execution_friction", []) or []),
                 policy_rule_hits=list(candidate.get("policy_rule_hits", []) or []),
                 constraint_hits=list(candidate.get("constraint_hits", []) or []),
                 validation_notes=validation_notes,
-                cash_note="candidate_rejected_by_optimizer",
+                cash_note=f"optimizer_remaining_funding={optimization.get('remaining_available_funding', 0.0):.2f}",
             )
+            if v2:
+                _stamp_v2(rec, fund, model)
+            tactical_actions.append(rec)
+            continue
+
+        rejection_reasons = optimization.get("rejection_reasons", {}).get(candidate_id, ["dominated_by_higher_portfolio_objective"])
+        validation_notes = list(candidate.get("validation_notes", []) or [])
+        validation_notes.append("Candidate not selected by portfolio-level optimizer.")
+        validation_notes.extend(rejection_reasons)
+        hold_rec = build_record(
+            report_date,
+            fund,
+            model,
+            validated_action="hold",
+            validated_amount=0.0,
+            previous=previous_actions.get(fund["fund_code"]),
+            allocation_plan=allocation_plan,
+            execution_friction=list(candidate.get("execution_friction", []) or []),
+            policy_rule_hits=list(candidate.get("policy_rule_hits", []) or []),
+            constraint_hits=list(candidate.get("constraint_hits", []) or []),
+            validation_notes=validation_notes,
+            cash_note="candidate_rejected_by_optimizer",
         )
+        if v2:
+            _stamp_v2(hold_rec, fund, model)
+            # hold 执行幅度必为 none；原请求 tier 另存，不被误当执行金额。
+            hold_rec["requested_size_tier"] = hold_rec["size_tier"]
+            hold_rec["size_tier"] = "none"
+            hold_rec["size_ratio"] = 0.0
+        hold_actions.append(hold_rec)
+
+    if v2:
+        # 兜底：所有动作（cash_hub/dca/非候选 hold）都必须带 v2 元数据，避免 UI 当旧金额卡。
+        for section in (tactical_actions, dca_actions, hold_actions):
+            for rec in section:
+                if "schema_version" not in rec:
+                    rec.update({
+                        "schema_version": "simulation_v2",
+                        "size_tier": "none",
+                        "size_ratio": 0.0,
+                        "basis_position_value": basis_value_for(basis, rec.get("fund_code", "")),
+                        "basis_snapshot_sha256": str(basis.get("snapshot_sha256", "") or basis.get("source_snapshot_sha256", "") or ""),
+                        "decision_at": str(basis.get("decision_at", "") or ""),
+                        "horizon": "unspecified",
+                        "evidence_quality": "unavailable",
+                    })
 
     payload: ValidatedAdvice = {
         "report_date": report_date,
@@ -535,11 +635,12 @@ def build_validated_payload(
         "daily_max_gross_trade_amount": gross_trade_limit,
         "daily_max_net_buy_amount": net_buy_limit,
         "fixed_dca_total": round(fixed_dca_total, 2),
-        "remaining_budget_after_validation": round(float(optimization.get("remaining_gross_trade_budget", remaining_gross_trade_budget) or remaining_gross_trade_budget), 2),
-        "remaining_gross_trade_budget_after_validation": round(float(optimization.get("remaining_gross_trade_budget", remaining_gross_trade_budget) or remaining_gross_trade_budget), 2),
-        "remaining_net_buy_budget_after_validation": round(float(optimization.get("remaining_net_buy_budget", remaining_net_buy_budget) or remaining_net_buy_budget), 2),
-        "cash_hub_available": round(available_cash_hub, 2),
-        "immediately_available_cash": round(available_cash_hub, 2),
+        "remaining_budget_after_validation": None if v2 else round(float(optimization.get("remaining_gross_trade_budget", remaining_gross_trade_budget) or remaining_gross_trade_budget), 2),
+        "remaining_gross_trade_budget_after_validation": None if v2 else round(float(optimization.get("remaining_gross_trade_budget", remaining_gross_trade_budget) or remaining_gross_trade_budget), 2),
+        "remaining_net_buy_budget_after_validation": None if v2 else round(float(optimization.get("remaining_net_buy_budget", remaining_net_buy_budget) or remaining_net_buy_budget), 2),
+        "cash_hub_available": None if v2 else round(available_cash_hub, 2),
+        "immediately_available_cash": None if v2 else round(available_cash_hub, 2),
+        "funding_mode": ("virtual_external_flows" if v2 else "fixed_budgets"),
         "delayed_sell_proceeds": round(delayed_sell_proceeds_total, 2),
         "market_view": advice.get("market_view", {}),
         "cross_fund_observations": advice.get("cross_fund_observations", []),

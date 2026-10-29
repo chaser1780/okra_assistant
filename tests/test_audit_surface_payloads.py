@@ -94,7 +94,9 @@ class AuditSurfacePayloadTests(unittest.TestCase):
         self.assertEqual("audit-exp", experiment["experimentId"])
         self.assertEqual(1, experiment["actionCount"])
         self.assertEqual({"buy": 1}, experiment["actionCounts"])
-        self.assertEqual(1000.0, experiment["totalValue"])
+        # virtual external flows: buy adds 100 of assets funded from outside, not PnL
+        self.assertEqual(1100.0, experiment["totalValue"])
+        self.assertEqual(100.0, experiment["netExternalFlow"])
         self.assertEqual(0.0, experiment["valueDelta"])
         self.assertTrue(page["guardrails"]["nonExecutable"])
         self.assertFalse(page["guardrails"]["affectsPortfolio"])

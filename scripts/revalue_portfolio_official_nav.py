@@ -92,6 +92,9 @@ def has_cashflow_between_nav_dates(agent_home, fund_code: str, previous_nav_date
         return False
     for trade in iter_actual_trade_items(agent_home, nav_date):
         operation = str(trade.get("operation_type") or "")
+        if operation == "dividend":
+            # dividends are booked into PnL explicitly below, not treated as blocking cashflow
+            continue
         relevant = False
         if operation == "convert":
             relevant = fund_code in {str(trade.get("out_fund_code") or ""), str(trade.get("in_fund_code") or "")}
@@ -104,6 +107,58 @@ def has_cashflow_between_nav_dates(agent_home, fund_code: str, previous_nav_date
         if effective_day is not None and previous_day < effective_day <= current_day:
             return True
     return False
+
+
+def dividend_events_between_nav_dates(agent_home, fund_code: str, previous_nav_date: str, nav_date: str) -> dict:
+    """Return {cash, reinvest_amount, reinvest_units} from recorded dividend ops in the window."""
+    previous_day = parse_date_text(previous_nav_date)
+    current_day = parse_date_text(nav_date)
+    result = {"cash": 0.0, "reinvest_amount": 0.0, "reinvest_units": 0.0}
+    if previous_day is None or current_day is None:
+        return result
+    for trade in iter_actual_trade_items(agent_home, nav_date):
+        if str(trade.get("operation_type") or "") != "dividend":
+            continue
+        if str(trade.get("fund_code") or "") != str(fund_code):
+            continue
+        effective_day = parse_date_text(str(trade.get("effective_trade_date") or trade.get("trade_date") or ""))
+        if effective_day is None or not (previous_day < effective_day <= current_day):
+            continue
+        amount = safe_float(trade.get("amount")) or 0.0
+        if trade.get("dividend_reinvest"):
+            nav = safe_float(trade.get("nav")) or 0.0
+            result["reinvest_amount"] += amount
+            result["reinvest_units"] += (amount / nav) if nav > 0 else 0.0
+        else:
+            result["cash"] += amount
+    for key in result:
+        result[key] = round(result[key], 6)
+    return result
+
+
+def detect_ex_dividend_without_event(agent_home, fund_code: str, nav: float, previous_nav: float, previous_nav_date: str, nav_date: str) -> bool:
+    """Use DWJZ vs LJJZ(cumulative) continuity: raw drops but cumulative does not -> ex-dividend.
+
+    Without a recorded dividend event this is unavailable (not a fake loss).
+    """
+    if nav >= previous_nav:
+        return False
+    path = fund_nav_history_path(agent_home, fund_code)
+    if not path.exists():
+        return False
+    payload = load_json(path)
+    rows = {}
+    for item in payload.get("items", []) or []:
+        d = str(item.get("date") or "")[:10]
+        c = safe_float(item.get("cumulative_nav"))
+        if d and c:
+            rows[d] = c
+    prev_cum = rows.get(previous_nav_date)
+    cur_cum = rows.get(nav_date)
+    if not prev_cum or not cur_cum:
+        return False
+    # raw dropped materially while cumulative held/grew -> ex-dividend signal
+    return (cur_cum - prev_cum) > -0.0001
 
 
 def build_official_daily_pnl(agent_home, fund: dict, nav_info: dict, report_date: str) -> dict:
@@ -151,16 +206,28 @@ def build_official_daily_pnl(agent_home, fund: dict, nav_info: dict, report_date
     if not trusted:
         base["official_daily_pnl_reason"] = reason
         return base
-    if units is None or units <= 0:
-        base["official_daily_pnl_reason"] = "missing_holding_units"
+    units_source = str(fund.get("units_source") or "")
+    units_untrusted = units is None or units <= 0 or any(k in units_source for k in ("unconfirmed", "partial_explicit"))
+    if units_untrusted:
+        base["official_daily_pnl_reason"] = "unknown_units_delta"
         return base
     if has_cashflow_between_nav_dates(agent_home, fund["fund_code"], previous_nav_date, nav_date):
         base["official_daily_pnl_reason"] = "cashflow_between_nav_dates_requires_position_snapshot"
         return base
-    base["official_daily_pnl"] = round(units * (official_nav - previous_nav), 2)
+    div = dividend_events_between_nav_dates(agent_home, fund["fund_code"], previous_nav_date, nav_date)
+    net_dividend = round(div["cash"] + div["reinvest_amount"], 2)
+    # Ex-dividend detected from DWJZ/LJJZ continuity but no recorded event: unavailable,
+    # never a fake precise loss.
+    if net_dividend <= 0 and detect_ex_dividend_without_event(agent_home, fund["fund_code"], official_nav, previous_nav, previous_nav_date, nav_date):
+        base["official_daily_pnl_reason"] = "dividend_event_missing"
+        return base
+    # Beginning units (before mid-period reinvest) * nav delta + cash dividend + reinvest asset.
+    beginning_units = units - div["reinvest_units"]
+    base["official_daily_pnl"] = round(beginning_units * (official_nav - previous_nav) + net_dividend, 2)
     base["official_daily_pnl_status"] = "ok"
-    base["official_daily_pnl_reason"] = ""
+    base["official_daily_pnl_reason"] = "dividend_events_included" if net_dividend else ""
     base["official_daily_pnl_units"] = round(units, 6)
+    fund["dividend_netting_pending"] = False
     return base
 
 
@@ -224,7 +291,7 @@ def build_item(agent_home, fund: dict, quote_by_code: dict, estimate_by_code: di
     nav_date = str(nav_info.get("nav_date") or "")
     nav_source = str(nav_info.get("nav_source") or "missing")
     match_type = str(nav_info.get("match_type") or "unknown")
-    freshness = classify_official_nav_freshness(report_date, nav_date)
+    freshness = classify_official_nav_freshness(report_date, nav_date, agent_home=agent_home)
     old_value = round(float(fund.get("current_value", 0.0)), 2)
     old_pnl = round(float(fund.get("holding_pnl", 0.0)), 2)
     official_daily_pnl = build_official_daily_pnl(agent_home, fund, nav_info, report_date)
@@ -341,8 +408,14 @@ def main() -> None:
     blocked_daily_pnl_items = [item for item in daily_pnl_items if item.get("official_daily_pnl_status") not in {"ok", "already_written", "not_held"}]
     official_daily_pnl_total = round(sum(float(item.get("official_daily_pnl") or 0.0) for item in confirmed_daily_pnl_items), 2)
 
-    portfolio["total_value"] = round(sum(float(fund.get("current_value", 0.0)) for fund in portfolio.get("funds", [])), 2)
+    portfolio["total_value"] = round(sum(float(fund.get("current_value", 0.0)) for fund in portfolio.get("funds", [])) + float(portfolio.get("income_adjustment_value", 0.0)), 2)
     portfolio["holding_pnl"] = round(sum(float(fund.get("holding_pnl", 0.0)) for fund in portfolio.get("funds", [])), 2)
+    portfolio["as_of_date"] = report_date
+    # A revaluation snapshot is not a trade event: stamp only the signed external
+    # flow that actually occurred on this date, never a lingering stale value.
+    flow_map = portfolio.get("external_flows_by_date", {}) or {}
+    portfolio["external_cashflow"] = round(float(flow_map.get(report_date, 0.0)), 2)
+    portfolio["external_cashflow_timing"] = "end"
     portfolio["as_of_date"] = report_date
     portfolio["last_valuation_run_date"] = report_date
     portfolio["last_valuation_generated_at"] = timestamp_now()

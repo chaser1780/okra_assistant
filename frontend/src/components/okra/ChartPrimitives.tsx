@@ -4,7 +4,7 @@ import { compactMoney, signedMoney, signedPct } from "../../lib/format";
 import { styleLabel } from "../../lib/display";
 
 const chartText = { fill: "#718096", fontSize: 10 };
-const grid = "#1b252d";
+const grid = "var(--chart-grid)";
 
 export function TrendChart({ data, benchmark = [], height = "100%", yFormatter = compactMoney, showArea = true }: { data: ChartPoint[]; benchmark?: ChartPoint[]; height?: string; yFormatter?: (value: number) => string; showArea?: boolean }) {
   const merged = mergeSeries(data, benchmark, "value", "benchmark");
@@ -14,16 +14,16 @@ export function TrendChart({ data, benchmark = [], height = "100%", yFormatter =
       <ComposedChart data={merged} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="terminalTrendFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.22} />
-            <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
+            <stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.22} />
+            <stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0} />
           </linearGradient>
         </defs>
         <CartesianGrid stroke={grid} vertical={false} strokeDasharray="2 4" />
         <XAxis dataKey="date" tick={chartText} axisLine={false} tickLine={false} minTickGap={32} />
         <YAxis tick={chartText} axisLine={false} tickLine={false} tickFormatter={yFormatter} width={52} />
         <Tooltip content={<TerminalTooltip />} />
-        {showArea ? <Area type="monotone" dataKey="value" name="本组合" stroke="#22d3ee" strokeWidth={2} fill="url(#terminalTrendFill)" dot={false} connectNulls /> : <Line type="monotone" dataKey="value" name="超额收益" stroke="#22d3ee" strokeWidth={1.8} dot={false} connectNulls />}
-        {benchmark.length ? <Area type="monotone" dataKey="benchmark" name="基准" stroke="#8b949e" strokeWidth={1.25} fill="none" dot={false} connectNulls strokeDasharray="4 4" /> : null}
+        {showArea ? <Area type="monotone" dataKey="value" name="本组合" stroke="var(--chart-accent)" strokeWidth={2} fill="url(#terminalTrendFill)" dot={false} connectNulls /> : <Line type="monotone" dataKey="value" name="超额收益" stroke="var(--chart-accent)" strokeWidth={1.8} dot={false} connectNulls />}
+        {benchmark.length ? <Area type="monotone" dataKey="benchmark" name="基准" stroke="var(--chart-label)" strokeWidth={1.25} fill="none" dot={false} connectNulls strokeDasharray="4 4" /> : null}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -36,33 +36,35 @@ export function DrawdownChart({ data, height = "100%" }: { data: ChartPoint[]; h
       <AreaChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="terminalDrawdownFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#fb7185" stopOpacity={0.28} />
-            <stop offset="100%" stopColor="#fb7185" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="var(--chart-danger)" stopOpacity={0.28} />
+            <stop offset="100%" stopColor="var(--chart-danger)" stopOpacity={0.02} />
           </linearGradient>
         </defs>
         <CartesianGrid stroke={grid} vertical={false} strokeDasharray="2 4" />
         <XAxis dataKey="date" tick={chartText} axisLine={false} tickLine={false} minTickGap={32} />
         <YAxis tick={chartText} axisLine={false} tickLine={false} tickFormatter={(value) => `${value}%`} width={46} />
-        <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="3 3" />
+        <ReferenceLine y={0} stroke="var(--chart-label)" strokeDasharray="3 3" />
         <Tooltip content={<TerminalTooltip percent />} />
-        <Area type="monotone" dataKey="value" name="回撤" stroke="#fb7185" strokeWidth={1.7} fill="url(#terminalDrawdownFill)" dot={false} connectNulls />
+        <Area type="monotone" dataKey="value" name="回撤" stroke="var(--chart-danger)" strokeWidth={1.7} fill="url(#terminalDrawdownFill)" dot={false} connectNulls />
       </AreaChart>
     </ResponsiveContainer>
   );
 }
 
 export function RiskScatterChart({ points, height = "100%", onSelect }: { points: PortfolioRiskPoint[]; height?: string; onSelect?: (point: PortfolioRiskPoint) => void }) {
-  if (!points.length) return <ChartEmpty label="暂无风险散点" />;
-  const data = points.map((point) => ({ ...point, x: point.weightPct ?? 0, y: point.anomalyScore ?? 0 }));
+  const data = points
+    .filter((point): point is PortfolioRiskPoint & { weightPct: number; anomalyScore: number } => point.weightPct !== null && point.anomalyScore !== null)
+    .map((point) => ({ ...point, x: point.weightPct, y: point.anomalyScore }));
+  if (!data.length) return <ChartEmpty label="暂无风险散点" />;
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ScatterChart margin={{ top: 16, right: 16, left: 0, bottom: 8 }}>
         <CartesianGrid stroke={grid} strokeDasharray="2 4" />
         <XAxis type="number" dataKey="x" name="持仓权重" unit="%" tick={chartText} axisLine={false} tickLine={false} />
         <YAxis type="number" dataKey="y" name="异常分数" tick={chartText} axisLine={false} tickLine={false} width={42} />
-        <ReferenceLine x={8} stroke="#4b5563" strokeDasharray="3 3" />
-        <ReferenceLine y={1} stroke="#4b5563" strokeDasharray="3 3" />
-        <Tooltip cursor={{ strokeDasharray: "3 3", stroke: "#22d3ee" }} content={<RiskTooltip />} />
+        <ReferenceLine x={8} stroke="var(--chart-label)" strokeDasharray="3 3" />
+        <ReferenceLine y={1} stroke="var(--chart-label)" strokeDasharray="3 3" />
+        <Tooltip cursor={{ strokeDasharray: "3 3", stroke: "var(--chart-accent)" }} content={<RiskTooltip />} />
         <Scatter name="持仓风险" data={data} onClick={(point) => onSelect?.(point as unknown as PortfolioRiskPoint)}>
           {data.map((point) => <Cell key={point.fundCode} fill={riskColor(point.y, point.x)} stroke="#050609" strokeWidth={1.5} r={5} />)}
         </Scatter>
@@ -94,7 +96,7 @@ export function Sparkline({ data, positive = true, className = "h-5 w-24" }: { d
     <span className={`inline-block ${className}`}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 1, right: 0, bottom: 1, left: 0 }}>
-          <Area type="monotone" dataKey="value" stroke={positive ? "#fb7185" : "#34d399"} strokeWidth={1.2} fill="none" dot={false} />
+          <Area type="monotone" dataKey="value" stroke={positive ? "var(--chart-up)" : "var(--chart-down)"} strokeWidth={1.2} fill="none" dot={false} />
         </AreaChart>
       </ResponsiveContainer>
     </span>
@@ -112,7 +114,7 @@ function riskColor(anomaly: number, weight: number) {
   if (anomaly >= 1 && weight >= 8) return "#fb7185";
   if (anomaly >= 1) return "#f59e0b";
   if (weight >= 8) return "#34d399";
-  return "#64748b";
+  return "#718096";
 }
 
 function ChartEmpty({ label }: { label: string }) {

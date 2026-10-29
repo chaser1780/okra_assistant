@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+TEST_LLM_MODEL = os.environ.get("OKRA_TEST_MODEL", "test-model")
 
 
 BASE_SETTINGS_TOML = """[project]
@@ -297,9 +299,9 @@ max_staleness_minutes = 20
 """
 
 
-BASE_LLM_TOML = """model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+BASE_LLM_TOML = f"""model_provider = "OpenAI"
+model = "{TEST_LLM_MODEL}"
+review_model = "{TEST_LLM_MODEL}"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 model_reasoning_effort = "xhigh"
@@ -423,7 +425,18 @@ class TempAgentHome:
         self.write_text("config/agents.toml", BASE_AGENTS_TOML)
         self.write_text("config/realtime_valuation.toml", BASE_REALTIME_TOML)
         self.write_text("config/llm.toml", BASE_LLM_TOML)
-        self.write_json("config/trading_calendar.json", {"holidays": [], "makeup_trading_days": []})
+        self.write_json(
+            "config/trading_calendar.json",
+            {
+                "calendar_version": "test-2026",
+                "source": "test-fixture",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "coverage_start": "2000-01-01",
+                "coverage_end": "2099-12-31",
+                "holidays": [],
+                "makeup_trading_days": [],
+            },
+        )
         self.write_json("config/portfolio.json", {"portfolio_name": "测试组合", "funds": [], "as_of_date": ""})
         self.write_json("config/watchlist.json", {"funds": []})
         self.write_json("config/market_overrides.json", {"biases": []})

@@ -331,6 +331,15 @@ def today_str() -> str:
 
 
 def load_state(home: Path, selected: str | None = None) -> dict:
+    # Root-containment guard: `selected` is interpolated into many db/report paths.
+    # Reject anything that is not a real YYYY-MM-DD date here as well as in the
+    # HTTP layer, so "..", encoded traversal or free text can never escape home.
+    if selected is not None:
+        try:
+            from datetime import date as _date
+            selected = _date.fromisoformat(str(selected)).isoformat()
+        except ValueError as exc:
+            raise ValueError(f"selected date must be a real YYYY-MM-DD date, got {selected!r}") from exc
     dates = collect_dates(home)
     today = today_str()
     dates = sorted(set(dates + [today]), reverse=True)
@@ -756,19 +765,19 @@ def build_fund_detail_text(item: dict, realtime_item: dict | None, review_item: 
         text += (
             f"\n\n实时收益参考：\n- 模式：{realtime_item.get('mode')}\n"
             f"- 今日估算收益：{money(realtime_item.get('estimated_intraday_pnl_amount', 0))}\n"
-            f"- 今日估算涨跌：{pct(realtime_item.get('effective_change_pct', 0), 2)}\n"
+            f"- 今日估算涨跌：{pct(realtime_item.get('effective_change_pct'), 2)}\n"
             f"- 说明：{realtime_item.get('reason')}"
         )
     if review_item:
-        review_return = review_item.get("evaluation_return_pct", review_item.get("review_day_change_pct", 0))
+        review_return = review_item.get("evaluation_return_pct", review_item.get("review_day_change_pct"))
         review_basis = review_item.get("evaluation_basis", "review_day_change")
         text += (
             f"\n\n复盘结果：\n- outcome：{review_item.get('outcome')}\n"
             f"- diagnostic：{review_item.get('diagnostic_label', 'unknown')}\n"
             f"- 评估口径：{review_basis}\n"
             f"- 评估收益：{pct(review_return, 2)}\n"
-            f"- 当日真实涨跌：{pct(review_item.get('review_day_change_pct', 0), 2)}\n"
-            f"- 一周涨跌：{pct(review_item.get('review_week_change_pct', 0), 2)}"
+            f"- 当日真实涨跌：{pct(review_item.get('review_day_change_pct'), 2)}\n"
+            f"- 一周涨跌：{pct(review_item.get('review_week_change_pct'), 2)}"
         )
         if review_item.get("review_period_return_pct") is not None:
             text += (

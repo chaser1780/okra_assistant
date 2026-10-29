@@ -295,6 +295,7 @@ def build_backtest_evidence_pack(
     *,
     fund_codes: list[str] | None = None,
     mode: str = "baseline",
+    decision_at: str | None = None,
 ) -> dict[str, Any]:
     settings = _profile_settings(agent_home, "backtest")
     if not bool(settings.get("enabled", False)):
@@ -303,6 +304,7 @@ def build_backtest_evidence_pack(
     plan = build_rag_query_plan(
         query,
         query_date=replay_date,
+        decision_at=decision_at,
         retrieval_profile="backtest_profile",
         intent="backtest_replay_no_future",
         fund_codes=list(dict.fromkeys(fund_codes or [])),
@@ -326,6 +328,10 @@ def build_backtest_evidence_pack(
     audit = {
         "strictNoFuture": bool(settings.get("strict_no_future", True)),
         "replayDate": replay_date,
+        "cutoffPrecision": str(plan.metadata.get("cutoff_precision") or "end_of_day_legacy"),
+        "decisionAt": plan.decision_at,
+        "replayExactCutoff": bool(plan.decision_at),
+        "intradayTrusted": bool(plan.decision_at),
         "futureRejectedCount": len(future_rejections),
         "violations": violations[:12],
         "passed": not violations,

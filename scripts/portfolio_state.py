@@ -57,11 +57,17 @@ TRUSTED_DAILY_PNL_UNIT_SOURCES = {
     "actual_position_sync",
     "actual_trade_units",
     "position_value_derived_from_official_nav",
+    "derived_from_explicit_trade",
+    "dividend_reinvest_pending",
+    "closed_position",
 }
 
 UNTRUSTED_DAILY_PNL_UNIT_SOURCES = {
     "derived_from_official_nav",
     *VALUE_ONLY_POSITION_UNIT_SOURCES,
+    "partial_explicit_trade_units",
+    "unconfirmed_trade_units",
+    "unconfirmed_dividend_reinvest",
 }
 
 OFFICIAL_DAILY_PNL_FIELDS = (
@@ -145,12 +151,17 @@ def set_position_units_from_value(
         fund["units_source"] = "position_value_derived_from_official_nav"
         fund["holding_units_basis_nav"] = round(nav, 6)
         fund["holding_units_basis_nav_date"] = nav_date
+        fund["valuation_status"] = "exact"  # units now resolved from a trusted basis
         return True
 
     fund["holding_units"] = 0.0 if current_value <= 0 else None
     fund["units_source"] = fallback_source
     fund.pop("holding_units_basis_nav", None)
     fund.pop("holding_units_basis_nav_date", None)
+    if fund["holding_units"] is not None and str(fallback_source or "") in {
+        "manual", "manual_position_snapshot", "actual_position_sync", "stored",
+    }:
+        fund["valuation_status"] = "exact"
     return False
 
 

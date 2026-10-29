@@ -343,7 +343,11 @@ class ActionOutcomeTests(unittest.TestCase):
                 self.quote("UNTRUST", 1.8, "2026-03-12"),
             ],
         })
-        self.agent.write_json("config/trading_calendar.json", {"holidays": ["2026-03-11"], "makeup_trading_days": []})
+        calendar = json.loads((self.agent.root / "config" / "trading_calendar.json").read_text(encoding="utf-8"))
+        self.agent.write_json(
+            "config/trading_calendar.json",
+            {**calendar, "holidays": ["2026-03-11"], "makeup_trading_days": []},
+        )
 
         artifact = build_outcome_artifact(self.agent.root, BASE_DATE, "T+1", generated_at=GENERATED_AT)
         payload = artifact.to_dict()

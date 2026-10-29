@@ -14,14 +14,19 @@ class CashFlow:
 
 
 def calculate_portfolio_performance(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
-    """Only calculate returns when snapshots declare external cash flows.
+    """Return cash-flow-adjusted performance using only snapshot-declared external flows.
 
-    Internal fund trades and cash-pool transfers are never external cash flows.
+    In virtual-external-flow mode, upstream writes the signed external principal net flow
+    for buys/sells; dividends, fees and internal conversions are never external principal.
+    Legacy snapshots without a flow map fall back to the single stored value.
     """
     ordered = _ordered_snapshots(snapshots)
     if len(ordered) < 2:
         return _unavailable("需要至少两个组合快照。", ordered)
-    flows = _external_cashflows(ordered)
+    try:
+        flows = _external_cashflows(ordered)
+    except _CorruptFlowMap:
+        return _unavailable("组合快照的外部现金流映射存在非有限数值，不回退单值假精确。", ordered)
     if not flows:
         return _unavailable("组合快照未记录显式外部入金/出金，不以资产变化估算投资收益。", ordered)
     if any(flow.timing not in {"start", "end"} for flow in flows):
@@ -40,7 +45,7 @@ def calculate_portfolio_performance(snapshots: list[dict[str, Any]]) -> dict[str
         "twr": {"available": True, "returnPct": round(twr * 100.0, 4)},
         "mwr": {"available": mwr is not None, "returnPct": round(mwr * 100.0, 4) if mwr is not None else None},
         "cashflowAdjustedDrawdown": adjusted_drawdown,
-        "reason": "仅使用显式外部现金流；基金买卖、定投、换仓和现金池内部转移不计为外部现金流。",
+        "reason": "仅使用快照声明的外部本金净流；虚拟资金模式的买卖由上游写入，分红/费用/换仓等内部项不额外当本金。",
     }
 
 
@@ -58,18 +63,46 @@ def _ordered_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda item: item["date"])
 
 
+class _CorruptFlowMap(Exception):
+    """Raised when an external_flows_by_date map exists but carries a non-finite value."""
+
+
+def _finite_flow(value: Any) -> float | None:
+    """Return a finite float, rejecting bool/non-numeric/NaN/inf; None if unusable."""
+    if isinstance(value, bool):
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    return amount if isfinite(amount) else None
+
+
 def _external_cashflows(snapshots: list[dict[str, Any]]) -> list[CashFlow]:
     result = []
     for snapshot in snapshots:
-        raw = snapshot["payload"].get("external_cashflow")
-        if raw in (None, ""):
-            continue
-        try:
-            amount = float(raw)
-        except (TypeError, ValueError):
-            continue
+        payload = snapshot["payload"]
+        has_map = "external_flows_by_date" in payload
+        flow_map = payload.get("external_flows_by_date")
+        if has_map and flow_map is not None:
+            # Authoritative per-day map. A non-dict container is corrupt data -> no scalar
+            # fallback. A day absent from the map simply has no flow; a day present but
+            # non-finite is also corrupt.
+            if not isinstance(flow_map, dict):
+                raise _CorruptFlowMap
+            if snapshot["date"] not in flow_map:
+                continue
+            amount = _finite_flow(flow_map.get(snapshot["date"]))
+            if amount is None:
+                raise _CorruptFlowMap
+        else:
+            # No map field (legacy / explicit null): use the stored single value.
+            raw = payload.get("external_cashflow")
+            amount = _finite_flow(raw) if raw not in (None, "") else None
+            if amount is None:
+                continue
         if amount:
-            result.append(CashFlow(snapshot["date"], amount, str(snapshot["payload"].get("external_cashflow_timing") or "").lower()))
+            result.append(CashFlow(snapshot["date"], amount, str(payload.get("external_cashflow_timing") or "").lower()))
     return result
 
 

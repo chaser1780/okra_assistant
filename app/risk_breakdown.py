@@ -29,6 +29,7 @@ def build_risk_breakdowns(
     realtime_by_code = {str(item.get("fund_code") or ""): item for item in realtime_items if isinstance(item, dict)}
     context_by_code = {str(item.get("fund_code") or ""): item for item in context_funds if isinstance(item, dict)}
     pending_by_code = _pending_by_fund(pending_simulation_actions)
+    historical_by_code = _historical_anomaly_scores(agent_home, selected_date)
     rows: list[dict[str, Any]] = []
     for item in portfolio_items:
         fund_code = str(item.get("fundCode") or "")
@@ -36,7 +37,7 @@ def build_risk_breakdowns(
         context = context_by_code.get(fund_code, {})
         components, reasons = _components(item, realtime, context, pending_by_code.get(fund_code, []))
         raw_anomaly = _number(realtime.get("anomaly_score"))
-        history = _historical_anomaly_scores(agent_home, fund_code, selected_date)
+        history = historical_by_code.get(fund_code, [])
         available = {key: value for key, value in components.items() if value is not None}
         total = _weighted_total(available)
         row = {
@@ -51,6 +52,7 @@ def build_risk_breakdowns(
             "dataCoverage": {
                 "availableComponentCount": len(available),
                 "componentCount": len(COMPONENT_WEIGHTS),
+                "coverageRatio": round(len(available) / len(COMPONENT_WEIGHTS), 4),
                 "isPartial": len(available) < len(COMPONENT_WEIGHTS),
             },
             "reasons": reasons,
@@ -95,11 +97,12 @@ def _components(
         volatility = _clamp(abs(effective_change) / 3.0 * 100) if effective_change is not None else None
         reasons["volatilityRisk"] = f"当日有效观察涨跌 {effective_change:+.2f}%（仅作波动代理，不代表历史波动率）。" if effective_change is not None else "缺少当日有效涨跌幅。"
 
+    has_news_context = isinstance(context.get("recent_news"), list)
     recent_news = [item for item in context.get("recent_news", []) or [] if isinstance(item, dict)]
-    crowding = _crowding_risk(recent_news)
-    news = _news_risk(recent_news)
-    reasons["crowdingRisk"] = _crowding_reason(recent_news, crowding)
-    reasons["newsRisk"] = _news_reason(recent_news, news)
+    crowding = _crowding_risk(recent_news) if has_news_context else None
+    news = _news_risk(recent_news) if has_news_context else None
+    reasons["crowdingRisk"] = _crowding_reason(recent_news, crowding or 0.0) if has_news_context else "缺少新闻覆盖数据。"
+    reasons["newsRisk"] = _news_reason(recent_news, news or 0.0) if has_news_context else "缺少新闻覆盖数据。"
     allow_trade = portfolio_item.get("allowTrade") is not False
     if not allow_trade:
         execution = 100.0
@@ -181,13 +184,14 @@ def _news_reason(news: list[dict[str, Any]], risk: float) -> str:
     return f"关联新闻 {len(news)} 条；高风险 {high} / 中风险 {medium} / 负向 {negative}；最高观察分 {risk:.0f}。"
 
 
-def _historical_anomaly_scores(agent_home: Path, fund_code: str, selected_date: str) -> list[float]:
+def _historical_anomaly_scores(agent_home: Path, selected_date: str) -> dict[str, list[float]]:
     root = agent_home / "db" / "realtime_monitor"
-    if not root.exists() or not fund_code:
-        return []
-    values: list[float] = []
+    if not root.exists():
+        return {}
+    values_by_code: dict[str, list[float]] = {}
     for path in sorted(root.glob("*.json")):
-        if path.stem[:10] > selected_date[:10]:
+        # The selected observation must be evaluated against prior history only.
+        if path.stem[:10] >= selected_date[:10]:
             continue
         try:
             payload = load_json(path)
@@ -196,12 +200,15 @@ def _historical_anomaly_scores(agent_home: Path, fund_code: str, selected_date: 
         if not isinstance(payload, dict):
             continue
         for item in payload.get("items", []) or []:
-            if isinstance(item, dict) and str(item.get("fund_code") or "") == fund_code:
-                score = _number(item.get("anomaly_score"))
-                if score is not None:
-                    values.append(score)
-                break
-    return values
+            if not isinstance(item, dict):
+                continue
+            fund_code = str(item.get("fund_code") or "").strip()
+            if not fund_code:
+                continue
+            score = _number(item.get("anomaly_score"))
+            if score is not None:
+                values_by_code.setdefault(fund_code, []).append(score)
+    return values_by_code
 
 
 def _percentile(value: float | None, history: list[float]) -> float | None:
@@ -223,6 +230,15 @@ def _summary(rows: list[dict[str, Any]], selected_date: str) -> dict[str, Any]:
     scored = [row for row in rows if row.get("totalAnomalyScore") is not None]
     weighted = sum(float(row.get("totalAnomalyScore") or 0) * float(row.get("weightPct") or 0) for row in scored)
     weight = sum(float(row.get("weightPct") or 0) for row in scored)
+    coverage_ratios = [
+        float((row.get("dataCoverage") or {}).get("coverageRatio") or 0.0)
+        for row in rows
+    ]
+    weighted_coverage = sum(
+        float(row.get("weightPct") or 0) * float((row.get("dataCoverage") or {}).get("coverageRatio") or 0.0)
+        for row in rows
+    )
+    all_weight = sum(float(row.get("weightPct") or 0) for row in rows)
     return {
         "selectedDate": selected_date,
         "methodology": "display_only_risk_breakdown.v1",
@@ -230,6 +246,8 @@ def _summary(rows: list[dict[str, Any]], selected_date: str) -> dict[str, Any]:
         "fundCount": len(rows),
         "weightedTotalAnomalyScore": round(weighted / weight, 2) if weight else None,
         "partialCoverageFundCount": sum(1 for row in rows if (row.get("dataCoverage") or {}).get("isPartial")),
+        "averageComponentCoverage": round(sum(coverage_ratios) / len(coverage_ratios), 4) if coverage_ratios else None,
+        "weightedComponentCoverage": round(weighted_coverage / all_weight, 4) if all_weight else None,
         "historicalPercentileAvailableCount": sum(1 for row in rows if row.get("historicalPercentile") is not None),
     }
 
@@ -250,6 +268,8 @@ def _clamp(value: float) -> float:
     return max(0.0, min(100.0, value))
 
 
-def _weight_pct(value: Any) -> float:
-    parsed = _number(value) or 0.0
+def _weight_pct(value: Any) -> float | None:
+    parsed = _number(value)
+    if parsed is None:
+        return None
     return round(parsed * 100.0 if abs(parsed) <= 1 else parsed, 4)

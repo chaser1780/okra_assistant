@@ -7,8 +7,20 @@ import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
+from typing import Any
 import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+TRADING_CALENDAR_MAX_AGE_DAYS = 7
+
+
+class TradingCalendarUnavailableError(RuntimeError):
+    """Raised when a trading-day decision cannot be verified from the cache."""
+
+    def __init__(self, status: dict[str, Any]):
+        self.status = dict(status)
+        reason = str(self.status.get("reason") or "trading_calendar_unavailable")
+        super().__init__(reason)
 
 PORTFOLIO_RUNTIME_FIELDS = {
     "current_value",
@@ -225,14 +237,99 @@ def market_close_time() -> datetime_time:
 
 
 def trading_calendar_path(agent_home: Path) -> Path:
-    return agent_home / "config" / "trading_calendar.json"
+    """Return the active calendar path, preferring runtime state over legacy config."""
+    runtime_path = agent_home / "db" / "runtime" / "trading_calendar.json"
+    legacy_path = agent_home / "config" / "trading_calendar.json"
+    return runtime_path if runtime_path.exists() else legacy_path
+
+
+def trading_calendar_runtime_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "runtime" / "trading_calendar.json"
+
+
+def trading_calendar_update_state_path(agent_home: Path) -> Path:
+    return agent_home / "db" / "runtime" / "trading_calendar_update_state.json"
 
 
 def load_trading_calendar(agent_home: Path) -> dict:
     path = trading_calendar_path(agent_home)
     if not path.exists():
         return {"holidays": [], "makeup_trading_days": []}
-    return repair_data(json.loads(path.read_text(encoding="utf-8")))
+    try:
+        payload = repair_data(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {"holidays": [], "makeup_trading_days": [], "source": "unconfigured", "calendar_error": "invalid_cache"}
+    return payload if isinstance(payload, dict) else {"holidays": [], "makeup_trading_days": [], "source": "unconfigured", "calendar_error": "invalid_cache"}
+
+
+def trading_calendar_status(
+    agent_home: Path,
+    target_date: str | date | None = None,
+    *,
+    now: datetime | None = None,
+    max_age_days: int = TRADING_CALENDAR_MAX_AGE_DAYS,
+) -> dict[str, Any]:
+    """Return readiness metadata without guessing when a managed calendar is stale."""
+    payload = load_trading_calendar(agent_home)
+    source = str(payload.get("source") or "").strip()
+    checked_at = str(payload.get("checked_at") or payload.get("updated_at") or "").strip()
+    coverage_start = str(payload.get("coverage_start") or "").strip()
+    coverage_end = str(payload.get("coverage_end") or "").strip()
+    managed = bool(source and source not in {"legacy", "unconfigured"})
+    if not managed:
+        return {
+            "ready": False,
+            "managed": False,
+            "reason": "trading_calendar_unconfigured",
+            "source": source,
+            "coverage_start": coverage_start,
+            "coverage_end": coverage_end,
+            "checked_at": checked_at,
+        }
+    try:
+        checked = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+    except ValueError:
+        return {
+            "ready": False,
+            "managed": True,
+            "reason": "trading_calendar_missing_checked_at",
+            "source": source,
+            "coverage_start": coverage_start,
+            "coverage_end": coverage_end,
+            "checked_at": checked_at,
+        }
+    current = now or datetime.now(checked.tzinfo)
+    if checked.tzinfo is not None and current.tzinfo is None:
+        current = current.replace(tzinfo=checked.tzinfo)
+    elif checked.tzinfo is None and current.tzinfo is not None:
+        current = current.replace(tzinfo=None)
+    age_days = max(0.0, (current - checked).total_seconds() / 86400.0)
+    if age_days > max_age_days:
+        reason = "trading_calendar_expired"
+    elif not coverage_start or not coverage_end:
+        reason = "trading_calendar_missing_coverage"
+    else:
+        target = parse_date_text(target_date) if isinstance(target_date, str) else target_date
+        coverage_from = parse_date_text(coverage_start)
+        coverage_to = parse_date_text(coverage_end)
+        if target is not None and (coverage_from is None or coverage_to is None or not (coverage_from <= target <= coverage_to)):
+            reason = "trading_calendar_date_out_of_coverage"
+        else:
+            reason = "ready"
+    return {
+        "ready": reason == "ready",
+        "managed": True,
+        "reason": reason,
+        "source": source,
+        "coverage_start": coverage_start,
+        "coverage_end": coverage_end,
+        "checked_at": checked_at,
+        "age_days": round(age_days, 3),
+    }
+
+
+def trading_calendar_is_ready(agent_home: Path, target_date: str | date | None = None) -> bool:
+    return bool(trading_calendar_status(agent_home, target_date).get("ready"))
 
 
 def _calendar_sets(agent_home: Path) -> tuple[set[str], set[str]]:
@@ -245,7 +342,10 @@ def _calendar_sets(agent_home: Path) -> tuple[set[str], set[str]]:
 def is_trading_day(agent_home: Path, day: str | date) -> bool:
     target = parse_date_text(day) if isinstance(day, str) else day
     if target is None:
-        return False
+        raise ValueError(f"Invalid day: {day}")
+    status = trading_calendar_status(agent_home, target)
+    if not status.get("ready"):
+        raise TradingCalendarUnavailableError(status)
     day_text = target.isoformat()
     holidays, makeup_days = _calendar_sets(agent_home)
     if day_text in makeup_days:
@@ -259,6 +359,9 @@ def previous_trading_day(agent_home: Path, day: str | date) -> str:
     target = parse_date_text(day) if isinstance(day, str) else day
     if target is None:
         raise ValueError(f"Invalid day: {day}")
+    status = trading_calendar_status(agent_home, target)
+    if not status.get("ready"):
+        raise TradingCalendarUnavailableError(status)
     current = target - timedelta(days=1)
     while not is_trading_day(agent_home, current):
         current -= timedelta(days=1)
@@ -270,6 +373,10 @@ def trading_days_between(agent_home: Path, start_exclusive: str | date, end_incl
     end_day = parse_date_text(end_inclusive) if isinstance(end_inclusive, str) else end_inclusive
     if start_day is None or end_day is None or start_day >= end_day:
         return []
+    for boundary in (start_day, end_day):
+        status = trading_calendar_status(agent_home, boundary)
+        if not status.get("ready"):
+            raise TradingCalendarUnavailableError(status)
     current = start_day + timedelta(days=1)
     results: list[str] = []
     while current <= end_day:
@@ -281,10 +388,13 @@ def trading_days_between(agent_home: Path, start_exclusive: str | date, end_incl
 
 def analysis_quality_for_start(agent_home: Path, report_date: str, started_at: datetime) -> str:
     local = started_at.astimezone(SHANGHAI_TZ)
+    try:
+        if not is_trading_day(agent_home, report_date):
+            return "non_trading_day"
+    except TradingCalendarUnavailableError:
+        return "calendar_unavailable"
     if local.date().isoformat() != report_date:
         return "after_close" if local.date().isoformat() > report_date else "pre_close"
-    if not is_trading_day(agent_home, report_date):
-        return "after_close"
     return "after_close" if local.time() >= market_close_time() else "pre_close"
 
 
@@ -297,7 +407,56 @@ def parse_date_text(value: str | None) -> date | None:
         return None
 
 
-def business_day_gap(older: str | date | None, newer: str | date | None) -> int | None:
+def add_trading_days(agent_home: Path, base_date: str | date, offset: int) -> str:
+    current = parse_date_text(base_date) if isinstance(base_date, str) else base_date
+    if current is None:
+        raise ValueError(f"Invalid date: {base_date}")
+    if not trading_calendar_status(agent_home, current).get("ready"):
+        raise TradingCalendarUnavailableError(trading_calendar_status(agent_home, current))
+    remaining = int(offset)
+    if remaining < 0:
+        return subtract_trading_days(agent_home, current, -remaining)
+    while remaining:
+        current += timedelta(days=1)
+        if is_trading_day(agent_home, current):
+            remaining -= 1
+    return current.isoformat()
+
+
+def subtract_trading_days(agent_home: Path, base_date: str | date, offset: int) -> str:
+    current = parse_date_text(base_date) if isinstance(base_date, str) else base_date
+    if current is None:
+        raise ValueError(f"Invalid date: {base_date}")
+    if not trading_calendar_status(agent_home, current).get("ready"):
+        raise TradingCalendarUnavailableError(trading_calendar_status(agent_home, current))
+    remaining = int(offset)
+    while remaining:
+        current -= timedelta(days=1)
+        if is_trading_day(agent_home, current):
+            remaining -= 1
+    return current.isoformat()
+
+
+def trading_day_gap(agent_home: Path, older: str | date | None, newer: str | date | None) -> int | None:
+    older_date = parse_date_text(older) if isinstance(older, str) or older is None else older
+    newer_date = parse_date_text(newer) if isinstance(newer, str) or newer is None else newer
+    if older_date is None or newer_date is None:
+        return None
+    if older_date == newer_date:
+        return 0
+    if older_date > newer_date:
+        return -trading_day_gap(agent_home, newer_date, older_date)
+    return len(trading_days_between(agent_home, older_date, newer_date))
+
+
+def business_day_gap(
+    older: str | date | None,
+    newer: str | date | None,
+    *,
+    agent_home: Path | None = None,
+) -> int | None:
+    if agent_home is not None:
+        return trading_day_gap(agent_home, older, newer)
     older_date = parse_date_text(older) if isinstance(older, str) or older is None else older
     newer_date = parse_date_text(newer) if isinstance(newer, str) or newer is None else newer
     if older_date is None or newer_date is None:
@@ -315,8 +474,13 @@ def business_day_gap(older: str | date | None, newer: str | date | None) -> int 
     return gap
 
 
-def classify_official_nav_freshness(report_date: str, as_of_date: str | None) -> dict:
-    gap = business_day_gap(as_of_date, report_date)
+def classify_official_nav_freshness(
+    report_date: str,
+    as_of_date: str | None,
+    *,
+    agent_home: Path | None = None,
+) -> dict:
+    gap = business_day_gap(as_of_date, report_date, agent_home=agent_home)
     if gap is None:
         return {
             "status": "unknown",
@@ -358,8 +522,14 @@ def classify_official_nav_freshness(report_date: str, as_of_date: str | None) ->
     }
 
 
-def classify_intraday_freshness(report_date: str, data_date: str | None, source_name: str) -> dict:
-    gap = business_day_gap(data_date, report_date)
+def classify_intraday_freshness(
+    report_date: str,
+    data_date: str | None,
+    source_name: str,
+    *,
+    agent_home: Path | None = None,
+) -> dict:
+    gap = business_day_gap(data_date, report_date, agent_home=agent_home)
     if gap is None:
         return {
             "status": "unknown",
@@ -795,6 +965,29 @@ def process_exists(pid: object) -> bool:
     except OSError:
         return False
     return True
+
+
+def process_matches_project(pid: object, project_root: Path, marker: str = "") -> bool:
+    """Verify a live PID command line belongs to this project before reuse."""
+    try:
+        resolved = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if not process_exists(resolved):
+        return False
+    root_text = str(project_root.resolve()).replace("\\", "/").lower()
+    marker_text = str(marker or "").lower()
+    try:
+        if os.name == "nt":
+            import subprocess
+
+            query = f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {resolved}'; if ($p) {{ $p.CommandLine }}"
+            output = subprocess.check_output(["powershell", "-NoProfile", "-Command", query], text=True, stderr=subprocess.DEVNULL).replace("\\", "/").lower()
+        else:
+            output = Path(f"/proc/{resolved}/cmdline").read_bytes().decode("utf-8", errors="ignore").replace("\x00", " ").lower()
+    except Exception:
+        return False
+    return root_text in output and (not marker_text or marker_text in output)
 
 
 def is_runtime_stale(runtime: dict, *, now: datetime | None = None, stale_seconds: int = TODAY_ANALYSIS_STALE_SECONDS) -> bool:

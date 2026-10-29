@@ -165,6 +165,11 @@ def record_action(agent_home: Path, payload: dict[str, Any]) -> dict[str, Any]:
         portfolio = copy.deepcopy(experiment.get("portfolio") or {})
         updated = apply_trade(portfolio, fund_code, action, amount, trade_nav=record["tradeNav"], trade_units=record["units"])
         updated["as_of_date"] = record["asOfDate"]
+        # Accumulate signed external investment so valueDelta can be reported as RETURN
+        # excluding principal (buy adds net assets funded from outside; not PnL).
+        flow = _optional_number(updated.get("external_cashflow")) or 0.0
+        updated["net_external_flow"] = round(float(updated.get("net_external_flow") or 0.0) + flow, 2)
+        record["externalCashflow"] = flow
         record["createdAt"] = timestamp_now()
         record["portfolioHashAfter"] = _stable_hash(updated)
         experiment["portfolio"] = updated
@@ -180,6 +185,7 @@ def _summary(agent_home: Path, payload: dict[str, Any], path: Path) -> dict[str,
     initial_portfolio = payload.get("initialPortfolio", {}) if isinstance(payload.get("initialPortfolio"), dict) else {}
     total_value = _optional_number(portfolio.get("total_value"))
     initial_total_value = _optional_number(initial_portfolio.get("total_value"))
+    net_external_flow = _optional_number(portfolio.get("net_external_flow")) or 0.0
     actions = [item for item in payload.get("actions", []) or [] if isinstance(item, dict)]
     action_counts: dict[str, int] = {}
     for action in actions:
@@ -196,7 +202,9 @@ def _summary(agent_home: Path, payload: dict[str, Any], path: Path) -> dict[str,
         "actionCounts": action_counts,
         "totalValue": total_value,
         "initialTotalValue": initial_total_value,
-        "valueDelta": round(total_value - initial_total_value, 2) if total_value is not None and initial_total_value is not None else None,
+        "netExternalFlow": net_external_flow,
+        # return excluding external principal deposits/withdrawals
+        "valueDelta": round(total_value - initial_total_value - net_external_flow, 2) if total_value is not None and initial_total_value is not None else None,
         "holdingPnl": portfolio.get("holding_pnl"),
         "sourcePath": str(path.relative_to(agent_home)).replace("\\", "/"),
     }

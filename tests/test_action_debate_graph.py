@@ -48,20 +48,13 @@ class ActionDebateGraphTests(unittest.TestCase):
         self.agent.cleanup()
 
     def copy_real_inputs(self) -> None:
-        for relative in (
-            f"db/validated_advice/{REPORT_DATE}.json",
-            "db/portfolio_state/current.json",
-            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
-            f"db/llm_context/{REPORT_DATE}.json",
-            f"db/evidence_index/{REPORT_DATE}.json",
-            "db/long_memory/exports/all_memory.json",
-        ):
-            self.agent.write_json(relative, _load_repo_json(relative))
+        from simulation_fixture_helpers import write_simulation_fixture
+        write_simulation_fixture(self.agent, REPORT_DATE)
 
     def build_phase2_inputs(self) -> None:
         self.copy_real_inputs()
-        run_action_ticket_builder(self.agent.root, REPORT_DATE, generated_at=TICKET_GENERATED_AT)
-        run_retrieval_pack_builder(self.agent.root, REPORT_DATE, generated_at=PACK_GENERATED_AT)
+        run_action_ticket_builder(self.agent.root, REPORT_DATE, generated_at=TICKET_GENERATED_AT, source_mode="native")
+        run_retrieval_pack_builder(self.agent.root, REPORT_DATE, generated_at=PACK_GENERATED_AT, source_mode="native")
 
     def run_graph(self, *, fail_node: str = "") -> dict:
         self.build_phase2_inputs()
@@ -82,7 +75,7 @@ class ActionDebateGraphTests(unittest.TestCase):
         node_outputs = first["node_outputs"]
 
         self.assertEqual("ok", artifact["summary"]["status"])
-        self.assertEqual(15, artifact["summary"]["debate_count"])
+        self.assertEqual(4, artifact["summary"]["debate_count"])
         self.assertEqual(0, artifact["summary"]["node_failure_count"])
         self.assertTrue(artifact["non_executable"])
         self.assertEqual("shadow_only", artifact["write_scope"])
@@ -116,6 +109,7 @@ class ActionDebateGraphTests(unittest.TestCase):
                             "target_status": "shadow_only",
                             "confidence_delta": 0.01,
                             "reason": f"llm reason for {item['ticket_id']}",
+                            **({"action": "hold", "amount": 0.0} if payload["node"] == "action_former" else {}),
                             "non_executable": True,
                         }
                         for item in payload["items"]
@@ -141,6 +135,9 @@ class ActionDebateGraphTests(unittest.TestCase):
         first = artifact["debates"][0]["node_outputs"]
         self.assertEqual("llm", first["bull_case"]["reasoning_mode"])
         self.assertEqual("llm", first["action_former"]["reasoning_mode"])
+        self.assertIn("action", first["action_former"])
+        self.assertIn("amount", first["action_former"])
+        self.assertGreaterEqual(first["action_former"]["amount"], 0.0)
 
     def test_llm_debate_retries_only_missing_ticket_ids(self) -> None:
         self.build_phase2_inputs()
@@ -170,6 +167,7 @@ class ActionDebateGraphTests(unittest.TestCase):
                             "target_status": "shadow_only",
                             "confidence_delta": 0.01,
                             "reason": f"llm reason for {item['ticket_id']}",
+                            **({"action": "hold", "amount": 0.0} if payload["node"] == "action_former" else {}),
                             "non_executable": True,
                         }
                         for item in request_items
@@ -208,9 +206,9 @@ class ActionDebateGraphTests(unittest.TestCase):
         )
 
         self.assertEqual("degraded", artifact["summary"]["status"])
-        self.assertEqual(15, artifact["summary"]["debate_count"])
+        self.assertEqual(4, artifact["summary"]["debate_count"])
         self.assertGreater(artifact["summary"]["node_failure_count"], 0)
-        self.assertEqual(15, artifact["summary"]["degraded_count"])
+        self.assertEqual(4, artifact["summary"]["degraded_count"])
         self.assertEqual("degraded", artifact["runtime"]["node_status"]["bear_case"])
         self.assertEqual(before_validated, _sha256(validated_path))
         self.assertEqual(before_portfolio, _sha256(portfolio_path))
@@ -306,9 +304,9 @@ class ActionDebateGraphTests(unittest.TestCase):
             "--generated-at",
             DEBATE_GENERATED_AT,
         )
-        self.assertIn("wrote 15 action debates", completed.stdout)
+        self.assertIn("wrote 4 action debates", completed.stdout)
         payload = json.loads(action_debate_path(self.agent.root, REPORT_DATE).read_text(encoding="utf-8"))
-        self.assertEqual(15, payload["summary"]["debate_count"])
+        self.assertEqual(4, payload["summary"]["debate_count"])
 
 
 if __name__ == "__main__":

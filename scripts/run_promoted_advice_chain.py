@@ -54,6 +54,7 @@ def write_official_outputs(
     generated_at: str,
     is_mock: bool,
     llm_model: str,
+    basis: dict | None = None,
 ) -> dict[str, Path]:
     advice = dict(preview["final_advice_preview"])
     committee_bundle = dict(preview["committee_decision_bundle_preview"])
@@ -106,6 +107,7 @@ def write_official_outputs(
         advice=advice,
         llm_raw=raw_payload,
         committee_bundle=committee_bundle,
+        basis=basis,
     )
     paths["validated_advice"] = dump_json(validated_advice_path(agent_home, report_date), validated)
     decisions = build_and_write_decisions(agent_home, report_date)
@@ -191,6 +193,11 @@ def run_chain(
     llm_model = str(load_llm_config(agent_home).get("model", "") or "")
     ensure_layout(agent_home)
     (agent_home / "db" / "action_seed").mkdir(parents=True, exist_ok=True)
+    # 决策前（辩论前）冻结 basis，贯穿后续，中间手动交易不复利重取。
+    from common import load_portfolio
+    from simulation_policy import get_or_freeze_basis
+    frozen_basis = get_or_freeze_basis(agent_home, report_date, load_portfolio(agent_home),
+                                       write=True, decision_at=generated_at)
     run_action_ticket_builder(agent_home, report_date, generated_at=generated_at, source_mode="native")
     run_retrieval_pack_builder(agent_home, report_date, generated_at=generated_at, source_mode="native", use_rag=use_rag)
     _debate_path, debate_artifact = run_debate_graph(agent_home, report_date, generated_at=generated_at, debate_mode=debate_mode)
@@ -210,6 +217,7 @@ def run_chain(
         generated_at=generated_at,
         is_mock=is_mock,
         llm_model=llm_model,
+        basis=frozen_basis,
     )
     try:
         capture = capture_decision_snapshot(agent_home, report_date, generated_at)

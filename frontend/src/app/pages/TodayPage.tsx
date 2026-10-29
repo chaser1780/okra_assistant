@@ -3,11 +3,12 @@ import { ArrowRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { FundResearchCard, LongMemoryRecord, TodayPagePayload, Tone } from "../../lib/types";
 import { compactMoney, lines, text } from "../../lib/format";
+import { fundingLineText } from "../../lib/display";
 import { Badge, Button, Card, EmptyState, MetricCard, SectionTitle } from "../../components/ui";
 import { DrawdownChart, RiskScatterChart, TrendChart } from "../../components/okra/ChartPrimitives";
 import { ChartFrame, TerminalPanel, TerminalState } from "../../components/okra/TerminalChrome";
 import { ResearchDataContext, SimulationTrackRail } from "../../components/okra/ResearchContext";
-import { actionLabel, memoryText, memoryTitle, narrativeText, statusLabel, valueLabel } from "../../lib/display";
+import { actionLabel, evidenceQualityLabel, horizonLabel, memoryText, memoryTitle, narrativeText, sizeRatioText, sizeTierLabel, statusLabel, valueLabel } from "../../lib/display";
 import { getTodayAnalysis, getTodayAnalysisSystem, pickAnalysisValue } from "../../lib/todayAnalysis";
 import { routeForPage } from "../routeMeta";
 
@@ -158,7 +159,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
           <SectionTitle title="组合状态" meta={snapshot.portfolio.asOfDate} />
           <div className="metric-number text-3xl font-black text-slate-50">{snapshot.portfolio.totalValueText}</div>
           <div className="mt-2 text-sm text-slate-500">
-            现金 {snapshot.portfolio.cashText} | 持仓 {snapshot.portfolio.items.length} 只
+            {fundingLineText(snapshot.portfolio.simulationV2, snapshot.portfolio.cashText)} | 持仓 {snapshot.portfolio.items.length} 只
           </div>
           {hasPortfolioTrend ? (
             <div className="mt-5 h-32">
@@ -183,7 +184,7 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
 
         <Card className="p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <SectionTitle title="基金 Ticket" meta={`${fundTickets.length} 张`} />
+            <SectionTitle title="基金 Ticket" meta={`${fundTickets.length} 张${snapshot.research?.dropped_cards ? ` · ${snapshot.research.dropped_cards} 张无效卡已忽略` : ""}`} />
             <Button variant="ghost" className="h-8 shrink-0 gap-1 px-2" onClick={() => navigate(routeForPage("research", snapshot.selectedDate))}>
               完整研究页
               <ArrowRight className="h-4 w-4" />
@@ -229,6 +230,8 @@ export function TodayPage({ snapshot }: { snapshot: TodayPagePayload }) {
 function TicketPreview({ card }: { card: FundResearchCard }) {
   const pnlTone = numericTone(card.portfolio.holdingPnl);
   const newsRisk = Number(card.news.riskCount ?? 0);
+  const isV2 = card.sizeTier === "small" || card.sizeTier === "medium" || card.sizeTier === "large" || card.sizeTier === "none";
+  const tierValue = isV2 ? [sizeTierLabel(card.sizeTier), sizeRatioText(card.sizeRatio)].filter(Boolean).join(" ") : "";
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -243,10 +246,24 @@ function TicketPreview({ card }: { card: FundResearchCard }) {
         <Badge tone={actionTone(card.action)}>{actionLabel(card.action)}</Badge>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-        <TicketMini label="金额" value={card.amountText || "不可用"} />
+        {isV2 ? (
+          <TicketMini label="仓位档位" value={tierValue} />
+        ) : (
+          <TicketMini label="金额" value={card.amountText || "不可用"} />
+        )}
         <TicketMini label="收益" value={text(card.portfolio.holdingPnlText, "0.00")} tone={pnlTone} />
         <TicketMini label="新闻" value={String(card.news.count ?? 0)} tone={newsRisk ? "warning" : "neutral"} />
       </div>
+      {isV2 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Badge tone="info">{horizonLabel(card.horizon)}</Badge>
+          <Badge tone="neutral">{evidenceQualityLabel(card.evidenceQuality)}</Badge>
+        </div>
+      ) : (
+        <div className="mt-2">
+          <Badge tone="neutral">旧版金额建议</Badge>
+        </div>
+      )}
       <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{narrativeText(card.thesis)}</p>
     </div>
   );

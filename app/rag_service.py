@@ -40,7 +40,7 @@ def _valid_date(value: Any) -> str:
         try:
             return date.fromisoformat(text[:10]).isoformat()
         except ValueError:
-            pass
+            raise ValueError(f"selectedDate must be a real YYYY-MM-DD date, got {text!r}")
     return today_shanghai()
 
 
@@ -103,6 +103,11 @@ def build_copilot_rag_pack(agent_home: Path, payload: dict[str, Any]) -> dict[st
 
     query_date = _valid_date(payload.get("selectedDate"))
     question = _question_from_payload(payload)
+    # contract §6: optional timezone-aware decision time. Passed through to the
+    # planner as decision_at (scripts side enforces Shanghai-local date ==
+    # query_date, else ValueError -> 400). Absent => planner tags
+    # cutoff_precision=end_of_day_legacy; we never default to now().
+    decision_at = str(payload.get("decisionAt") or payload.get("decision_at") or "").strip() or None
     fund_code = str(payload.get("fundCode", "") or "").strip()
     top_k = _positive_int(settings.get("top_k"), 8)
     token_budget = _positive_int(settings.get("token_budget"), 6000)
@@ -114,6 +119,7 @@ def build_copilot_rag_pack(agent_home: Path, payload: dict[str, Any]) -> dict[st
     plan = build_rag_query_plan(
         question,
         query_date=query_date,
+        decision_at=decision_at,
         retrieval_profile="execution" if include_execution else retrieval_profile,
         intent=intent,
         fund_codes=[fund_code] if fund_code else [],
@@ -142,6 +148,8 @@ def build_copilot_rag_pack(agent_home: Path, payload: dict[str, Any]) -> dict[st
     elif pack.get("missingData"):
         fallback_reason = "missing_data"
     pack["sourceDate"] = query_date
+    pack["decisionAt"] = plan.decision_at or ""
+    pack["timeBasis"] = str(plan.metadata.get("cutoff_precision") or "end_of_day_legacy")
     pack["status"] = "insufficient_hits" if fallback_reason else "ok"
     pack["fallbackReason"] = fallback_reason
     pack["fallbackToLegacy"] = bool(settings.get("fallback_to_legacy", True))

@@ -1,0 +1,5 @@
+# replay trust / golden slice 完整性校验按 LF 字节记录 sha256。
+# 全局 autocrlf=true 会把这些 JSON 在 checkout 时转成 CRLF，导致 manifest hash 失配。
+# 强制这些受哈希固化的 fixture/manifest 永远以 LF 落盘，保证 hash 在任何 checkout 可重现。
+tests/fixtures/golden_slices/** text eol=lf
+config/historical_replay_trust.json text eol=lf

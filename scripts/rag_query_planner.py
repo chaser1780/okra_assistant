@@ -19,6 +19,7 @@ def build_rag_query_plan(
     query: str,
     *,
     query_date: str,
+    decision_at: str | None = None,
     retrieval_profile: str = "copilot_qa",
     intent: str = "general_qa",
     fund_codes: list[str] | None = None,
@@ -38,6 +39,7 @@ def build_rag_query_plan(
         query=query,
         retrieval_profile=profile,
         query_date=query_date,
+        decision_at=decision_at,
         as_of_date=query_date,
         time_mode=time_mode,
         intent=intent,
@@ -57,9 +59,13 @@ def build_rag_query_plan(
 
 
 def hard_filter_description(plan: RagQueryPlan) -> dict[str, Any]:
+    precision = str(plan.metadata.get("cutoff_precision") or "end_of_day_legacy")
     return {
         "no_future": not plan.allow_future_data,
+        "cutoff_precision": precision,
+        "decision_at": plan.decision_at,
         "query_date_end": end_of_day_iso(plan.query_date),
+        "time_basis_note": plan.metadata.get("time_basis_note", ""),
         "fund_codes": plan.fund_codes,
         "domains": plan.domains,
         "source_kinds": plan.source_kinds,

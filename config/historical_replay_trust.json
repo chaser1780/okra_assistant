@@ -17,7 +17,7 @@
           "kind": "retrieval_pack",
           "role": "decision",
           "path": "tests/fixtures/golden_slices/2026-05-22__017641__scheduled_dca/expected/retrieval_pack.expected.json",
-          "sha256": "3b026dc3097b7aa818ffadb9c5d48d036bff8800e0664aff5a000e3873c77602"
+          "sha256": "e4e6000da988cc162df8657d180c96d3cca599696d39fd92ef3523e42fb6b81a"
         },
         {
           "kind": "slice_definition",

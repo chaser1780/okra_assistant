@@ -152,7 +152,10 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertTrue(result["trade"]["is_simulation"])
         self.assertEqual("simulated", result["trade"]["status"])
         self.assertEqual(1100.0, target["current_value"])
-        self.assertEqual(900.0, cash["current_value"])
+        # v2 virtual external flows: cash hub is never the funding source
+        self.assertEqual(1000.0, cash["current_value"])
+        self.assertEqual(100.0, portfolio["external_cashflow"])
+        self.assertEqual("virtual_external_flows", portfolio["simulation_v2"]["funding_mode"])
         self.assertEqual([], pending["items"])
         self.assertTrue(result["trade"]["portfolio_simulation_event_path"])
         self.assertTrue(replay["idempotent_replay"])
@@ -171,7 +174,18 @@ class ExecutionSyncTests(unittest.TestCase):
         self.assertFalse(first["created"][0]["idempotentReplay"])
         self.assertTrue(second["created"][0]["idempotentReplay"])
         self.assertEqual(1025.0, target["current_value"])
-        self.assertEqual(975.0, cash["current_value"])
+        # v2: old cash fund stays put; the 25 flows in as external money
+        self.assertEqual(1000.0, cash["current_value"])
+
+    def test_configured_dca_blocks_when_calendar_is_unavailable(self):
+        self.agent.write_json("config/trading_calendar.json", {"holidays": [], "makeup_trading_days": []})
+
+        result = sync_configured_simulated_dca(self.agent.root, "2026-05-04")
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("trading_calendar_unavailable", result["reason"])
+        self.assertEqual("trading_calendar_unconfigured", result["calendar"]["reason"])
+        self.assertEqual([], result["created"])
 
     def test_trade_record_id_is_idempotent_and_conflicts_across_dates(self):
         payload = {

@@ -21,14 +21,11 @@ from build_action_ticket_shadow import MissingPortfolioStateError
 from build_layered_retrieval_pack import build_retrieval_pack_artifact, retrieval_pack_path, run_builder
 from layered_context_models import LayeredContextItem, LayeredContextValidationError, RetrievalPackArtifact
 from helpers import TempAgentHome
+from layered_fixture_helpers import write_synthetic_inputs
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _load_repo_json(relative: str) -> dict:
-    return json.loads((PROJECT_ROOT / relative).read_text(encoding="utf-8"))
 
 
 class LayeredRetrievalPackTests(unittest.TestCase):
@@ -38,19 +35,11 @@ class LayeredRetrievalPackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.agent.cleanup()
 
-    def copy_real_inputs(self) -> None:
-        for relative in (
-            f"db/validated_advice/{REPORT_DATE}.json",
-            "db/portfolio_state/current.json",
-            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
-            f"db/llm_context/{REPORT_DATE}.json",
-            f"db/evidence_index/{REPORT_DATE}.json",
-            "db/long_memory/exports/all_memory.json",
-        ):
-            self.agent.write_json(relative, _load_repo_json(relative))
+    def seed(self, memory_items: list | None = None) -> None:
+        write_synthetic_inputs(self.agent, REPORT_DATE, memory_items=memory_items)
 
     def build_artifact(self):
-        self.copy_real_inputs()
+        self.seed()
         return build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
 
     def test_retrieval_pack_round_trip_is_stable(self) -> None:
@@ -94,53 +83,48 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertTrue(all(item.fund_code == "017641" for item in primary_fund_items))
 
     def test_archived_rejected_and_execution_memory_excluded(self) -> None:
-        self.copy_real_inputs()
-        memory = _load_repo_json("db/long_memory/exports/all_memory.json")
-        memory["items"].extend(
-            [
-                {
-                    "memory_id": "mem-archived-test",
-                    "memory_type": "portfolio_policy_memory",
-                    "domain": "portfolio",
-                    "entity_key": "017641_archived",
-                    "title": "archived 017641",
-                    "text": "archived 017641 should not appear",
-                    "status": "archived",
-                    "confidence": 0.99,
-                    "updated_at": "2026-05-21T10:00:00+08:00",
-                    "valid_from": "2026-05-20",
-                    "metadata": {"tags": ["017641"]},
-                },
-                {
-                    "memory_id": "mem-rejected-test",
-                    "memory_type": "portfolio_policy_memory",
-                    "domain": "portfolio",
-                    "entity_key": "017641_rejected",
-                    "title": "rejected 017641",
-                    "text": "rejected 017641 should not appear",
-                    "status": "rejected",
-                    "confidence": 0.99,
-                    "updated_at": "2026-05-21T10:00:00+08:00",
-                    "valid_from": "2026-05-20",
-                    "metadata": {"tags": ["017641"]},
-                },
-                {
-                    "memory_id": "mem-execution-test",
-                    "memory_type": "execution_memory",
-                    "domain": "execution",
-                    "entity_key": "017641_execution",
-                    "title": "execution 017641",
-                    "text": "execution-only 017641 should not appear",
-                    "status": "permanent",
-                    "confidence": 0.99,
-                    "updated_at": "2026-05-21T10:00:00+08:00",
-                    "valid_from": "2026-05-20",
-                    "learning_scope": "execution_only",
-                    "metadata": {"tags": ["017641"], "learning_scope": "execution_only"},
-                },
-            ]
-        )
-        self.agent.write_json("db/long_memory/exports/all_memory.json", memory)
+        self.seed(memory_items=[
+            {
+                "memory_id": "mem-archived-test",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "017641_archived",
+                "title": "archived 017641",
+                "text": "archived 017641 should not appear",
+                "status": "archived",
+                "confidence": 0.99,
+                "updated_at": "2026-05-21T10:00:00+08:00",
+                "valid_from": "2026-05-20",
+                "metadata": {"tags": ["017641"]},
+            },
+            {
+                "memory_id": "mem-rejected-test",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "017641_rejected",
+                "title": "rejected 017641",
+                "text": "rejected 017641 should not appear",
+                "status": "rejected",
+                "confidence": 0.99,
+                "updated_at": "2026-05-21T10:00:00+08:00",
+                "valid_from": "2026-05-20",
+                "metadata": {"tags": ["017641"]},
+            },
+            {
+                "memory_id": "mem-execution-test",
+                "memory_type": "execution_memory",
+                "domain": "execution",
+                "entity_key": "017641_execution",
+                "title": "execution 017641",
+                "text": "execution-only 017641 should not appear",
+                "status": "permanent",
+                "confidence": 0.99,
+                "updated_at": "2026-05-21T10:00:00+08:00",
+                "valid_from": "2026-05-20",
+                "learning_scope": "execution_only",
+                "metadata": {"tags": ["017641"], "learning_scope": "execution_only"},
+            },
+        ])
 
         artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
         serialized = json.dumps(artifact.to_dict(), ensure_ascii=False)
@@ -149,40 +133,34 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertNotIn("mem-execution-test", serialized)
 
     def test_historical_build_excludes_memory_available_after_decision_cutoff(self) -> None:
-        self.copy_real_inputs()
-        self.agent.write_json(
-            "db/long_memory/exports/all_memory.json",
+        self.seed(memory_items=[
             {
-                "items": [
-                    {
-                        "memory_id": "mem-known-at-decision",
-                        "memory_type": "portfolio_policy_memory",
-                        "domain": "portfolio",
-                        "entity_key": "017641_known",
-                        "title": "known 017641 policy",
-                        "text": "known 017641 policy should appear",
-                        "status": "strategic",
-                        "confidence": 0.9,
-                        "updated_at": "2026-05-22T20:00:00+08:00",
-                        "valid_from": "2026-05-22",
-                        "metadata": {"tags": ["017641"]},
-                    },
-                    {
-                        "memory_id": "mem-learned-after-decision",
-                        "memory_type": "portfolio_policy_memory",
-                        "domain": "portfolio",
-                        "entity_key": "017641_future",
-                        "title": "future 017641 policy",
-                        "text": "future 017641 policy must not appear",
-                        "status": "strategic",
-                        "confidence": 0.95,
-                        "updated_at": "2026-05-23T10:00:00+08:00",
-                        "valid_from": "2026-05-23",
-                        "metadata": {"tags": ["017641"]},
-                    },
-                ]
+                "memory_id": "mem-known-at-decision",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "017641_known",
+                "title": "known 017641 policy",
+                "text": "known 017641 policy should appear",
+                "status": "strategic",
+                "confidence": 0.9,
+                "updated_at": "2026-05-22T20:00:00+08:00",
+                "valid_from": "2026-05-22",
+                "metadata": {"tags": ["017641"]},
             },
-        )
+            {
+                "memory_id": "mem-learned-after-decision",
+                "memory_type": "portfolio_policy_memory",
+                "domain": "portfolio",
+                "entity_key": "017641_future",
+                "title": "future 017641 policy",
+                "text": "future 017641 policy must not appear",
+                "status": "strategic",
+                "confidence": 0.95,
+                "updated_at": "2026-05-23T10:00:00+08:00",
+                "valid_from": "2026-05-23",
+                "metadata": {"tags": ["017641"]},
+            },
+        ])
 
         artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
         serialized = json.dumps(artifact.to_dict(), ensure_ascii=False)
@@ -191,13 +169,13 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertNotIn("mem-learned-after-decision", serialized)
 
     def test_rag_failure_falls_back_to_missing_data_not_exception(self) -> None:
-        self.copy_real_inputs()
+        self.seed()
         artifact = build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT, use_rag=True)
         self.assertEqual(15, len(artifact.packs))
         self.assertTrue(any(ref.fallback_used for pack in artifact.packs for ref in pack.rag_trace_refs) or artifact.summary["rag_trace_count"] >= 0)
 
     def test_builder_writes_only_retrieval_pack_artifact_and_keeps_inputs_unchanged(self) -> None:
-        self.copy_real_inputs()
+        self.seed()
         validated_path = self.agent.root / "db" / "validated_advice" / f"{REPORT_DATE}.json"
         portfolio_path = self.agent.root / "db" / "portfolio_state" / "current.json"
         before_validated = _sha256(validated_path)
@@ -212,8 +190,8 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertEqual(before_portfolio, _sha256(portfolio_path))
 
     def test_historical_build_uses_snapshot_portfolio_source(self) -> None:
-        self.copy_real_inputs()
-        future_current = _load_repo_json("db/portfolio_state/current.json")
+        self.seed()
+        future_current = json.loads((self.agent.root / "db" / "portfolio_state" / "current.json").read_text(encoding="utf-8"))
         future_current["as_of_date"] = "2026-05-27"
         future_current["funds"] = []
         self.agent.write_json("db/portfolio_state/current.json", future_current)
@@ -229,10 +207,10 @@ class LayeredRetrievalPackTests(unittest.TestCase):
         self.assertTrue(all(item.source_path == f"db/portfolio_state/snapshots/{REPORT_DATE}.json" for item in portfolio_facts))
 
     def test_historical_build_fails_when_snapshot_missing_and_current_is_future(self) -> None:
-        self.copy_real_inputs()
+        self.seed()
         build_retrieval_pack_artifact(self.agent.root, REPORT_DATE, generated_at=GENERATED_AT)
         (self.agent.root / "db" / "portfolio_state" / "snapshots" / f"{REPORT_DATE}.json").unlink()
-        future_current = _load_repo_json("db/portfolio_state/current.json")
+        future_current = json.loads((self.agent.root / "db" / "portfolio_state" / "current.json").read_text(encoding="utf-8"))
         future_current["as_of_date"] = "2026-05-27"
         self.agent.write_json("db/portfolio_state/current.json", future_current)
 

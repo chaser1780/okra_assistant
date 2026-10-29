@@ -15,6 +15,7 @@ from common import (
     dump_json,
     ensure_layout,
     is_trading_day,
+    TradingCalendarUnavailableError,
     actual_trade_path,
     file_lock,
     load_json,
@@ -37,7 +38,11 @@ from portfolio_state import (
 )
 from trade_lifecycle import lifecycle_status, resolve_trade_lifecycle
 from simulation_tracks import simulation_fields
-from update_portfolio_from_trade import apply_trade
+from update_portfolio_from_trade import (
+    apply_trade,
+    record_cash_dividend,
+    record_internal_fee,
+)
 
 
 def execution_sync_dir(agent_home: Path) -> Path:
@@ -167,6 +172,7 @@ def _record_identity_digest(item: dict[str, Any]) -> str:
             "out_fund_code", "out_fund_name", "out_amount", "out_units", "out_nav",
             "in_fund_code", "in_fund_name", "in_amount", "in_units", "in_nav",
             "status", "linked_suggestion_id", "linked_advice_date", "source", "platform", "user_note",
+            "linked_trade_id",
         )
     }
     encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -436,6 +442,33 @@ def _record_actual_trade_unlocked(agent_home: Path, payload: dict[str, Any]) -> 
         "lifecycle": lifecycle,
         **simulation,
     }
+    # Server-computed v2 ledger fields: never trust request-supplied values. These make
+    # the persisted trade self-describing for performance / audit / API, not just portfolio apply.
+    item["schema_version"] = "simulation_v2"
+    item["funding_mode"] = "virtual_external_flows"
+    op = item["operation_type"]
+    amount = float(item.get("amount") or 0.0)
+    fee = float(item.get("fee") or 0.0)
+    if op in {"buy", "dca"}:
+        item["external_cashflow"] = round(amount + fee, 2)
+    elif op == "sell":
+        item["external_cashflow"] = round(-(amount - fee), 2)
+    else:  # convert / dividend / fee / cancel are internal, never external flow
+        item["external_cashflow"] = 0.0
+    item["external_cashflow_timing"] = "end"
+    has_units = item.get("units") is not None
+    has_nav = item.get("nav") is not None
+    item["valuation_status"] = "exact" if (has_units or has_nav) else "pending"
+    # Optional linked fee guard: a fee event tied to a trade whose fee was already absorbed
+    # by that trade must be rejected as double-cost. A standalone fee (no linked id) cannot
+    # be matched and is never blocked here.
+    if op == "fee":
+        linked_id = str(payload.get("fee_for_trade_id") or payload.get("linked_trade_id") or item.get("linked_trade_id") or "").strip()
+        if linked_id:
+            linked = _find_record_by_trade_id(agent_home, linked_id)
+            if linked is not None and float(linked[0].get("fee") or 0.0) > 0:
+                raise ValueError("fee event duplicates the fee already absorbed by the linked trade")
+        item["linked_trade_id"] = linked_id
     item["execution_deviation"] = build_execution_deviation(agent_home, item)
     existing = _existing_record_result(agent_home, item, result_key="trade")
     if existing is not None:
@@ -1143,7 +1176,18 @@ def build_execution_sync_payload(agent_home: Path) -> dict[str, Any]:
 def sync_configured_simulated_dca(agent_home: Path, report_date: str | None = None) -> dict[str, Any]:
     """Materialize configured DCA as an idempotent user-simulation operation."""
     as_of = resolve_date(report_date)
-    if not is_trading_day(agent_home, as_of):
+    try:
+        trading_day = is_trading_day(agent_home, as_of)
+    except TradingCalendarUnavailableError as exc:
+        return {
+            "asOfDate": as_of,
+            "status": "blocked",
+            "reason": "trading_calendar_unavailable",
+            "calendar": exc.status,
+            "created": [],
+            "skipped": [],
+        }
+    if not trading_day:
         return {"asOfDate": as_of, "status": "skipped", "reason": "not_trading_day", "created": [], "skipped": []}
     portfolio = load_portfolio(agent_home)
     created: list[dict[str, Any]] = []
@@ -1191,14 +1235,38 @@ def apply_settled_trade_to_portfolio(agent_home: Path, trade: dict[str, Any]) ->
 
 def _apply_operation_to_portfolio(portfolio: dict[str, Any], trade: dict[str, Any]) -> dict[str, Any]:
     operation = str(trade.get("operation_type", ""))
+    fee = _money(trade.get("fee"))
     if operation == "convert":
-        portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", _money(trade.get("out_amount")), trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"))
-        return apply_trade(portfolio, str(trade.get("in_fund_code", "")), "switch_in", _money(trade.get("in_amount")), trade_nav=trade.get("in_nav"), trade_units=trade.get("in_units"))
-    if operation in {"buy", "dca"}:
-        return apply_trade(portfolio, str(trade.get("fund_code", "")), "buy", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
-    if operation == "sell":
-        return apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
-    raise RuntimeError(f"operation {operation} does not update a simulation portfolio")
+        out_amount = _money(trade.get("out_amount"))
+        in_amount = _money(trade.get("in_amount"))
+        implied_fee = round(out_amount - in_amount, 2)
+        # Internal conversion fee = the value drop (out - in). It is never an external
+        # flow and must not also be booked into income_adjustment_value. An explicit fee
+        # must match that gap; mismatch is rejected rather than guessed.
+        if fee and abs(implied_fee - fee) > 0.01:
+            raise RuntimeError("conversion fee does not match out/in amount gap; refusing to guess")
+        portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", out_amount, trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"), fee=0.0)
+        portfolio = apply_trade(portfolio, str(trade.get("in_fund_code", "")), "switch_in", in_amount, trade_nav=trade.get("in_nav"), trade_units=trade.get("in_units"), fee=0.0)
+        portfolio["external_cashflow"] = 0.0
+    elif operation in {"buy", "dca"}:
+        portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "buy", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"), fee=fee)
+    elif operation == "sell":
+        portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"), fee=fee)
+    elif operation == "dividend":
+        portfolio = record_cash_dividend(portfolio, str(trade.get("fund_code", "")), _money(trade.get("amount")), reinvest=bool(trade.get("dividend_reinvest")), trade_nav=trade.get("nav"))
+    elif operation == "fee":
+        portfolio = record_internal_fee(portfolio, fee or _money(trade.get("amount")))
+    else:
+        raise RuntimeError(f"operation {operation} does not update a simulation portfolio")
+    # Accumulate the signed external flow by effective date so a later revaluation
+    # snapshot never re-exports a stale flow onto a non-trade day.
+    flow = float(portfolio.get("external_cashflow", 0.0) or 0.0)
+    if flow:
+        day = str(trade.get("effective_trade_date") or trade.get("trade_date") or trade.get("confirm_date") or "")[:10]
+        if day:
+            flows = portfolio.setdefault("external_flows_by_date", {})
+            flows[day] = round(float(flows.get(day, 0.0)) + flow, 2)
+    return portfolio
 
 
 def _validate_user_simulation_trade(agent_home: Path, trade: dict[str, Any]) -> None:
@@ -1289,15 +1357,9 @@ def _apply_settled_trade_to_portfolio_unlocked(agent_home: Path, trade: dict[str
     }
     _write_settlement_journal(agent_home, idempotency_key, journal)
     operation = str(trade.get("operation_type", ""))
-    if operation == "convert":
-        portfolio = apply_trade(portfolio, str(trade.get("out_fund_code", "")), "switch_out", _money(trade.get("out_amount")), trade_nav=trade.get("out_nav"), trade_units=trade.get("out_units"))
-        portfolio = apply_trade(portfolio, str(trade.get("in_fund_code", "")), "switch_in", _money(trade.get("in_amount")), trade_nav=trade.get("in_nav"), trade_units=trade.get("in_units"))
-    elif operation in {"buy", "dca"}:
-        portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "buy", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
-    elif operation == "sell":
-        portfolio = apply_trade(portfolio, str(trade.get("fund_code", "")), "sell", _money(trade.get("amount")), trade_nav=trade.get("nav"), trade_units=trade.get("units"))
-    else:
+    if operation not in {"convert", "buy", "dca", "sell"}:
         return {"ok": False, "reason": f"operation {operation} does not update portfolio automatically"}
+    portfolio = _apply_operation_to_portfolio(portfolio, trade)
     portfolio.setdefault("state_metadata", {})["applied_settlement_ids"] = sorted(_applied_settlement_ids(portfolio) | {idempotency_key})
     after_hash = portfolio_state_hash(portfolio)
     settlement_payload = {

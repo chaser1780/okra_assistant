@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 
@@ -27,6 +28,22 @@ from replay_trust import audit_replay_dates
 from review_advice import classify_outcome, estimated_edge_vs_no_trade
 from promoted_advice_guardrails import build_validated_payload
 from decision_ledger import load_decisions
+
+
+def _extract_replay_decision_at(payload: dict, report_date: str) -> str | None:
+    """只接受历史当天(+08:00)的 tz-aware 决策时刻作为 decision_at；
+    今天重跑生成的 generated_at(日期 != report_date)拒绝，保持 end_of_day_legacy，不声称盘中可信。"""
+    raw = str(payload.get("generated_at", "") or payload.get("decision_at", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        return None
+    local_day = ts.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+    return ts.isoformat(timespec="seconds") if local_day == report_date else None
 
 
 def iter_report_dates(agent_home: Path, start_date: str, end_date: str) -> list[str]:
@@ -544,6 +561,7 @@ def main() -> None:
                 report_date,
                 fund_codes=metrics.get("selected_fund_codes", []),
                 mode=args.mode,
+                decision_at=_extract_replay_decision_at(replay_payload, report_date),
             )
         except Exception as exc:
             rag_backtest = {"enabled": True, "profile": "backtest", "status": "failed", "fallback_reason": str(exc)}

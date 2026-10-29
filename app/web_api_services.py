@@ -7,11 +7,12 @@ import math
 import subprocess
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from common import is_trading_day, timestamp_now
+from common import SHANGHAI_TZ, dump_json, file_lock, is_trading_day, load_json, lock_path, process_matches_project, timestamp_now, trading_calendar_status, trading_calendar_update_state_path
 from data_contracts import build_data_context, normalize_evidence_refs
 from execution_sync import (
     apply_saved_reconciliation,
@@ -26,6 +27,7 @@ from execution_sync import (
 from long_memory_store import approve_memory, can_promote_to_permanent, list_memory_events, list_memory_records
 from simulation_tracks import USER_SIMULATION_TRACK, build_simulation_payload, user_simulation_fields
 from today_orchestrator import AlreadyRunningError, ensure_runtime_not_stale, get_active_runtime
+from update_trading_calendar import maybe_update_calendar
 from ui_support import build_daily_first_open_command, build_realtime_command, build_runtime_env, collect_dates, today_str
 from ui_tasks import build_portfolio_alignment_command, desktop_log_path, portfolio_alignment_target_date, should_align_portfolio_on_boot
 from web_api_format import money as _money
@@ -64,6 +66,25 @@ def _coerce_task_date(value: Any) -> str:
         return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
     except ValueError as exc:
         raise ValueError("date must be YYYY-MM-DD") from exc
+
+
+def _task_skip_payload(*, task: str, run_date: str, reason: str, calendar: dict[str, Any]) -> dict[str, Any]:
+    """Shared skipped-task envelope. Field order matches the pre-refactor literals;
+    callers keep evaluating reason/calendar exactly as before."""
+    return {
+        "ok": True,
+        "task": task,
+        "pid": 0,
+        "runId": "",
+        "runDate": run_date,
+        "force": False,
+        "logPath": "",
+        "portfolioAlignment": {},
+        "alreadyRunning": False,
+        "skipped": True,
+        "reason": reason,
+        "calendar": calendar,
+    }
 
 
 def _news_key(item: dict[str, Any]) -> str:
@@ -183,6 +204,24 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return numeric if math.isfinite(numeric) else default
 
 
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _source_health_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "source_count": len(items),
@@ -231,9 +270,75 @@ class TaskController:
         self._alignment_lock = threading.Lock()
         self._realtime_process = None
         self._realtime_log_path = ""
+        self._realtime_state_path = self.home / "db" / "runtime" / "realtime_task.json"
+        self._realtime_after_close_path = self.home / "db" / "runtime" / "realtime_after_close.json"
+
+    def _owns_realtime_state(self, state: dict[str, Any]) -> bool:
+        try:
+            state_root = Path(str(state.get("project_root") or "")).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return state_root == self.home.resolve() and state.get("command_marker") == "run_realtime_monitor.py"
+
+    def _automatic_calendar(self, run_date: str) -> dict[str, Any]:
+        """Complete the once-per-day refresh before automatic task gating."""
+        current = trading_calendar_status(self.home, run_date)
+        if current.get("ready"):
+            return current
+        # The API starts its authoritative refresh in a bootstrap thread. Wait
+        # for that same attempt to publish before deciding that an automatic
+        # task must be skipped; this closes the startup race without issuing a
+        # second network request.
+        update_state_path = trading_calendar_update_state_path(self.home)
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            try:
+                state = load_json(update_state_path) if update_state_path.exists() else {}
+            except (OSError, ValueError, json.JSONDecodeError):
+                state = {}
+            if not isinstance(state, dict) or state.get("last_attempt_date") != today_str() or state.get("status") in {"updated", "failed", "already_attempted"}:
+                break
+            time.sleep(0.1)
+            current = trading_calendar_status(self.home, run_date)
+            if current.get("ready"):
+                return current
+        # A managed but stale/out-of-range cache is already a trustworthy
+        # reason to skip. The startup updater owns refreshes for those caches;
+        # automatic task dispatch must not introduce a second network race.
+        if current.get("managed"):
+            return current
+        try:
+            maybe_update_calendar(self.home, timeout=8)
+        except Exception:
+            pass
+        return trading_calendar_status(self.home, run_date)
+
+    def _automatic_realtime_window(self) -> str:
+        local = datetime.now(SHANGHAI_TZ)
+        total_minutes = local.hour * 60 + local.minute
+        if 570 <= total_minutes <= 690 or 780 <= total_minutes <= 900:
+            return "session"
+        if total_minutes > 900:
+            try:
+                marker = load_json(self._realtime_after_close_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                marker = {}
+            if isinstance(marker, dict) and marker.get("date") == local.date().isoformat():
+                return "after_close_done"
+            return "after_close"
+        return "outside"
 
     def run_portfolio_alignment_if_needed(self, *, force: bool = False) -> dict[str, Any]:
         with self._alignment_lock:
+            calendar = trading_calendar_status(self.home, today_str())
+            if not force and not calendar.get("ready"):
+                return {
+                    "ok": True,
+                    "task": "portfolio_alignment",
+                    "skipped": True,
+                    "reason": calendar.get("reason", "trading_calendar_not_ready"),
+                    "calendar": calendar,
+                }
             if not force and not should_align_portfolio_on_boot(self.home):
                 return {"ok": True, "task": "portfolio_alignment", "skipped": True, "reason": "portfolio_already_current"}
             run_date = portfolio_alignment_target_date(self.home)
@@ -254,9 +359,25 @@ class TaskController:
             }
 
     def run_task(self, kind: str, *, force: bool = False, run_date: str | None = None, automatic: bool = False) -> dict[str, Any]:
-        with self._run_lock:
+        with self._run_lock, (file_lock(lock_path(self.home, "api_task_dispatch"), timeout_seconds=30.0) if kind == "realtime" else nullcontext()):
             run_date = _coerce_task_date(run_date)
             if kind == "daily":
+                if automatic:
+                    calendar = self._automatic_calendar(run_date)
+                    if not calendar.get("ready"):
+                        return _task_skip_payload(
+                            task="daily",
+                            run_date=run_date,
+                            reason=calendar.get("reason", "trading_calendar_not_ready"),
+                            calendar=calendar,
+                        )
+                    if not is_trading_day(self.home, run_date):
+                        return _task_skip_payload(
+                            task="daily",
+                            run_date=run_date,
+                            reason="non_trading_day",
+                            calendar=calendar,
+                        )
                 active_runtime = get_active_runtime(self.home, run_date)
                 if active_runtime:
                     raise AlreadyRunningError(active_runtime)
@@ -268,20 +389,37 @@ class TaskController:
                 task_name = "today_analysis"
             elif kind == "realtime":
                 run_date = today_str()
+                calendar = self._automatic_calendar(run_date) if automatic else trading_calendar_status(self.home, run_date)
+                if automatic and not calendar.get("ready"):
+                    return _task_skip_payload(
+                        task="realtime",
+                        run_date=run_date,
+                        reason=calendar.get("reason", "trading_calendar_not_ready"),
+                        calendar=calendar,
+                    )
                 if automatic and not is_trading_day(self.home, run_date):
-                    return {
-                        "ok": True,
-                        "task": "realtime",
-                        "pid": 0,
-                        "runId": "",
-                        "runDate": run_date,
-                        "force": False,
-                        "logPath": "",
-                        "portfolioAlignment": {},
-                        "alreadyRunning": False,
-                        "skipped": True,
-                        "reason": "non_trading_day",
-                    }
+                    return _task_skip_payload(
+                        task="realtime",
+                        run_date=run_date,
+                        reason="non_trading_day",
+                        calendar=calendar,
+                    )
+                if automatic:
+                    realtime_window = self._automatic_realtime_window()
+                    if realtime_window == "outside":
+                        return _task_skip_payload(
+                            task="realtime",
+                            run_date=run_date,
+                            reason="outside_trading_session",
+                            calendar=calendar,
+                        )
+                    if realtime_window == "after_close_done":
+                        return _task_skip_payload(
+                            task="realtime",
+                            run_date=run_date,
+                            reason="after_close_already_completed",
+                            calendar=calendar,
+                        )
                 if self._realtime_process is not None and self._realtime_process.poll() is None:
                     return {
                         "ok": True,
@@ -294,6 +432,28 @@ class TaskController:
                         "portfolioAlignment": {},
                         "alreadyRunning": True,
                     }
+                if self._realtime_state_path.exists():
+                    try:
+                        state = load_json(self._realtime_state_path)
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        state = {}
+                    if isinstance(state, dict) and process_matches_project(
+                        state.get("pid"), self.home, "run_realtime_monitor.py"
+                    ):
+                        return {
+                            "ok": True,
+                            "task": "realtime",
+                            "pid": int(state.get("pid") or 0),
+                            "runId": "",
+                            "runDate": str(state.get("runDate") or run_date),
+                            "force": False,
+                            "logPath": str(state.get("logPath") or ""),
+                            "portfolioAlignment": {},
+                            "alreadyRunning": True,
+                        }
+                    if not isinstance(state, dict) or not self._owns_realtime_state(state):
+                        raise RuntimeError("Existing realtime task state cannot be verified as belonging to this project; refusing to replace it.")
+                    self._realtime_state_path.unlink(missing_ok=True)
                 command = build_realtime_command(self.home, run_date)
                 task_name = "realtime"
                 alignment = {}
@@ -310,6 +470,23 @@ class TaskController:
             if kind == "realtime":
                 self._realtime_process = process
                 self._realtime_log_path = str(log_path)
+                dump_json(
+                    self._realtime_state_path,
+                    {
+                        "schema_version": "realtime_task_runtime.v1",
+                        "project_root": str(self.home.resolve()),
+                        "pid": int(process.pid),
+                        "runDate": run_date,
+                        "logPath": str(log_path),
+                        "startedAt": timestamp_now(),
+                        "command_marker": "run_realtime_monitor.py",
+                    },
+                )
+                if automatic and self._automatic_realtime_window() == "after_close":
+                    dump_json(
+                        self._realtime_after_close_path,
+                        {"date": run_date, "completed_at": timestamp_now()},
+                    )
             runtime: dict[str, Any] = {}
             if kind == "daily":
                 for _ in range(20):
@@ -327,6 +504,51 @@ class TaskController:
             "logPath": str(log_path),
             "portfolioAlignment": alignment,
             "alreadyRunning": False,
+        }
+
+    def task_status(self, kind: str, *, run_date: str | None = None) -> dict[str, Any]:
+        """Return a read-only process status for the desktop refresh coordinator."""
+        target_date = _coerce_task_date(run_date)
+        if kind == "daily":
+            runtime = get_active_runtime(self.home, target_date)
+            return {
+                "ok": True,
+                "task": "today_analysis",
+                "runDate": target_date,
+                "running": bool(runtime),
+                "pid": runtime.get("pid", 0),
+                "runId": runtime.get("runId", ""),
+                "status": runtime.get("status", "idle"),
+                "endedAt": runtime.get("endedAt", ""),
+            }
+        if kind != "realtime":
+            raise ValueError(f"Unsupported task: {kind}")
+        state: dict[str, Any] = {}
+        if self._realtime_state_path.exists():
+            try:
+                loaded = load_json(self._realtime_state_path)
+                state = loaded if isinstance(loaded, dict) else {}
+            except (OSError, ValueError, json.JSONDecodeError):
+                state = {}
+        running = False
+        pid = state.get("pid", 0)
+        if self._realtime_process is not None and self._realtime_process.poll() is None:
+            running = True
+            pid = self._realtime_process.pid
+        elif state and self._owns_realtime_state(state) and process_matches_project(pid, self.home, "run_realtime_monitor.py"):
+            running = True
+        elif state and self._owns_realtime_state(state):
+            self._realtime_state_path.unlink(missing_ok=True)
+        return {
+            "ok": True,
+            "task": "realtime",
+            "runDate": str(state.get("runDate") or target_date),
+            "running": running,
+            "pid": int(pid or 0),
+            "runId": "",
+            "status": "running" if running else "idle",
+            "verified": not state or self._owns_realtime_state(state),
+            "endedAt": "" if running else timestamp_now(),
         }
 
 
@@ -349,7 +571,19 @@ class ExecutionController:
             raise ValueError("operation_type must be buy, sell, add, reduce, fee, dividend, or cancel")
         if operation_type in {"buy", "sell", "add", "reduce"} and not _positive_number(payload, "amount", "units"):
             raise ValueError("amount or units must be greater than 0")
-        return _to_jsonable(record_actual_trade(self.home, {**payload, **simulation, "platform": "local_simulation"}))
+        result = _to_jsonable(record_actual_trade(self.home, {**payload, **simulation, "platform": "local_simulation"}))
+        # simulation_v2 API adapter (contract §3): echo the ledger-persisted v2
+        # fields verbatim. external_cashflow/valuation_status are server-computed
+        # at record time and must NOT be re-derived from request amount here;
+        # fee/dividend internal events carry exact ledger state without claiming
+        # precise holding valuation.
+        if isinstance(result, dict):
+            persisted = result.get("trade") if isinstance(result.get("trade"), dict) else {}
+            result["fundingMode"] = persisted.get("funding_mode", "legacy")
+            result["externalCashflow"] = persisted.get("external_cashflow")
+            result["externalCashflowTiming"] = persisted.get("external_cashflow_timing", "end")
+            result["valuationStatus"] = persisted.get("valuation_status", "pending")
+        return result
 
     def execution_conversion(self, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_shadow_mutation_payload(payload, endpoint="execution conversion")
@@ -782,32 +1016,49 @@ class PageService:
             for date_text in marker_dates[-20:]
         ]
 
-    def group_items(self, items: list[dict[str, Any]], key: str, total_value: float) -> list[dict[str, Any]]:
+    def group_items(self, items: list[dict[str, Any]], key: str, total_value: float | None) -> list[dict[str, Any]]:
         grouped: dict[str, float] = {}
         for item in items:
+            amount = _optional_float(item.get("amount"))
+            if amount is None:
+                continue
             label = str(item.get(key) or "未分组")
-            grouped[label] = grouped.get(label, 0.0) + float(item.get("amount") or 0)
+            grouped[label] = grouped.get(label, 0.0) + amount
         rows = []
         for label, value in sorted(grouped.items(), key=lambda pair: pair[1], reverse=True):
-            weight = value / float(total_value or 1) * 100 if total_value else 0
-            rows.append({"name": label, "value": round(value, 2), "valueText": _money(value), "weight": round(weight, 2), "weightText": _percent(weight)})
+            weight = value / float(total_value) * 100 if total_value not in (None, 0) else None
+            rows.append({
+                "name": label,
+                "value": round(value, 2),
+                "valueText": _money(value),
+                "weight": round(weight, 2) if weight is not None else None,
+                "weightText": _percent(weight),
+            })
         return rows
 
     def portfolio_payload(self, state: dict[str, Any]) -> dict[str, Any]:
         portfolio = state.get("portfolio", {}) or {}
         holdings = list(portfolio.get("funds", []) or portfolio.get("holdings", []) or portfolio.get("positions", []) or [])
-        total_value = portfolio.get("total_value") or portfolio.get("market_value") or portfolio.get("total_asset") or 0
-        cash = portfolio.get("cash") or portfolio.get("cash_balance") or 0
+        total_value = _first_present(portfolio, "total_value", "market_value", "total_asset")
+        total_value = _optional_float(total_value)
+        cash = _optional_float(_first_present(portfolio, "cash", "cash_balance"))
         items = []
         for item in holdings:
-            amount = item.get("current_value") or item.get("amount") or item.get("market_value") or item.get("value") or 0
-            weight = item.get("weight") or item.get("position_pct") or item.get("allocation") or 0
-            if not weight and total_value:
+            amount = _optional_float(_first_present(item, "current_value", "amount", "market_value", "value"))
+            weight = _optional_float(_first_present(item, "weight", "position_pct", "allocation"))
+            if weight is None and total_value not in (None, 0) and amount is not None:
                 try:
-                    weight = float(amount or 0) / float(total_value or 1) * 100
+                    weight = amount / total_value * 100
                 except (TypeError, ValueError, ZeroDivisionError):
-                    weight = 0
+                    weight = None
             action = item.get("suggested_action") or item.get("action") or ("locked" if item.get("allow_trade") is False else "hold")
+            holding_pnl = _optional_float(item.get("holding_pnl"))
+            holding_return = _optional_float(item.get("holding_return_pct"))
+            official_daily_pnl = _optional_float(item.get("official_daily_pnl"))
+            cost_basis = _optional_float(item.get("cost_basis_value"))
+            holding_units = _optional_float(item.get("holding_units"))
+            last_nav = _optional_float(_first_present(item, "last_official_nav", "last_valuation_nav"))
+            fixed_daily_buy = _optional_float(item.get("fixed_daily_buy_amount"))
             items.append(
                 {
                     "fundCode": item.get("fund_code") or item.get("code") or "",
@@ -820,22 +1071,22 @@ class PageService:
                     "action": action,
                     "role": item.get("role") or "",
                     "styleGroup": item.get("style_group") or "",
-                    "holdingPnl": item.get("holding_pnl") or 0,
-                    "holdingPnlText": _money(item.get("holding_pnl") or 0),
-                    "holdingReturnPct": item.get("holding_return_pct") or 0,
-                    "holdingReturnPctText": _percent(item.get("holding_return_pct") or 0),
-                    "officialDailyPnl": item.get("official_daily_pnl"),
-                    "officialDailyPnlText": _money(item.get("official_daily_pnl") or 0) if item.get("official_daily_pnl") is not None else "暂无",
+                    "holdingPnl": holding_pnl,
+                    "holdingPnlText": _money(holding_pnl),
+                    "holdingReturnPct": holding_return,
+                    "holdingReturnPctText": _percent(holding_return),
+                    "officialDailyPnl": official_daily_pnl,
+                    "officialDailyPnlText": _money(official_daily_pnl),
                     "officialDailyPnlDate": item.get("official_daily_pnl_date") or "",
                     "officialDailyPnlStatus": item.get("official_daily_pnl_status") or "",
                     "officialDailyPnlReason": item.get("official_daily_pnl_reason") or "",
-                    "costBasis": item.get("cost_basis_value") or 0,
-                    "costBasisText": _money(item.get("cost_basis_value") or 0),
-                    "holdingUnits": item.get("holding_units") or 0,
-                    "lastNav": item.get("last_official_nav") or item.get("last_valuation_nav") or 0,
+                    "costBasis": cost_basis,
+                    "costBasisText": _money(cost_basis),
+                    "holdingUnits": holding_units,
+                    "lastNav": last_nav,
                     "lastNavDate": item.get("last_official_nav_date") or item.get("last_valuation_date") or "",
                     "allowTrade": item.get("allow_trade", True),
-                    "fixedDailyBuyAmount": item.get("fixed_daily_buy_amount") or 0,
+                    "fixedDailyBuyAmount": fixed_daily_buy,
                     "allowExtraBuys": item.get("allow_extra_buys", True),
                 }
             )
@@ -854,16 +1105,18 @@ class PageService:
         risk_scatter = []
         for item in items:
             realtime_item = realtime_map.get(str(item.get("fundCode") or ""), {})
-            weight = float(item.get("weight") or 0)
-            if abs(weight) <= 1:
+            weight = _optional_float(item.get("weight"))
+            if weight is not None and abs(weight) <= 1:
                 weight *= 100.0
+            anomaly = _optional_float(realtime_item.get("anomaly_score"))
+            holding_pnl = _optional_float(item.get("holdingPnl"))
             risk_scatter.append(
                 {
                     "fundCode": item.get("fundCode", ""),
                     "fundName": item.get("fundName", ""),
-                    "weightPct": round(weight, 4),
-                    "anomalyScore": round(float(realtime_item.get("anomaly_score", 0) or 0), 4),
-                    "holdingPnl": round(float(item.get("holdingPnl") or 0), 4),
+                    "weightPct": round(weight, 4) if weight is not None else None,
+                    "anomalyScore": round(anomaly, 4) if anomaly is not None else None,
+                    "holdingPnl": round(holding_pnl, 4) if holding_pnl is not None else None,
                     "styleGroup": item.get("styleGroup") or "未归类",
                 }
             )
@@ -885,16 +1138,62 @@ class PageService:
         )
         current_drawdown = drawdown_points[-1].value if drawdown_points else None
         max_drawdown = min((point.value for point in drawdown_points), default=None)
-        cash_weight = float(cash or 0) / float(total_value or 1) * 100.0 if total_value else None
+        cash_weight = cash / total_value * 100.0 if cash is not None and total_value not in (None, 0) else None
+        holding_pnl = _optional_float(portfolio.get("holding_pnl"))
+        if holding_pnl is None:
+            known_pnl = [_optional_float(item.get("holdingPnl")) for item in items]
+            known_pnl = [value for value in known_pnl if value is not None]
+            holding_pnl = sum(known_pnl) if known_pnl else None
         data_context = self.data_context(state)
+        sim_marker = portfolio.get("simulation_v2") if isinstance(portfolio.get("simulation_v2"), dict) else None
+        if sim_marker is not None and sim_marker.get("version") == 2:
+            simulation_v2_version = "simulation_v2"
+            funding_mode = str(sim_marker.get("funding_mode") or "") or None
+        else:
+            simulation_v2_version = "legacy"
+            funding_mode = None
+        flow_map = portfolio.get("external_flows_by_date") if isinstance(portfolio.get("external_flows_by_date"), dict) else None
+        net_external_flow = None
+        selected_flow_date = str(state.get("selected_date") or portfolio.get("as_of_date") or state.get("portfolio_date") or "")
+        if flow_map is not None:
+            eligible_items = []
+            for day_text, value in flow_map.items():
+                if selected_flow_date and str(day_text) <= selected_flow_date:
+                    try:
+                        eligible_items.append(float(value))
+                    except (TypeError, ValueError):
+                        continue
+            net_external_flow = round(sum(eligible_items), 2) if eligible_items else None
+            try:
+                external_cashflow_value = round(float(flow_map.get(selected_flow_date, 0.0)), 2) if selected_flow_date else None
+            except (TypeError, ValueError):
+                external_cashflow_value = None
+        elif "external_cashflow" in portfolio:
+            external_cashflow_value = _optional_float(portfolio.get("external_cashflow"))
+        else:
+            external_cashflow_value = None
+        fund_statuses = {
+            str(fund.get("valuation_status") or "")
+            for fund in portfolio.get("funds", []) or []
+            if isinstance(fund, dict)
+        }
+        fund_statuses.discard("")
+        if not fund_statuses:
+            fund_valuation_status = None
+        elif fund_statuses == {"exact"}:
+            fund_valuation_status = "exact"
+        elif "pending" in fund_statuses:
+            fund_valuation_status = "pending"
+        else:
+            fund_valuation_status = "legacy_unavailable"
         return {
             "asOfDate": portfolio.get("as_of_date") or state.get("portfolio_date") or "",
             "totalValue": total_value,
             "totalValueText": _money(total_value),
             "cash": cash,
             "cashText": _money(cash),
-            "holdingPnl": portfolio.get("holding_pnl") or sum(float(item.get("holdingPnl") or 0) for item in items),
-            "holdingPnlText": _money(portfolio.get("holding_pnl") or sum(float(item.get("holdingPnl") or 0) for item in items)),
+            "holdingPnl": holding_pnl,
+            "holdingPnlText": _money(holding_pnl),
             "styleAllocation": self.group_items(items, "styleGroup", total_value),
             "roleAllocation": self.group_items(items, "role", total_value),
             "profitLeaders": sorted(items, key=lambda item: float(item.get("holdingPnl") or 0), reverse=True)[:5],
@@ -924,6 +1223,15 @@ class PageService:
             "performanceMetrics": performance_metrics,
             "dataContext": data_context,
             "simulation": build_simulation_payload(self.home, portfolio=portfolio),
+            "simulationV2": {
+                "schemaVersion": simulation_v2_version,
+                "fundingMode": funding_mode,
+                "portfolioDate": str(portfolio.get("as_of_date") or ""),
+                "netExternalFlow": net_external_flow,
+                "externalCashflow": external_cashflow_value,
+                "externalCashflowTiming": str(portfolio.get("external_cashflow_timing") or "") or None,
+                "valuationStatus": fund_valuation_status,
+            },
             "items": items,
         }
 
@@ -1068,6 +1376,15 @@ class PageService:
         from model_run_store import list_model_runs
 
         decision_trace_payload = self.read_json_file(self.home / "db" / "decision_traces" / f"{selected}.json")
+        data_freshness = self.data_context(state)
+        calendar = trading_calendar_status(self.home, selected)
+        if calendar.get("ready"):
+            try:
+                calendar = {**calendar, "isTradingDay": is_trading_day(self.home, selected)}
+            except Exception:
+                # Keep the readiness payload available even if the date lookup
+                # fails while a cache is being replaced.
+                pass
         return {
             "sourceHealth": source_health_payload,
             "preflightStatus": (state.get("summary", {}) or {}).get("preflight_status", ""),
@@ -1096,6 +1413,14 @@ class PageService:
             "simulation": build_simulation_payload(self.home, portfolio=state.get("portfolio", {}) or {}),
             "todayAnalysis": today_analysis_system,
             "dailyFirstOpen": dict(today_analysis_system),
+            "dataFreshness": {
+                "status": data_freshness.get("freshnessStatus", "unavailable"),
+                "latestRetrievedAt": data_freshness.get("latestRetrievedAt", ""),
+                "portfolioAsOfDate": data_freshness.get("portfolioAsOfDate", ""),
+                "realtimeAsOfDate": data_freshness.get("realtimeAsOfDate", ""),
+                "reason": data_freshness.get("freshnessReason", ""),
+            },
+            "tradingCalendar": calendar,
             "ragRuntime": self.rag_runtime_payload(full=include_full_rag),
         }
 

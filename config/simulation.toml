@@ -1,0 +1,23 @@
+# 模拟研究助手 sizing / freeze 配置（本轮新增；不改任何既有配置文件）。
+# 契约：docs/模拟研究助手优化方案.md §1-§2, §4-§5
+# 前台只输出方向 + size_tier，不输出每日精确金额；金额由本策略按冻结仓位快照确定性换算。
+
+# 资金模型：模拟外部现金流（不把旧现金基金当资金池）。
+funding_mode = "virtual_external_flows"
+
+# size_tier -> 占该基金冻结持仓 basis_position_value 的比例。
+# 与契约 §1 对齐：small=10% / medium=25% / large=50% / none=0%(hold)。
+[size_tiers]
+small = 0.10
+medium = 0.25
+large = 0.50
+none = 0.0
+
+# 交易粒度：内部 validated_amount 仍按此取整（兼容既有 100 元粒度）。
+[granularity]
+trade_unit = 100
+
+# evidence_quality 与 confidence 分开建模（契约 §1）。
+[evidence_quality]
+# high/medium/low/unavailable；此处仅声明允许枚举，取值来自证据链，不在此硬编码阈值。
+allowed = ["high", "medium", "low", "unavailable"]

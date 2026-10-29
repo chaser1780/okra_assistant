@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_daily_pipeline import add_business_days, due_review_jobs, run_rag_shadow, run_step, step_output_exists
 from run_realtime_monitor import should_sync_units
 from run_report_window import intraday_report_target
+from common import load_llm_config
 from helpers import TempAgentHome
 from ui_support import latest_nightly_target_date, load_portfolio_for_date, pending_nightly_catchup_dates, should_autorun_intraday_on_boot, should_refresh_realtime_on_boot
 from ui_tasks import portfolio_alignment_target_date, should_align_portfolio_on_boot
@@ -44,7 +45,8 @@ class PipelineLogicTests(unittest.TestCase):
         finally:
             agent.cleanup()
 
-    def _write_promoted_outputs(self, agent: TempAgentHome, report_date: str, *, is_mock: bool = False, model: str = "gpt-5.5") -> Path:
+    def _write_promoted_outputs(self, agent: TempAgentHome, report_date: str, *, is_mock: bool = False, model: str | None = None) -> Path:
+        model = model or str(load_llm_config(agent.root).get("model") or "")
         for relative in (
             f"db/daily_scores/{report_date}.json",
             "db/portfolio_state/current.json",
@@ -233,6 +235,19 @@ class PipelineLogicTests(unittest.TestCase):
             root = Path(temp_dir)
             (root / "config").mkdir(parents=True, exist_ok=True)
             (root / "db" / "validated_advice").mkdir(parents=True, exist_ok=True)
+            (root / "config" / "trading_calendar.json").write_text(
+                json.dumps(
+                    {
+                        "source": "test-fixture",
+                        "checked_at": "2026-12-31T00:00:00+00:00",
+                        "coverage_start": "2026-01-01",
+                        "coverage_end": "2026-12-31",
+                        "holidays": [],
+                        "makeup_trading_days": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             (root / "config" / "review.toml").write_text(
                 "[review]\nenabled = true\nhorizons = [1, 5, 20]\ncompare_against = 'validated_advice'\n",
                 encoding="utf-8",
@@ -253,6 +268,19 @@ class PipelineLogicTests(unittest.TestCase):
             root = Path(temp_dir)
             (root / "config").mkdir(parents=True, exist_ok=True)
             (root / "db" / "execution_sync" / "actual_trades").mkdir(parents=True, exist_ok=True)
+            (root / "config" / "trading_calendar.json").write_text(
+                json.dumps(
+                    {
+                        "source": "test-fixture",
+                        "checked_at": "2026-12-31T00:00:00+00:00",
+                        "coverage_start": "2026-01-01",
+                        "coverage_end": "2026-12-31",
+                        "holidays": [],
+                        "makeup_trading_days": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             (root / "config" / "review.toml").write_text(
                 "[review]\nenabled = true\nhorizons = [1]\ncompare_against = 'validated_advice'\n",
                 encoding="utf-8",
@@ -379,11 +407,26 @@ class PipelineLogicTests(unittest.TestCase):
     def test_nightly_catchup_respects_configured_market_holiday(self):
         agent = TempAgentHome()
         try:
-            agent.write_json("config/trading_calendar.json", {"holidays": ["2026-04-20"], "makeup_trading_days": []})
-            now = __import__("datetime").datetime(2026, 4, 21, 10, 0, 0)
+            now = datetime.now()
+            today = now.date()
+            holiday = today.isoformat()
+            agent.write_json(
+                "config/trading_calendar.json",
+                {
+                    "source": "test-fixture",
+                    "checked_at": datetime.now().astimezone().isoformat(),
+                    "coverage_start": "2000-01-01",
+                    "coverage_end": "2099-12-31",
+                    "holidays": [holiday],
+                    "makeup_trading_days": [],
+                },
+            )
+            expected = today - timedelta(days=1)
+            while expected.weekday() >= 5:
+                expected -= timedelta(days=1)
 
-            self.assertEqual(latest_nightly_target_date(agent.root, now=now), "2026-04-17")
-            self.assertEqual(pending_nightly_catchup_dates(agent.root, "2026-04-16", now=now), ["2026-04-17"])
+            self.assertEqual(latest_nightly_target_date(agent.root, now=now), expected.isoformat())
+            self.assertEqual(pending_nightly_catchup_dates(agent.root, (expected - timedelta(days=1)).isoformat(), now=now), [expected.isoformat()])
         finally:
             agent.cleanup()
 

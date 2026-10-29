@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any
@@ -170,6 +170,7 @@ class RagQueryPlan:
     retrieval_profile: str
     as_of_date: str
     query_date: str = ""
+    decision_at: str | None = None
     time_mode: str = "selected_date"
     intent: str = "general_qa"
     fund_codes: list[str] = field(default_factory=list)
@@ -203,6 +204,31 @@ class RagQueryPlan:
             raise ValueError("token_budget must be > 0")
         if not isinstance(self.metadata, dict):
             raise ValueError("metadata must be a dict")
+        self.decision_at = self._validate_decision_at()
+
+    def _validate_decision_at(self) -> str | None:
+        raw = _clean_text(str(self.decision_at or ""))
+        if not raw:
+            self.metadata.setdefault("cutoff_precision", "end_of_day_legacy")
+            self.metadata.setdefault(
+                "time_basis_note",
+                "date-only query: cutoff is end of day T23:59:59+08:00; does NOT guarantee no future intraday information",
+            )
+            return None
+        try:
+            instant = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("decision_at must be a timezone-aware ISO 8601 timestamp") from exc
+        if instant.tzinfo is None:
+            raise ValueError("decision_at must be timezone-aware (offset required), not naive")
+        local_day = instant.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+        if local_day != self.query_date:
+            raise ValueError(
+                f"decision_at local date {local_day} does not match query_date {self.query_date}"
+            )
+        self.metadata["cutoff_precision"] = "decision_at_instant"
+        self.metadata["time_basis_note"] = "filtered by exact decision_at instant, including intraday"
+        return instant.isoformat(timespec="seconds")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -16,7 +16,14 @@ DEBATE_REFEREE_PROMPT = """Compare bull and bear cases, then produce a shadow-on
 verdict with uncertainty and blocking conditions made explicit."""
 
 ACTION_FORMER_PROMPT = """Turn the referee verdict into a proposed action-ticket patch.
-The output is non-executable and must not mutate official artifacts."""
+For every ticket explicitly return: `action` (one of add, reduce, switch_out, hold, watch);
+`size_tier` (one of small=10%, medium=25%, large=50%, none=hold — a fraction of the fund's
+frozen position value, NOT an absolute CNY amount); `horizon` (a short label, or "unspecified"
+if unknown — never fabricate a期限); `evidence_quality` (one of high, medium, low, unavailable,
+separate from confidence). Do NOT output an absolute amount or cash figure; the validated amount
+is derived deterministically downstream from the frozen position basis × size_tier. For
+non-tactical roles or a zero/unnheld position return hold + none. The output is non-executable
+and must not mutate official artifacts. Fixed DCA and fixed-hold roles keep their existing rules."""
 
 HARD_GUARDRAIL_PROMPT = """Map existing ticket hard guardrails into pass/adjust/block
 explanations. This is read-only and cannot create executable actions."""

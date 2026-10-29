@@ -145,8 +145,9 @@ const portfolioRiskBreakdownSchema = z.object({
   historicalPercentile: financialNumberSchema,
   historicalSampleCount: z.number().catch(0),
   dataCoverage: z.object({
-    availableComponentCount: z.number().catch(0),
-    componentCount: z.number().catch(0),
+    availableComponentCount: z.number().nullable().catch(null),
+    componentCount: z.number().nullable().catch(null),
+    coverageRatio: z.number().nullable().catch(null),
     isPartial: z.boolean().catch(true)
   }).passthrough(),
   reasons: z.record(z.string(), z.string()).catch({}),
@@ -158,6 +159,8 @@ const portfolioRiskSummarySchema = z.object({
   scoredFundCount: z.number().catch(0),
   fundCount: z.number().catch(0),
   weightedTotalAnomalyScore: financialNumberSchema,
+  averageComponentCoverage: z.number().nullable().catch(null),
+  weightedComponentCoverage: z.number().nullable().catch(null),
   partialCoverageFundCount: z.number().catch(0),
   historicalPercentileAvailableCount: z.number().catch(0)
 }).passthrough();
@@ -181,6 +184,15 @@ export const portfolioSchema = z.object({
   totalValueText: z.string(),
   cash: financialNumberSchema,
   cashText: z.string(),
+  simulationV2: z.object({
+    schemaVersion: z.string().nullable().optional(),
+    fundingMode: z.string().nullable().optional(),
+    netExternalFlow: financialNumberSchema,
+    externalCashflow: financialNumberSchema,
+    externalCashflowTiming: z.string().nullable().optional(),
+    valuationStatus: z.string().nullable().optional(),
+    portfolioDate: z.string().nullable().optional()
+  }).optional(),
   holdingPnl: financialNumberSchema,
   holdingPnlText: z.string(),
   styleAllocation: z.array(allocationRowSchema),
@@ -229,44 +241,62 @@ export const portfolioSchema = z.object({
   items: z.array(portfolioItemSchema)
 }).passthrough();
 
-export const researchSchema = z.object({
+const researchCardSchema = z.object({
+  ticketId: z.string().catch(""),
+  fundCode: z.string().catch(""),
+  fundName: z.string().catch(""),
+  selectedDate: z.string().catch(""),
+  section: z.string().catch(""),
+  strategyBucket: z.string().catch(""),
+  action: z.string().catch("hold"),
+  actionLabel: z.string().catch("观察"),
+  schemaVersion: z.string().optional(),
+  sizeTier: z.enum(["small", "medium", "large", "none", "legacy"]).nullable().optional(),
+  sizeRatio: financialNumberSchema.nullable().optional(),
+  sizingBasis: z.string().optional(),
+  basisPositionValue: financialNumberSchema.nullable().optional(),
+  basisSnapshotSha256: z.string().optional(),
+  horizon: z.string().optional(),
+  evidenceQuality: z.enum(["high", "medium", "low", "unavailable"]).nullable().optional(),
+  decisionAt: z.string().optional(),
+  amount: financialNumberSchema,
+  amountText: z.string().catch("不可用"),
+  priority: z.number().catch(0),
+  confidence: z.number().catch(0),
+  confidenceText: z.string().catch("暂无"),
+  thesis: z.string().catch("暂无建议理由"),
+  evidence: z.array(z.string()).catch([]),
+  risks: z.array(z.string()).catch([]),
+  agentSupport: z.array(z.string()).catch([]),
+  sourceSignalIds: z.array(z.string()).catch([]),
+  opposingSignalIds: z.array(z.string()).catch([]),
+  policyRuleHits: z.array(z.string()).catch([]),
+  constraintHits: z.array(z.string()).catch([]),
+  consensusText: z.string().catch("暂无"),
+  hasConflict: z.boolean().catch(false),
+  isActionable: z.boolean().catch(false),
+  portfolio: unknownRecordSchema.catch({}),
+  market: unknownRecordSchema.catch({}),
+  news: unknownRecordSchema.catch({}),
+  profile: unknownRecordSchema.catch({}),
+  evidenceRefs: z.array(unknownRecordSchema).catch([])
+}).passthrough();
+
+// 单张坏卡不再清空整组：逐卡 safeParse 过滤，丢弃数计入 dropped_cards 供页面显式提示
+export const researchSchema = z.preprocess((val) => {
+  if (val && typeof val === "object" && Array.isArray((val as Record<string, unknown>).fund_cards)) {
+    const rows = (val as Record<string, unknown>).fund_cards as unknown[];
+    const valid = rows.filter((row) => researchCardSchema.safeParse(row).success);
+    return { ...(val as Record<string, unknown>), fund_cards: valid, dropped_cards: rows.length - valid.length };
+  }
+  return val;
+}, z.object({
   meta: z.string(),
   metrics: z.array(metricSchema),
   rows: z.array(unknownRecordSchema),
-  fund_cards: z.array(
-    z.object({
-      ticketId: z.string().catch(""),
-      fundCode: z.string().catch(""),
-      fundName: z.string().catch(""),
-      selectedDate: z.string().catch(""),
-      section: z.string().catch(""),
-      strategyBucket: z.string().catch(""),
-      action: z.string().catch("hold"),
-      actionLabel: z.string().catch("观察"),
-      amount: financialNumberSchema,
-      amountText: z.string().catch("不可用"),
-      priority: z.number().catch(0),
-      confidence: z.number().catch(0),
-      confidenceText: z.string().catch("暂无"),
-      thesis: z.string().catch("暂无建议理由"),
-      evidence: z.array(z.string()).catch([]),
-      risks: z.array(z.string()).catch([]),
-      agentSupport: z.array(z.string()).catch([]),
-      sourceSignalIds: z.array(z.string()).catch([]),
-      opposingSignalIds: z.array(z.string()).catch([]),
-      policyRuleHits: z.array(z.string()).catch([]),
-      constraintHits: z.array(z.string()).catch([]),
-      consensusText: z.string().catch("暂无"),
-      hasConflict: z.boolean().catch(false),
-      isActionable: z.boolean().catch(false),
-      portfolio: unknownRecordSchema.catch({}),
-      market: unknownRecordSchema.catch({}),
-      news: unknownRecordSchema.catch({}),
-      profile: unknownRecordSchema.catch({}),
-      evidenceRefs: z.array(unknownRecordSchema).catch([])
-    }).passthrough()
-  ).catch([])
-}).passthrough();
+  fund_cards: z.array(researchCardSchema).catch([]),
+  dropped_cards: z.number().catch(0)
+}).passthrough());
 
 export const realtimeSchema = z.object({
   meta: z.string(),
@@ -574,7 +604,8 @@ export const systemSchema = z.object({
   ragRuntime: ragRuntimeSchema.optional(),
   rag: ragRuntimeSchema.optional(),
   todayAnalysis: unknownRecordSchema.optional(),
-  dailyFirstOpen: unknownRecordSchema.optional()
+  dailyFirstOpen: unknownRecordSchema.optional(),
+  dataFreshness: unknownRecordSchema.optional()
 }).passthrough();
 
 export const executionSyncSchema = z.object({
@@ -718,7 +749,8 @@ export const todayPageSchema = z.object({
     meta: "",
     metrics: [],
     rows: [],
-    fund_cards: []
+    fund_cards: [],
+    dropped_cards: 0
   }),
   longMemory: longMemorySchema,
   todayAnalysis: dailyFirstOpenSchema.optional(),

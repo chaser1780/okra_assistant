@@ -48,6 +48,11 @@ def _parse_timestamp(value: str) -> datetime | None:
 
 
 def _query_end(plan: RagQueryPlan) -> datetime:
+    if plan.decision_at:
+        try:
+            return datetime.fromisoformat(plan.decision_at.replace("Z", "+00:00"))
+        except ValueError:
+            pass
     return datetime.fromisoformat(f"{plan.query_date}T23:59:59+08:00")
 
 

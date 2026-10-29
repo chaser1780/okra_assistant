@@ -9,6 +9,7 @@ from common import (
     estimated_nav_path,
     execution_review_result_path,
     fund_nav_history_path,
+    benchmark_history_path,
     intraday_proxy_path,
     iter_actual_trade_items,
     load_json,
@@ -264,7 +265,9 @@ def build_review_items(
     base_date: str,
     review_date: str,
     horizon: int,
+    benchmark_history_by_code: dict[str, list[dict]] | None = None,
 ) -> tuple[list[dict], Counter, Counter]:
+    benchmark_history_by_code = benchmark_history_by_code or {}
     items = []
     outcome_counter = Counter()
     baseline_counter = Counter()
@@ -278,6 +281,7 @@ def build_review_items(
         signal_reference = signal_reference_change_pct(signal_estimate, signal_proxy)
         constraint = constraint_map.get(code, {})
         period_return_pct, period_start_date, period_end_date = official_period_return(nav_history_by_code.get(code, []), base_date, review_date)
+        benchmark_period_return, benchmark_start_date, benchmark_end_date = official_period_return(benchmark_history_by_code.get(code, []), base_date, review_date)
         evaluation_return, evaluation_basis = evaluation_return_pct(horizon, actual_day_change, period_return_pct)
         outcome = classify_outcome(item["action"], evaluation_return)
         baseline = compare_against_no_trade(item["action"], evaluation_return)
@@ -324,9 +328,29 @@ def build_review_items(
                 "signal_proxy_change_pct": signal_proxy,
                 "signal_reference_change_pct": signal_reference,
                 "benchmark_reference_change_pct": benchmark_reference,
-                "excess_return_vs_benchmark_pct": round(actual_day_change - benchmark_reference, 2)
-                if actual_day_change is not None and benchmark_reference is not None
-                else None,
+                "benchmark_period_return_pct": benchmark_period_return,
+                "benchmark_period_start_date": benchmark_start_date,
+                "benchmark_period_end_date": benchmark_end_date,
+                # excess 要求同区间：基金与 benchmark 的 start/end 日期精确一致，
+                # 缺任一端或日期不一致则 None + signal_gap，不各自最近拼误差
+                "excess_return_vs_benchmark_pct": (
+                    round(period_return_pct - benchmark_period_return, 2)
+                    if period_return_pct is not None
+                    and benchmark_period_return is not None
+                    and period_start_date
+                    and period_start_date == benchmark_start_date
+                    and period_end_date
+                    and period_end_date == benchmark_end_date
+                    else None
+                ),
+                "benchmark_signal_gap": not (
+                    period_return_pct is not None
+                    and benchmark_period_return is not None
+                    and period_start_date
+                    and period_start_date == benchmark_start_date
+                    and period_end_date
+                    and period_end_date == benchmark_end_date
+                ),
                 "outcome": outcome,
                 "diagnostic_label": diagnostic_label,
                 "diagnostic_reason": diagnostic_reason,
@@ -376,6 +400,7 @@ def main() -> None:
         source_items = execution_source_items(agent_home, base_date)
 
     nav_history_by_code = {}
+    benchmark_history_by_code = {}
     for item in source_items:
         code = item.get("fund_code", "")
         if not code:
@@ -383,6 +408,11 @@ def main() -> None:
         history_path = fund_nav_history_path(agent_home, code)
         if history_path.exists():
             nav_history_by_code[code] = load_json(history_path).get("items", []) or []
+        bm_name = watchlist.get(code, {}).get("benchmark", "")
+        if bm_name:
+            bm_path = benchmark_history_path(agent_home, bm_name)
+            if bm_path.exists():
+                benchmark_history_by_code[code] = load_json(bm_path).get("items", []) or []
 
     items, outcome_counter, baseline_counter, diagnostic_counter = build_review_items(
         args.source,
@@ -396,6 +426,7 @@ def main() -> None:
         base_date,
         review_date,
         args.horizon,
+        benchmark_history_by_code,
     )
 
     result = {

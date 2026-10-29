@@ -232,6 +232,10 @@ class ExecutionTradeRequestDto(MutationRequestModel):
     user_note: str | None = None
     simulation_track: Literal["user_simulation"] | None = None
     simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
+    # fee-linking identity fields (contract: fee event references its buy/sell
+    # trade). NOT derived flow inputs -- never influence external_cashflow.
+    fee_for_trade_id: str | None = None
+    linked_trade_id: str | None = None
 
 
 class ExecutionConversionRequestDto(MutationRequestModel):
@@ -257,6 +261,10 @@ class ExecutionConversionRequestDto(MutationRequestModel):
     user_note: str | None = None
     simulation_track: Literal["user_simulation"] | None = None
     simulation_status: Literal["planned", "simulated", "confirmed", "cancelled"] | None = None
+    # fee-linking identity fields (contract: fee event references its buy/sell
+    # trade). NOT derived flow inputs -- never influence external_cashflow.
+    fee_for_trade_id: str | None = None
+    linked_trade_id: str | None = None
 
 
 class StrategySimulationExperimentRequestDto(MutationRequestModel):
@@ -356,6 +364,10 @@ class RagSearchRequestDto(MutationRequestModel):
     profile: str = "rag_admin"
     intent: str = "rag_admin_search"
     writeTrace: bool = True
+    # contract §6: optional timezone-aware decision time. Absent => date-only
+    # basis is explicitly tagged end_of_day_legacy by the server, never
+    # claiming intraday no-future-data.
+    decisionAt: str | None = None
 
 
 class RagEvalRequestDto(MutationRequestModel):

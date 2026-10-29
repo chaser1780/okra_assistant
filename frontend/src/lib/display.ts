@@ -35,8 +35,8 @@ const actionLabels: Record<string, string> = {
   reduce: "减仓",
   hold: "观察",
   locked: "固定持有",
-  scheduled_dca: "计划定投",
-  planned_dca: "计划定投",
+  scheduled_dca: "固定模拟定投配置",
+  planned_dca: "固定模拟定投配置",
   not_applicable: "不适用",
   switch: "转换",
   switch_out: "换出"
@@ -52,6 +52,17 @@ const statusLabels: Record<string, string> = {
   rejected: "驳回",
   active: "生效",
   inactive: "停用"
+};
+
+const freshnessLabels: Record<string, string> = {
+  latest: "最新",
+  market_closed: "市场已收盘",
+  official_nav_pending: "等待官方净值",
+  proxy_observation: "代理观察",
+  delayed_1d: "延迟 1 日",
+  delayed_multi_day: "多日延迟",
+  conflict: "数据冲突",
+  unavailable: "不可用"
 };
 
 const domainLabels: Record<string, string> = {
@@ -157,6 +168,11 @@ export function actionLabel(value: unknown) {
 
 export function statusLabel(value: unknown) {
   return mappedLabel(value, statusLabels, "未知状态");
+}
+
+export function freshnessLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return freshnessLabels[raw] ?? (raw || "不可用");
 }
 
 export function domainLabel(value: unknown) {
@@ -475,4 +491,53 @@ function translateCommonSentence(raw: string) {
     .replace(/\bexecution_eligible=false\b/gi, "当前不可执行")
     .replace(/\baction_debate_promoted\b/gi, "委员会决策已生成")
     .replace(/\bpreflight\b/gi, "运行预检");
+}
+
+const SIZE_TIER_LABELS: Record<string, string> = {
+  small: "小仓",
+  medium: "中仓",
+  large: "大仓",
+  none: "持有/观望"
+};
+
+export function sizeTierLabel(tier: unknown): string {
+  if (!tier || typeof tier !== "string") return "不可用";
+  return SIZE_TIER_LABELS[tier] ?? tier;
+}
+
+export function sizeRatioText(ratio: unknown): string {
+  const value = Number(ratio);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return `${Math.round(value * 100)}%`;
+}
+
+const EVIDENCE_QUALITY_META: Record<string, string> = {
+  high: "证据充分",
+  medium: "证据中等",
+  low: "证据薄弱",
+  unavailable: "证据质量未知"
+};
+
+export function evidenceQualityLabel(quality: unknown): string {
+  if (!quality || typeof quality !== "string") return "证据质量未知";
+  return EVIDENCE_QUALITY_META[quality] ?? quality;
+}
+
+export function horizonLabel(horizon: unknown): string {
+  const text = typeof horizon === "string" ? horizon.trim() : "";
+  return text && text !== "unspecified" ? text : "期限未定";
+}
+
+// 资金模式文案：v2 虚拟出入金显净流入（不显示旧现金值），legacy/未知保留旧版参考
+export function fundingLineText(
+  simV2: { fundingMode?: string | null; netExternalFlow?: number | null } | undefined,
+  cashText: string
+): string {
+  if (simV2?.fundingMode === "virtual_external_flows") {
+    const flow = simV2.netExternalFlow == null
+      ? "暂无"
+      : `${simV2.netExternalFlow > 0 ? "+" : ""}${simV2.netExternalFlow.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+    return `虚拟本金净流入 ${flow} · 无现金底池`;
+  }
+  return `现金(旧版参考) ${cashText}`;
 }

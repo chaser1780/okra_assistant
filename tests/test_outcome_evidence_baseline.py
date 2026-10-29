@@ -19,6 +19,7 @@ from audit_phase8_readiness import build_phase8_audit  # noqa: E402
 from build_action_ticket_shadow import run_builder as run_action_ticket_builder  # noqa: E402
 from build_outcome_evidence_baseline import baseline_path, markdown_path, run_builder  # noqa: E402
 from helpers import TempAgentHome  # noqa: E402
+from outcome_baseline_fixture import write_synthetic_inputs  # noqa: E402
 
 
 def _load_repo_json(relative: str) -> dict:
@@ -33,15 +34,7 @@ class OutcomeEvidenceBaselineTests(unittest.TestCase):
         self.agent.cleanup()
 
     def copy_real_inputs(self) -> None:
-        for relative in (
-            f"db/validated_advice/{REPORT_DATE}.json",
-            f"db/portfolio_state/snapshots/{REPORT_DATE}.json",
-            "raw/quotes/2026-05-22.json",
-            "raw/quotes/2026-05-23.json",
-            "raw/quotes/2026-05-29.json",
-            "db/long_memory/exports/all_memory.json",
-        ):
-            self.agent.write_json(relative, _load_repo_json(relative))
+        write_synthetic_inputs(self.agent.root)
 
     def test_builds_named_outcome_evidence_baseline_but_audit_requires_promotion_scale_evidence(self) -> None:
         self.copy_real_inputs()

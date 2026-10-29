@@ -162,7 +162,7 @@ export type PortfolioRiskBreakdown = {
   observedAnomalyScore: number | null;
   historicalPercentile: number | null;
   historicalSampleCount: number;
-  dataCoverage: { availableComponentCount: number; componentCount: number; isPartial: boolean };
+  dataCoverage: { availableComponentCount: number | null; componentCount: number | null; coverageRatio: number | null; isPartial: boolean };
   reasons: Record<string, string>;
   methodology: string;
 };
@@ -173,6 +173,8 @@ export type PortfolioRiskSummary = {
   scoredFundCount: number;
   fundCount: number;
   weightedTotalAnomalyScore: number | null;
+  averageComponentCoverage: number | null;
+  weightedComponentCoverage: number | null;
   partialCoverageFundCount: number;
   historicalPercentileAvailableCount: number;
 };
@@ -203,6 +205,15 @@ export type PortfolioPayload = {
   totalValueText: string;
   cash: number | null;
   cashText: string;
+  simulationV2?: {
+    schemaVersion?: string | null;
+    fundingMode?: string | null;
+    netExternalFlow: number | null;
+    externalCashflow: number | null;
+    externalCashflowTiming?: string | null;
+    valuationStatus?: string | null;
+    portfolioDate?: string | null;
+  };
   holdingPnl: number | null;
   holdingPnlText: string;
   styleAllocation: AllocationRow[];
@@ -332,6 +343,16 @@ export type FundResearchCard = {
   strategyBucket: string;
   action: string;
   actionLabel: string;
+  // simulation_v2 新建议字段（全部可选；旧版金额建议不存在这些字段）
+  schemaVersion?: string;
+  sizeTier?: "small" | "medium" | "large" | "none" | "legacy" | null;
+  sizeRatio?: number | null;
+  sizingBasis?: string;
+  basisPositionValue?: number | null;
+  basisSnapshotSha256?: string;
+  horizon?: string;
+  evidenceQuality?: "high" | "medium" | "low" | "unavailable" | null;
+  decisionAt?: string;
   amount: number | null;
   amountText: string;
   priority: number;
@@ -349,25 +370,28 @@ export type FundResearchCard = {
   hasConflict: boolean;
   isActionable: boolean;
   portfolio: Record<string, unknown> & {
-    currentValue?: number;
+    currentValue?: number | null;
     currentValueText?: string;
-    holdingPnl?: number;
+    holdingPnl?: number | null;
     holdingPnlText?: string;
-    holdingReturnPct?: number;
+    holdingReturnPct?: number | null;
     holdingReturnPctText?: string;
     role?: string;
     styleGroup?: string;
     allowTrade?: boolean;
-    fixedDailyBuyAmount?: number;
+    fixedDailyBuyAmount?: number | null;
   };
   market: Record<string, unknown> & {
     dayChangePct?: number | null;
     dayChangePctText?: string;
+    dayChangePctAvailable?: boolean;
+    weekChangePctAvailable?: boolean;
+    monthChangePctAvailable?: boolean;
     estimateChangePct?: number | null;
     estimateChangePctText?: string;
     proxyChangePct?: number | null;
     proxyChangePctText?: string;
-    officialNav?: number | string;
+    officialNav?: number | string | null;
     officialNavDate?: string;
     estimateTime?: string;
     quoteFreshness?: string;
@@ -397,6 +421,7 @@ export type ResearchPayload = {
   metrics: Metric[];
   rows: Record<string, unknown>[];
   fund_cards: FundResearchCard[];
+  dropped_cards: number;
   source_health?: ResearchSourceHealthPayload;
   news_digest?: ResearchNewsDigest;
   sentiment_digest?: ResearchSentimentDigest;
@@ -762,6 +787,13 @@ export type SystemPayload = {
   rag?: RagRuntimePayload;
   todayAnalysis?: TodayAnalysisSystemPayload;
   dailyFirstOpen?: TodayAnalysisSystemPayload;
+  dataFreshness?: {
+    status?: string;
+    latestRetrievedAt?: string;
+    portfolioAsOfDate?: string;
+    realtimeAsOfDate?: string;
+    reason?: string;
+  };
 };
 
 export type ExecutionSyncPayload = {
